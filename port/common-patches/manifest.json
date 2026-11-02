@@ -1,6 +1,6 @@
 {
-  "patch": "0001-coresight-platform-remove-clock-balance.patch",
-  "patch_sha256": "5147a5274beeec75d4243e158199bc2bc923444be6de3bca48fc33d05afc531b",
+  "patch": "0001-required-common-fixes.patch",
+  "patch_sha256": "d7cc40d0ef28983319c3e36a8115b23b6f65fa8ef191c56e9f784d0fd04a52a3",
   "upstream": "https://lists.openwall.net/linux-kernel/2026/07/10/62",
   "files": {
     "drivers/hwtracing/coresight/coresight-catu.c": {
@@ -38,8 +38,20 @@
     "drivers/hwtracing/coresight/coresight-tpiu.c": {
       "before_sha256": "60905e72ad26c4542bb0af3fd3ed9617afc80ef971657e6e4cb2b5981769d4ed",
       "candidate_sha256": "298d5aa9929e706740678ef84947382ce630dec1184428b910002014f1c071fe"
+    },
+    "drivers/thermal/thermal_core.c": {
+      "before_sha256": "7284c6f4aa2c686ea509c91d48f6e99848d3f853a6edf29fbc23ef0bb7543187",
+      "candidate_sha256": "6a7a9f92facefd992585a6d1e6c5a2211e97ec81fb9913dc66bc2f690e5ee053"
+    },
+    "include/linux/thermal.h": {
+      "before_sha256": "2ddf3a9d865ebc02fe54db4aec6fc8d402474a3a06a04177bd6c701ac1594bbf",
+      "candidate_sha256": "95b1f3e7c5831f4c9c8a96944613498e719afc58594cf5fd6fc9403c0a95951d"
     }
   },
   "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",
+  "replay_patch": "required-common-fixes.patch",
+  "local_changes": [
+    "Typed thermal device registration for Xiaomi thermal policy ABI"
+  ],
   "integrated_upstream": []
 }

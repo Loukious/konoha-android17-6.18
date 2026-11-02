@@ -1319,3 +1319,17 @@ config SND_SOC_SUN
 config SIH_VIBRATOR
 	tristate "Silicon Integrated Onyx vibrator"
 	depends on I2C && INPUT
+
+config MI_THERMAL_INTERFACE
+	tristate "Xiaomi thermal policy interface"
+	depends on THERMAL && CPU_FREQ && OF && DRM_PANEL
+	depends on QCOM_PANEL_EVENT_NOTIFIER && XM_POWER_SUPPLY
+
+config MI_THERMAL_MULTI_CHARGE
+	bool "Xiaomi thermal USB state reporting"
+	depends on MI_THERMAL_INTERFACE
+	default y
+
+config HAVE_MULTI_SCREEN
+	bool "Xiaomi thermal secondary screen reporting"
+	depends on MI_THERMAL_INTERFACE

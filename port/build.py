@@ -36,6 +36,11 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     artifacts = workspace / "artifacts" / stamp
     artifacts.mkdir(parents=True)
+    from verify_mi_thermal import verify as verify_mi_thermal
+    thermal_validation = verify_mi_thermal(
+        workspace / "onyx/drivers/thermal/xiaomi/mi_thermal_interface.c")
+    (artifacts / "mi-thermal-host-validation.json").write_text(
+        json.dumps(thermal_validation, indent=2) + "\n")
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -94,13 +99,14 @@ def main():
     for name in ["sources.json", "imports.json", "onyx-port.xml", "dependency-lock.xml",
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
-                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "boot-parameters.txt",
+                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "boot-parameters.txt",
                  "qdss_diagnostic.py", "common_fixes.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
         shutil.copyfile(HERE / name, inputs / name)
     shutil.copytree(HERE / "patches", inputs / "patches")
     shutil.copytree(HERE / "common-patches", inputs / "common-patches")
     shutil.copytree(HERE / "kernelsu", inputs / "kernelsu")
+    shutil.copyfile(HERE / "tests/mi_thermal_harness.c", inputs / "mi_thermal_harness.c")
     ksu_inputs = inputs / "kernelsu-next"
     ksu_inputs.mkdir()
     for name in ["source.json", "source.tar"]:
@@ -125,6 +131,7 @@ def main():
             "hardware_validated": False,
         },
         "module_verification": verification,
+        "mi_thermal_host_validation": thermal_validation,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],

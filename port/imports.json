@@ -29249,5 +29249,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/input/misc/si_haptic/xm-haptic.h",
     "blob": "25c773568b5e85b39dc4ca82a6a823229c714645"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/thermal/xiaomi/mi_thermal_interface.c",
+    "blob": "663fd92aa9ad41e523872335decdd4c88bf6cbf8"
   }
 ]
