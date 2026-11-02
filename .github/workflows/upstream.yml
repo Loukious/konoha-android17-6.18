@@ -1,0 +1,56 @@
+name: Track Android 17 6.18 LTS and KernelSU Next dev
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: upstream-tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect upstream and KernelSU changes
+        id: detect
+        run: python3 ci/track_upstream.py
+      - name: Prepare runner for a kernel update
+        if: steps.detect.outputs.kernel_changed == 'true'
+        run: bash ci/bootstrap_runner.sh
+      - name: Fetch detected LTS revision
+        if: steps.detect.outputs.kernel_changed == 'true'
+        env:
+          REVISION: ${{ steps.detect.outputs.latest }}
+        run: |
+          git init "$RUNNER_TEMP/upstream-common"
+          git -C "$RUNNER_TEMP/upstream-common" remote add origin https://android.googlesource.com/kernel/common
+          git -C "$RUNNER_TEMP/upstream-common" fetch --depth 1 origin "$REVISION"
+          git -C "$RUNNER_TEMP/upstream-common" checkout --detach FETCH_HEAD
+          python3 ci/track_upstream.py --update "$RUNNER_TEMP/upstream-common" --revision "$REVISION"
+          python3 ci/refresh_recipe.py "$RUNNER_TEMP/upstream-common"
+          rm -rf "$RUNNER_TEMP/upstream-common"
+      - name: Replay the port against the new common headers
+        if: steps.detect.outputs.kernel_changed == 'true'
+        run: |
+          python3 port/prepare.py "$RUNNER_TEMP/konoha-workspace" --jobs 4
+          python3 port/stage.py "$RUNNER_TEMP/konoha-workspace"
+          python3 ci/snapshot.py "$RUNNER_TEMP/konoha-workspace/onyx" --write
+      - name: Publish candidate update and trigger its complete build
+        if: steps.detect.outputs.kernel_changed == 'true'
+        env:
+          REVISION: ${{ steps.detect.outputs.latest }}
+        run: python3 ci/publish_update.py "$REVISION"
+      - name: Rebuild accepted kernel when KernelSU dev changes
+        if: steps.detect.outputs.kernel_changed != 'true' && steps.detect.outputs.kernelsu_changed == 'true'
+        run: gh workflow run build.yml --ref main

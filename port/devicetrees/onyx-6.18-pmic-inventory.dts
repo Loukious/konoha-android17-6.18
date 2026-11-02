@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Onyx's eight bootloader PMIC identities match the eight responding SIDs.
+ * PMD802x (0x57) is absent; SID 4 fails even with the display awake.
+ * The inherited Tuna MTP template must not probe this unfitted device.
+ */
+&spmi_bus {
+	qcom,pmd802x@4 {
+		status = "disabled";
+	};
+};
+
+&spmi0_debug_bus {
+	pmd802x@4 {
+		status = "disabled";
+	};
+};
+
+&thermal_zones {
+	pmd802x_tz {
+		status = "disabled";
+	};
+};

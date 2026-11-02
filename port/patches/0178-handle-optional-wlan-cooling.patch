@@ -1,0 +1,173 @@
+Subject: [PATCH] Check optional WLAN cooling support and balance its lifetime
+
+Resolve DT support before allocation. Retain the borrowed DT node until
+unregister and release all failure resources. Unregister only the requested
+monitor so absent optional DDR cooling cannot remove APPS/WPSS devices.
+
+---
+diff --git a/platform/inc/icnss2.h b/platform/inc/icnss2.h
+--- a/platform/inc/icnss2.h
++++ b/platform/inc/icnss2.h
+@@ -262,6 +262,13 @@
+ extern int icnss_force_wake_request(struct device *dev);
+ extern int icnss_force_wake_release(struct device *dev);
+ extern int icnss_is_device_awake(struct device *dev);
++/* Monitor IDs shared with the WLAN thermal mitigation callbacks. */
++enum icnss_thermal_monitor_id {
++	ICNSS_THERMAL_MONITOR_APPS = 1,
++	ICNSS_THERMAL_MONITOR_WPSS,
++	ICNSS_THERMAL_MONITOR_DDR_BWM,
++};
++
+ extern int icnss_thermal_cdev_register(struct device *dev,
+ 					unsigned long max_state,
+ 					int tcdev_id);
+diff --git a/platform/icnss2/main.c b/platform/icnss2/main.c
+--- a/platform/icnss2/main.c
++++ b/platform/icnss2/main.c
+@@ -3877,57 +3877,70 @@
+ 			   int tcdev_id)
+ {
+ 	struct icnss_priv *priv = dev_get_drvdata(dev);
+-	struct icnss_thermal_cdev *icnss_tcdev = NULL;
++	struct icnss_thermal_cdev *icnss_tcdev;
+ 	char cdev_node_name[THERMAL_NAME_LENGTH] = "";
+ 	struct device_node *dev_node;
+-	int ret = 0;
+-
+-	icnss_tcdev = kzalloc(sizeof(*icnss_tcdev), GFP_KERNEL);
+-	if (!icnss_tcdev)
+-		return -ENOMEM;
+-
+-	icnss_tcdev->tcdev_id = tcdev_id;
+-	icnss_tcdev->max_thermal_state = max_state;
++	int ret;
++
++	if (!priv)
++		return -ENODEV;
++	if (tcdev_id < 0)
++		return -EINVAL;
+ 
+ 	snprintf(cdev_node_name, THERMAL_NAME_LENGTH,
+ 		 "icnss_cdev%d", tcdev_id);
+-
+ 	dev_node = of_find_node_by_name(NULL, cdev_node_name);
+-
+ 	if (!dev_node) {
+ 		snprintf(cdev_node_name, THERMAL_NAME_LENGTH,
+ 			 "qcom,icnss_cdev%d", tcdev_id);
+-
+ 		dev_node = of_find_node_by_name(NULL, cdev_node_name);
+-
+-		if (!dev_node) {
+-			icnss_pr_err("Failed to get cooling device node\n");
+-			return -EINVAL;
+-		}
+-	}
+-
+-	icnss_pr_dbg("tcdev node->name=%s\n", dev_node->name);
+-
+-	if (of_find_property(dev_node, "#cooling-cells", NULL)) {
+-		icnss_tcdev->tcdev = thermal_of_cooling_device_register(
+-						dev_node,
+-						cdev_node_name, icnss_tcdev,
+-						&icnss_cooling_ops);
+-		if (IS_ERR_OR_NULL(icnss_tcdev->tcdev)) {
+-			ret = PTR_ERR(icnss_tcdev->tcdev);
+-			icnss_pr_err("Cooling device register failed: %d, for cdev id %d\n",
+-				     ret, icnss_tcdev->tcdev_id);
+-		} else {
+-			icnss_pr_dbg("Cooling device registered for cdev id %d",
+-				     icnss_tcdev->tcdev_id);
+-			list_add(&icnss_tcdev->tcdev_list,
+-				 &priv->icnss_tcdev_list);
+-		}
++	}
++
++	if (!dev_node || !of_device_is_available(dev_node)) {
++		of_node_put(dev_node);
++		/* DDR bandwidth mitigation is not defined on every platform. */
++		if (tcdev_id == ICNSS_THERMAL_MONITOR_DDR_BWM) {
++			icnss_pr_dbg("DDR bandwidth cooling is not supported\n");
++			return -EOPNOTSUPP;
++		}
++		icnss_pr_err("Failed to get cooling device node for ID %d\n",
++			     tcdev_id);
++		return -EINVAL;
++	}
++
++	if (!of_find_property(dev_node, "#cooling-cells", NULL)) {
++		icnss_pr_err("Cooling device ID %d lacks #cooling-cells\n",
++			     tcdev_id);
++		ret = -EOPNOTSUPP;
++		goto put_node;
++	}
++
++	icnss_tcdev = kzalloc(sizeof(*icnss_tcdev), GFP_KERNEL);
++	if (!icnss_tcdev) {
++		ret = -ENOMEM;
++		goto put_node;
++	}
++	icnss_tcdev->tcdev_id = tcdev_id;
++	icnss_tcdev->max_thermal_state = max_state;
++	icnss_tcdev->tcdev =
++		thermal_of_cooling_device_register(dev_node, cdev_node_name,
++						   icnss_tcdev, &icnss_cooling_ops);
++	if (IS_ERR_OR_NULL(icnss_tcdev->tcdev)) {
++		ret = icnss_tcdev->tcdev ? PTR_ERR(icnss_tcdev->tcdev) : -ENOMEM;
++		icnss_pr_err("Cooling device register failed: %d, for ID %d\n",
++			     ret, tcdev_id);
++		kfree(icnss_tcdev);
+ 	} else {
+-		icnss_pr_dbg("Cooling device registration not supported");
+-		ret = -EOPNOTSUPP;
+-	}
+-
++		icnss_pr_dbg("Cooling device registered for ID %d\n", tcdev_id);
++		/* The thermal core borrows np; retain it until unregister. */
++		icnss_tcdev->dev_node = dev_node;
++		mutex_lock(&priv->tcdev_lock);
++		list_add(&icnss_tcdev->tcdev_list, &priv->icnss_tcdev_list);
++		mutex_unlock(&priv->tcdev_lock);
++		return 0;
++	}
++put_node:
++	of_node_put(dev_node);
+ 	return ret;
+ }
+ EXPORT_SYMBOL(icnss_thermal_cdev_register);
+@@ -3935,16 +3948,24 @@
+ void icnss_thermal_cdev_unregister(struct device *dev, int tcdev_id)
+ {
+ 	struct icnss_priv *priv = dev_get_drvdata(dev);
+-	struct icnss_thermal_cdev *icnss_tcdev = NULL;
+-
+-	while (!list_empty(&priv->icnss_tcdev_list)) {
+-		icnss_tcdev = list_first_entry(&priv->icnss_tcdev_list,
+-					       struct icnss_thermal_cdev,
+-					       tcdev_list);
+-		thermal_cooling_device_unregister(icnss_tcdev->tcdev);
+-		list_del(&icnss_tcdev->tcdev_list);
+-		kfree(icnss_tcdev);
+-	}
++	struct icnss_thermal_cdev *entry, *removed = NULL;
++
++	if (!priv)
++		return;
++	mutex_lock(&priv->tcdev_lock);
++	list_for_each_entry(entry, &priv->icnss_tcdev_list, tcdev_list) {
++		if (entry->tcdev_id != tcdev_id)
++			continue;
++		list_del(&entry->tcdev_list);
++		removed = entry;
++		break;
++	}
++	mutex_unlock(&priv->tcdev_lock);
++	if (!removed)
++		return;
++	thermal_cooling_device_unregister(removed->tcdev);
++	of_node_put(removed->dev_node);
++	kfree(removed);
+ }
+ EXPORT_SYMBOL(icnss_thermal_cdev_unregister);
+ 

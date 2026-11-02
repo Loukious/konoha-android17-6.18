@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Onyx defines the WLAN-area ADC sensor as wifi_therm. The generic Tuna
+ * sys-therm-3 name is absent from this board's registered thermal zones.
+ */
+&soc {
+	qcom,wcn7750 {
+		tsens = "wifi_therm";
+	};
+};
