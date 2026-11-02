@@ -17,7 +17,7 @@ responses, failed CPU-partition allocation and BAM register-window limits. They 
 57 service cases and 50 thermal cases during every complete build.
 
 Local artifact `20261102T205455707721Z` passes all 348 module builds and
-21656 imported-symbol CRC checks. Both device-tree variants pass overlay and
+21658 imported-symbol CRC checks. Both device-tree variants pass overlay and
 bootloader-ID checks; 1097 inherited DTC warnings remain. Hardware evidence
 is recorded separately after installation.
 
