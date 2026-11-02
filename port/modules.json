@@ -1271,5 +1271,9 @@
   {
     "target": "si_haptic",
     "output": "si_haptic.ko"
+  },
+  {
+    "target": "mi_thermal_interface",
+    "output": "mi_thermal_interface.ko"
   }
 ]

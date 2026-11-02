@@ -1,0 +1,13 @@
+{
+  "cases": 50,
+  "concurrent_qos_writes": 4000,
+  "result": "passed",
+  "source_sha256": "fa3409244bad688d5bb9c75822ba70821b9c4334a327a645f7ffe6f18929ed3c",
+  "harness_sha256": "cba47f770b64fd0a8d0e6236753baf26161cd2a58f3befbee0dd6f1b8cec8285",
+  "native_attributes_preserved": 34,
+  "sanitizers": [
+    "AddressSanitizer",
+    "UndefinedBehaviorSanitizer"
+  ],
+  "limits": "Host fault injection checks control flow and ownership; device thermal policy requires a matching kernel and runtime validation."
+}

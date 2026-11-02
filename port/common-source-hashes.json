@@ -254967,7 +254967,7 @@
     "executable": false
   },
   "drivers/thermal/thermal_core.c": {
-    "sha256": "7284c6f4aa2c686ea509c91d48f6e99848d3f853a6edf29fbc23ef0bb7543187",
+    "sha256": "6a7a9f92facefd992585a6d1e6c5a2211e97ec81fb9913dc66bc2f690e5ee053",
     "executable": false
   },
   "drivers/thermal/thermal_core.h": {
@@ -290111,7 +290111,7 @@
     "executable": false
   },
   "include/linux/thermal.h": {
-    "sha256": "2ddf3a9d865ebc02fe54db4aec6fc8d402474a3a06a04177bd6c701ac1594bbf",
+    "sha256": "95b1f3e7c5831f4c9c8a96944613498e719afc58594cf5fd6fc9403c0a95951d",
     "executable": false
   },
   "include/linux/thread_info.h": {

@@ -4233,6 +4233,7 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mi_thermal_interface",
         ":msm_sharedmem",
         ":coresight_funnel",
         ":mca_charge_mievent",
@@ -4550,4 +4551,15 @@ pkg_files(
 pkg_install(
     name = "platform_dist",
     srcs = [":platform_files"],
+)
+
+ddk_module(
+    name = "mi_thermal_interface",
+    srcs = ["drivers/thermal/xiaomi/mi_thermal_interface.c"],
+    out = "mi_thermal_interface.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":input_headers", ":smartcharge_headers", ":mca_headers",
+            ":panel_event_notifier", ":mca_smart_charge", ":mca_event"],
 )

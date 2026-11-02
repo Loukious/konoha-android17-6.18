@@ -982,6 +982,29 @@ static void thermal_release(struct device *dev)
 
 static struct class *thermal_class;
 
+/**
+ * thermal_device_register - register a vendor thermal policy interface
+ * @name: device name in the thermal class, excluding core-reserved prefixes
+ * @groups: NULL-terminated sysfs attribute groups
+ *
+ * The caller owns the returned device and must call device_unregister() after
+ * withdrawing its callbacks. This exposes no private class or kernfs layout.
+ * Return: a device pointer or an ERR_PTR() on failure.
+ */
+struct device *thermal_device_register(const char *name,
+			       const struct attribute_group **groups)
+{
+	if (!name || !name[0] || strchr(name, '/') ||
+	    !strncmp(name, "thermal_zone", strlen("thermal_zone")) ||
+	    !strncmp(name, "cooling_device", strlen("cooling_device")))
+		return ERR_PTR(-EINVAL);
+	if (!thermal_class)
+		return ERR_PTR(-EPROBE_DEFER);
+	return device_create_with_groups(thermal_class, NULL, 0, NULL, groups,
+					 "%s", name);
+}
+EXPORT_SYMBOL_GPL(thermal_device_register);
+
 static inline
 void print_bind_err_msg(struct thermal_zone_device *tz,
 			const struct thermal_trip_desc *td,
