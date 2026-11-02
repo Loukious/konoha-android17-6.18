@@ -55,6 +55,25 @@ class TrackingTests(unittest.TestCase):
             self.assertFalse(result['kernel_changed'])
             self.assertTrue(result['kernelsu_changed'])
 
+    def test_manual_source_change_requires_a_build(self):
+        tracker = module('track_upstream')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'port').mkdir()
+            (root / 'ci').mkdir()
+            kernel, ksu = 'a' * 40, 'b' * 40
+            (root / 'port/sources.json').write_text(json.dumps({'common': {'revision': kernel}}))
+            (root / 'ci/last-built.json').write_text(json.dumps(
+                {'common_revision': kernel, 'kernelsu_revision': ksu, 'source_revision': 'c' * 40}))
+            with patch.object(tracker, 'ROOT', root), patch.object(tracker, 'PORT', root / 'port'), \
+                    patch.object(tracker, 'remote_head', side_effect=[kernel, ksu]), \
+                    patch.object(tracker, 'git', return_value='d' * 40), \
+                    patch.dict(os.environ, {}, clear=True):
+                result = tracker.detect()
+            self.assertFalse(result['kernel_changed'])
+            self.assertFalse(result['kernelsu_changed'])
+            self.assertTrue(result['source_changed'])
+
     def test_remote_head_rejects_wrong_ref(self):
         tracker = module('track_upstream')
         with patch.object(tracker.subprocess, 'check_output', return_value='a' * 40 + '\trefs/heads/other\n'):
@@ -220,6 +239,12 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(any(args[:3] == ['gh', 'pr', 'create'] for args in calls))
         self.assertFalse(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
+    def test_unrelated_source_build_does_not_block_candidate_dispatch(self):
+        result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
+                                      [{'displayTitle': 'Build android17-6.18', 'status': 'in_progress',
+                                        'conclusion': '', 'url': 'build'}])
+        self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
+
 
 class BuildStateTests(unittest.TestCase):
     def test_old_build_cannot_overwrite_new_main_state(self):
@@ -230,6 +255,40 @@ class BuildStateTests(unittest.TestCase):
             result = recorder.record('owner/repo', 'c' * 40, 'd' * 40)
         run.assert_not_called()
         self.assertIn('CI branch advanced', result['status'])
+
+    def test_old_source_build_cannot_overwrite_accepted_state(self):
+        recorder = module('record_success')
+        with patch.dict(os.environ, {'GITHUB_SHA': 'a' * 40}), \
+                patch.object(recorder.subprocess, 'check_output', side_effect=[json.dumps(
+                    {'object': {'sha': 'a' * 40}}), json.dumps({'object': {'sha': 'b' * 40}})]), \
+                patch.object(recorder.subprocess, 'run') as run:
+            result = recorder.record('owner/repo', 'c' * 40, 'd' * 40, 'e' * 40)
+        run.assert_not_called()
+        self.assertIn('source branch advanced', result['status'])
+
+
+class CommonSourceTests(unittest.TestCase):
+    def test_executable_bit_is_part_of_snapshot(self):
+        snapshot = module('snapshot_common')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'build.sh'
+            source.write_text('build\n')
+            source.chmod(0o644)
+            before = snapshot.hashes(root)
+            source.chmod(0o755)
+            self.assertNotEqual(before, snapshot.hashes(root))
+
+    def test_symlink_target_is_hashed_without_following_it(self):
+        snapshot = module('snapshot_common')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'link'
+            source.symlink_to('not-present')
+            self.assertEqual(snapshot.hashes(root)['link'], {'symlink': 'not-present'})
+            source.unlink()
+            source.symlink_to('different-target')
+            self.assertEqual(snapshot.hashes(root)['link'], {'symlink': 'different-target'})
 
 
 if __name__ == '__main__':
