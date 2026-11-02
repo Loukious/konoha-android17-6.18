@@ -9,7 +9,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-PORT = ROOT / 'port'
+PORT = Path(os.environ.get('KONOHA_SOURCE_ROOT', ROOT)) / 'port'
 TRACK = json.loads((ROOT / 'ci/upstream.json').read_text())
 
 
@@ -34,10 +34,13 @@ def detect():
     current = pins['common']['revision']
     latest = remote_head(TRACK['repository'], TRACK['branch'])
     ksu = remote_head(TRACK['kernelsu_repository'], TRACK['kernelsu_branch'])
+    source_revision = git(PORT.parent, 'rev-parse', 'HEAD')
     state_path = ROOT / 'ci/last-built.json'
     last = json.loads(state_path.read_text()) if state_path.exists() else {}
     result = {'current': current, 'latest': latest, 'kernelsu': ksu,
               'kernel_changed': latest != current,
+              'source_revision': source_revision,
+              'source_changed': source_revision != last.get('source_revision'),
               'kernelsu_changed': ksu != last.get('kernelsu_revision') or current != last.get('common_revision')}
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:

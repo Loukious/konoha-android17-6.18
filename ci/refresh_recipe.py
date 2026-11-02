@@ -3,13 +3,14 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-PORT = ROOT / 'port'
+PORT = Path(os.environ.get('KONOHA_SOURCE_ROOT', ROOT)) / 'port'
 
 
 def sha(data):

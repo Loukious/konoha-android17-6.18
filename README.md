@@ -14,8 +14,23 @@ startup checks, front/rear photos and short 1080p recordings. Camera synchroniza
 recovery itself is unchanged; separate SOF-skip diagnostics remain. New
 LTS/KernelSU builds require device validation.
 
+## Branch layout
+
+- [`ci`](https://github.com/Loukious/konoha-android17-6.18/tree/ci) is the default
+  branch and contains only workflows, automation, and documentation.
+- [`android17-6.18`](https://github.com/Loukious/konoha-android17-6.18/tree/android17-6.18)
+  contains the complete GKI source in `common/`, modified modules in `modules/`,
+  and the pinned recipe/patches in `port/`. It contains no workflows.
+- `upstream/` branches are proposed updates to the source branch. Builds run
+  from `ci` and attach their status to the selected source commit and its PR.
+
 ## Source layout
 
+On the source branch:
+
+- `common/` contains the complete pinned upstream GKI with the required common
+  fixes applied. CI independently recreates and verifies every source file,
+  executable bit and symlink before building.
 - `modules/` contains all 4,862 materialized, modified source/build files used
   by the module port, including WLAN, IPA, Bluetooth, graphics, audio, camera,
   charging, PMIC/SPMI, clocks, USB and the remaining device driver groups.
@@ -27,8 +42,9 @@ LTS/KernelSU builds require device validation.
   applied for every build, separately from the optional QDSS diagnostic logs.
 - `port/devicetrees/`, configuration fragments and `modules.json` preserve the
   complete device-tree corrections, module options and expected output set.
-- `ci/` and `.github/workflows/` provide upstream detection, patch replay,
-  hosted builds, artifact checks and source-update pull requests.
+
+On the CI branch, `ci/` and `.github/workflows/` provide upstream detection,
+patch replay, hosted builds, artifact checks and source-update pull requests.
 
 The stable 6.6 repository and development logs are maintained separately.
 Vendor sources keep their original copyright and license notices; see COPYING.
@@ -39,15 +55,17 @@ The tracker runs daily at 05:00 UTC or through **Run workflow**. It checks
 Google's LTS branch and KernelSU Next dev. A new kernel revision produces an
 `upstream/` branch with updated common pins, private-header blob imports,
 patch hashes and the complete module snapshot. Exact patch replay is required;
-an upstream conflict fails the update without changing the accepted main tree.
+an upstream conflict fails the update without changing the accepted source branch.
 Already integrated CoreSight fixes are excluded from the effective patch.
 
 The tracker opens a pull request and explicitly dispatches its complete build
 (GitHub's default token does not trigger a workflow from its own push). Merge
-the update after reviewing its build result. Main remains pinned and
-reproducible. A KernelSU-only update rebuilds the accepted kernel without
-changing its GKI source. Successful main builds record their exact revisions,
-so unchanged upstream inputs do not cause daily rebuilds.
+the update into `android17-6.18` after reviewing its build result. The source
+branch remains pinned and reproducible. A KernelSU-only update rebuilds the
+accepted kernel without changing its GKI source. Successful accepted-source
+builds record their exact revisions, so unchanged upstream inputs do not
+cause daily rebuilds. The daily tracker also rebuilds manual source-branch
+changes. Candidate source edits can be tested through the manual workflow.
 
 Builds use standard `ubuntu-24.04` GitHub-hosted runners, adapted from
 `Loukious/konoha-kernel-gki`'s workflow: build dependencies, swap, artifact and
@@ -66,20 +84,31 @@ universal flashable ZIP: matched boot/DLKM images depend on the ROM's ramdisks,
 module load lists, filesystem labels and partition layout. CI does not flash
 devices or automatically publish a tested release.
 
+## Manual workflow
+
+Select **Build Android 17 6.18 GKI and Onyx modules** on the `ci` branch.
+`source_ref` defaults to `android17-6.18`; select an update branch, tag or
+complete commit to build a candidate. The `diagnostic` option adds QDSS logging.
+
 ## Local build
 
-Requirements: Linux x86-64, Git, Python 3.11+, Android `repo`, GNU patch, C
+Requirements: Linux x86-64, Git, Python 3.12+, Android `repo`, GNU patch, C
 build tools, kmod and enough free disk for the source and Kleaf outputs.
 
 ```sh
-python3 port/prepare.py /path/to/fresh-workspace
-python3 port/stage.py /path/to/fresh-workspace
-python3 ci/snapshot.py /path/to/fresh-workspace/onyx
-python3 port/build.py /path/to/fresh-workspace --jobs 12 --memory-mb 20000
+git clone --branch ci https://github.com/Loukious/konoha-android17-6.18 automation
+git clone --branch android17-6.18 https://github.com/Loukious/konoha-android17-6.18 source
+export KONOHA_SOURCE_ROOT="$PWD/source"
+python3 source/port/prepare.py /path/to/fresh-workspace
+python3 source/port/stage.py /path/to/fresh-workspace
+python3 automation/ci/snapshot.py /path/to/fresh-workspace/onyx
+python3 automation/ci/snapshot_common.py /path/to/fresh-workspace
+python3 source/port/build.py /path/to/fresh-workspace --jobs 12 --memory-mb 20000
 ```
 
 Use `--qdss-diagnostic` for the optional diagnostic build. The ordinary build
 still includes the CoreSight fix. Edit the recipe/patches, replay staging,
-then regenerate the module snapshot with `ci/snapshot.py ... --write`.
+then regenerate snapshots with `automation/ci/snapshot.py ... --write` and
+`automation/ci/snapshot_common.py ... --write`.
 KMI checks, strict patch application and source-preservation guards remain
 enabled. Do not reuse a workspace with unknown local edits.

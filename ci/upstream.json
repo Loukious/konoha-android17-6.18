@@ -1,6 +1,8 @@
 {
   "repository": "https://android.googlesource.com/kernel/common",
   "branch": "android17-6.18-lts",
+  "ci_branch": "ci",
+  "source_branch": "android17-6.18",
   "kernelsu_repository": "https://github.com/KernelSU-Next/KernelSU-Next.git",
   "kernelsu_branch": "dev"
 }

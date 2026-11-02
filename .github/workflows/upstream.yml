@@ -14,6 +14,10 @@ concurrency:
   group: upstream-tracker
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  KONOHA_SOURCE_ROOT: ${{ github.workspace }}/source
+
 jobs:
   track:
     runs-on: ubuntu-24.04
@@ -21,8 +25,14 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Detect upstream and KernelSU changes
+      - name: Checkout CI automation
+        uses: actions/checkout@v4
+      - name: Checkout accepted source
+        uses: actions/checkout@v4
+        with:
+          ref: android17-6.18
+          path: source
+      - name: Detect upstream, source and KernelSU changes
         id: detect
         run: python3 ci/track_upstream.py
       - name: Prepare runner for a kernel update
@@ -40,17 +50,18 @@ jobs:
           python3 ci/track_upstream.py --update "$RUNNER_TEMP/upstream-common" --revision "$REVISION"
           python3 ci/refresh_recipe.py "$RUNNER_TEMP/upstream-common"
           rm -rf "$RUNNER_TEMP/upstream-common"
-      - name: Replay the port against the new common headers
+      - name: Replay the port and materialize the complete updated source
         if: steps.detect.outputs.kernel_changed == 'true'
         run: |
-          python3 port/prepare.py "$RUNNER_TEMP/konoha-workspace" --jobs 4
-          python3 port/stage.py "$RUNNER_TEMP/konoha-workspace"
+          python3 source/port/prepare.py "$RUNNER_TEMP/konoha-workspace" --jobs 4
+          python3 source/port/stage.py "$RUNNER_TEMP/konoha-workspace"
           python3 ci/snapshot.py "$RUNNER_TEMP/konoha-workspace/onyx" --write
-      - name: Publish candidate update and trigger its complete build
+          python3 ci/snapshot_common.py "$RUNNER_TEMP/konoha-workspace" --write
+      - name: Publish source update PR and trigger its complete build on the CI branch
         if: steps.detect.outputs.kernel_changed == 'true'
         env:
           REVISION: ${{ steps.detect.outputs.latest }}
         run: python3 ci/publish_update.py "$REVISION"
-      - name: Rebuild accepted kernel when KernelSU dev changes
-        if: steps.detect.outputs.kernel_changed != 'true' && steps.detect.outputs.kernelsu_changed == 'true'
-        run: gh workflow run build.yml --ref main
+      - name: Rebuild accepted source when its source or KernelSU dev changes
+        if: steps.detect.outputs.kernel_changed != 'true' && (steps.detect.outputs.kernelsu_changed == 'true' || steps.detect.outputs.source_changed == 'true')
+        run: gh workflow run build.yml --ref ci -f source_ref=android17-6.18

@@ -1,7 +1,1 @@
 * text=auto eol=lf
-# Hash-verified materialized upstream files must survive cloning byte-for-byte.
-modules/** -text
-port/patches/*.patch -text -whitespace
-port/common-patches/*.patch -text -whitespace
-port/validation/**/candidate/** -text -whitespace
-port/validation/**/*.patch -text -whitespace

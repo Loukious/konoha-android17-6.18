@@ -27,13 +27,15 @@ class TrackingTests(unittest.TestCase):
             kernel, ksu = 'a' * 40, 'b' * 40
             (root / 'port/sources.json').write_text(json.dumps({'common': {'revision': kernel}}))
             (root / 'ci/last-built.json').write_text(json.dumps(
-                {'common_revision': kernel, 'kernelsu_revision': ksu}))
+                {'common_revision': kernel, 'kernelsu_revision': ksu, 'source_revision': kernel}))
             with patch.object(tracker, 'ROOT', root), patch.object(tracker, 'PORT', root / 'port'), \
                     patch.object(tracker, 'remote_head', side_effect=[kernel, ksu]), \
+                    patch.object(tracker, 'git', return_value=kernel), \
                     patch.dict(os.environ, {}, clear=True):
                 result = tracker.detect()
             self.assertFalse(result['kernel_changed'])
             self.assertFalse(result['kernelsu_changed'])
+            self.assertFalse(result['source_changed'])
 
     def test_kernelsu_only_change_rebuilds_accepted_kernel(self):
         tracker = module('track_upstream')
@@ -47,6 +49,7 @@ class TrackingTests(unittest.TestCase):
                 {'common_revision': kernel, 'kernelsu_revision': 'b' * 40}))
             with patch.object(tracker, 'ROOT', root), patch.object(tracker, 'PORT', root / 'port'), \
                     patch.object(tracker, 'remote_head', side_effect=[kernel, 'c' * 40]), \
+                    patch.object(tracker, 'git', return_value=kernel), \
                     patch.dict(os.environ, {}, clear=True):
                 result = tracker.detect()
             self.assertFalse(result['kernel_changed'])
@@ -208,7 +211,8 @@ class PublicationTests(unittest.TestCase):
 
     def test_existing_build_is_not_repeated_daily(self):
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
-                                      [{'status': 'completed', 'conclusion': 'failure', 'url': 'build'}])
+                                      [{'displayTitle': 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12,
+                                        'status': 'completed', 'conclusion': 'failure', 'url': 'build'}])
         self.assertFalse(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
     def test_closed_candidate_is_not_reopened(self):
@@ -225,7 +229,7 @@ class BuildStateTests(unittest.TestCase):
                     {'object': {'sha': 'b' * 40}})), patch.object(recorder.subprocess, 'run') as run:
             result = recorder.record('owner/repo', 'c' * 40, 'd' * 40)
         run.assert_not_called()
-        self.assertIn('main advanced', result['status'])
+        self.assertIn('CI branch advanced', result['status'])
 
 
 if __name__ == '__main__':

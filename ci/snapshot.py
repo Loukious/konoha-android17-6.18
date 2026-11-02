@@ -3,10 +3,11 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get('KONOHA_SOURCE_ROOT', Path(__file__).resolve().parents[1]))
 
 
 def hashes(root):
@@ -23,9 +24,9 @@ def snapshot(staged, write=False):
         # This script operates only on the repository's generated snapshot.
         shutil.rmtree(destination)
         shutil.copytree(staged, destination, ignore=shutil.ignore_patterns('.staged-files.json'))
-        (ROOT / 'ci/module-source-hashes.json').write_text(json.dumps(source, indent=2) + '\n')
+        (ROOT / 'port/module-source-hashes.json').write_text(json.dumps(source, indent=2) + '\n')
     else:
-        expected = json.loads((ROOT / 'ci/module-source-hashes.json').read_text())
+        expected = json.loads((ROOT / 'port/module-source-hashes.json').read_text())
         if hashes(ROOT / 'modules') != expected or source != expected:
             raise ValueError('Modified module snapshot differs from exact source/patch replay')
     return {'files_verified': len(source), 'modules': len(json.loads((ROOT / 'port/modules.json').read_text()))}

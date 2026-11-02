@@ -15,7 +15,8 @@ a = p.parse_args()
 builds = sorted(d for d in (a.workspace / 'artifacts').iterdir() if (d / 'report.json').is_file())
 artifact = builds[-1]
 report = json.loads((artifact / 'report.json').read_text())
-expected = json.loads((Path(__file__).resolve().parents[1] / 'port/modules.json').read_text())
+source_root = Path(os.environ.get('KONOHA_SOURCE_ROOT', Path(__file__).resolve().parents[1]))
+expected = json.loads((source_root / 'port/modules.json').read_text())
 if len(report['module_verification']) != len(expected):
     raise ValueError('Incomplete module build')
 for name, digest in report['sha256'].items():

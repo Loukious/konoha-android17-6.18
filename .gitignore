@@ -1,10 +1,5 @@
 __pycache__/
 *.pyc
-/workspace/
+/source/
 /artifacts/
 /ci-results/
-port/validation/**/platform-remove-harness.c
-port/validation/**/*validation.json
-!port/validation/**/source-validation.json
-port/validation/**/*.log
-

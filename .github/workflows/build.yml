@@ -1,11 +1,15 @@
 name: Build Android 17 6.18 GKI and Onyx modules
+run-name: Build ${{ inputs.source_ref || 'android17-6.18' }}${{ inputs.diagnostic && ' (QDSS diagnostic)' || '' }}
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [ci]
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: Source branch, tag or commit to build
+        type: string
+        default: android17-6.18
       diagnostic:
         description: Include the opt-in AMBA/QDSS diagnostic build
         type: boolean
@@ -13,13 +17,15 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ inputs.source_ref || 'android17-6.18' }}-${{ inputs.diagnostic || false }}
   cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  KONOHA_SOURCE_ROOT: ${{ github.workspace }}/source
 
 jobs:
   build:
@@ -28,27 +34,43 @@ jobs:
     outputs:
       kernel_revision: ${{ steps.export.outputs.kernel_revision }}
       kernelsu_revision: ${{ steps.export.outputs.kernelsu_revision }}
+      source_revision: ${{ steps.source.outputs.revision }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout CI automation
+        uses: actions/checkout@v4
+      - name: Checkout selected source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || 'android17-6.18' }}
+          path: source
+      - name: Resolve source commit
+        id: source
+        run: echo "revision=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Mark source build pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.source.outputs.revision }}
+        run: python3 ci/post_status.py "$REVISION" pending
       - name: Validate automation
         run: python3 -m unittest discover -s ci/tests -v
       - name: Prepare standard hosted runner
         run: bash ci/bootstrap_runner.sh
       - name: Sync locked kernel and vendor sources
-        run: python3 port/prepare.py "$RUNNER_TEMP/konoha-workspace" --jobs 4
-      - name: Replay all module patches and verify committed source snapshot
+        run: python3 source/port/prepare.py "$RUNNER_TEMP/konoha-workspace" --jobs 4
+      - name: Replay patches and verify complete committed kernel and module sources
         run: |
-          python3 port/stage.py "$RUNNER_TEMP/konoha-workspace"
+          python3 source/port/stage.py "$RUNNER_TEMP/konoha-workspace"
           python3 ci/snapshot.py "$RUNNER_TEMP/konoha-workspace/onyx"
+          python3 ci/snapshot_common.py "$RUNNER_TEMP/konoha-workspace"
       - name: Verify CoreSight lifecycle correction
-        run: python3 port/validation/clock_suspend_resume/verify_platform_remove.py "$RUNNER_TEMP/konoha-workspace"
+        run: python3 source/port/validation/clock_suspend_resume/verify_platform_remove.py "$RUNNER_TEMP/konoha-workspace"
       - name: Build matching GKI and every ported module with latest KernelSU Next dev
         env:
           DIAGNOSTIC: ${{ inputs.diagnostic || false }}
         run: |
           flags=()
           if [[ "$DIAGNOSTIC" == true ]]; then flags+=(--qdss-diagnostic); fi
-          python3 port/build.py "$RUNNER_TEMP/konoha-workspace" \
+          python3 source/port/build.py "$RUNNER_TEMP/konoha-workspace" \
             --jobs "$KONOHA_BUILD_JOBS" --memory-mb "$KONOHA_BUILD_MEMORY_MB" "${flags[@]}"
       - name: Verify and export modules, kernel and ABI
         id: export
@@ -69,21 +91,29 @@ jobs:
           path: |
             ${{ runner.temp }}/konoha-workspace/artifacts/*/build.log
             ${{ runner.temp }}/konoha-workspace/artifacts/*/common-fixes/receipt.json
-            port/validation/clock_suspend_resume/platform-remove-validation.json
+            source/port/validation/clock_suspend_resume/platform-remove-validation.json
           retention-days: 7
           if-no-files-found: warn
+      - name: Record source commit status
+        if: always() && steps.source.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.source.outputs.revision }}
+          BUILD_STATUS: ${{ job.status }}
+        run: python3 ci/post_status.py "$REVISION" "$BUILD_STATUS"
 
   record:
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.diagnostic != true
+    if: github.ref == 'refs/heads/ci' && (inputs.source_ref == '' || inputs.source_ref == 'android17-6.18') && inputs.diagnostic != true
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Record verified main-branch revisions
+      - name: Record verified accepted source and KernelSU revisions
         env:
           GH_TOKEN: ${{ github.token }}
           KERNEL_REVISION: ${{ needs.build.outputs.kernel_revision }}
           KERNELSU_REVISION: ${{ needs.build.outputs.kernelsu_revision }}
-        run: python3 ci/record_success.py "$KERNEL_REVISION" "$KERNELSU_REVISION"
+          SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
+        run: python3 ci/record_success.py "$KERNEL_REVISION" "$KERNELSU_REVISION" "$SOURCE_REVISION"

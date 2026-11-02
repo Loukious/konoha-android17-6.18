@@ -2,12 +2,15 @@
 """Publish a replayed LTS candidate without overwriting the accepted kernel."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+CI_ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get('KONOHA_SOURCE_ROOT', CI_ROOT))
+TRACK = json.loads((CI_ROOT / 'ci/upstream.json').read_text())
 
 
 def run(args, **kwargs):
@@ -28,7 +31,10 @@ def publish(revision):
     version = pins['common']['kernel']
     if not existing:
         run(['git', 'checkout', '-b', branch])
-        run(['git', 'add', 'port', 'modules', 'ci/module-source-hashes.json'])
+        # Upstream .gitignore files can match files deliberately tracked by
+        # upstream. The verified archive, not ignore patterns, defines GKI.
+        run(['git', 'add', 'port', 'modules'])
+        run(['git', 'add', '-f', 'common'])
         run(['git', 'commit', '-m', f'Track Android 17 LTS {version} ({revision[:12]})'])
         run(['git', 'push', '-u', 'origin', branch])
     # Recover after a failed PR creation or dispatch without overwriting a
@@ -55,15 +61,16 @@ def publish(revision):
         with tempfile.TemporaryDirectory(prefix='konoha-pr-') as temporary:
             path = Path(temporary) / 'body.md'
             path.write_text(body)
-            url = run(['gh', 'pr', 'create', '--base', 'main', '--head', branch,
+            url = run(['gh', 'pr', 'create', '--base', TRACK['source_branch'], '--head', branch,
                        '--title', f'Android 17 LTS {version}', '--body-file', str(path)])
-    builds = json.loads(run(['gh', 'run', 'list', '--workflow', 'build.yml', '--branch', branch,
-                            '--limit', '1', '--json', 'status,conclusion,url']))
+    builds = json.loads(run(['gh', 'run', 'list', '--workflow', 'build.yml', '--branch', TRACK['ci_branch'],
+                            '--limit', '100', '--json', 'displayTitle,status,conclusion,url']))
+    builds = [build for build in builds if build['displayTitle'] == 'Build ' + branch]
     if builds:
         return {'status': 'candidate and build already exist', 'branch': branch,
                 'url': url, 'build': builds[0]}
     # GITHUB_TOKEN pushes do not trigger another workflow; dispatch explicitly.
-    run(['gh', 'workflow', 'run', 'build.yml', '--ref', branch])
+    run(['gh', 'workflow', 'run', 'build.yml', '--ref', TRACK['ci_branch'], '-f', 'source_ref=' + branch])
     return {'status': 'candidate PR opened; complete build dispatched', 'branch': branch, 'url': url}
 
 
