@@ -59,8 +59,10 @@ an upstream conflict fails the update without changing the accepted source branc
 Already integrated CoreSight fixes are excluded from the effective patch.
 
 The tracker opens a pull request and explicitly dispatches its complete build
-(GitHub's default token does not trigger a workflow from its own push). Merge
-the update into `android17-6.18` after reviewing its build result. The source
+(GitHub's default token does not trigger a workflow from its own push).
+Successful updates automatically fast-forward `android17-6.18` to the exact
+tested source commit, merging the update PR. A concurrent change to the source
+branch stops promotion until a new candidate has been rebuilt. The source
 branch remains pinned and reproducible. A KernelSU-only update rebuilds the
 accepted kernel without changing its GKI source. Successful accepted-source
 builds record their exact revisions, so unchanged upstream inputs do not

@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -298,6 +300,94 @@ class CommonSourceTests(unittest.TestCase):
             source.unlink()
             source.symlink_to('different-target')
             self.assertEqual(snapshot.hashes(root)['link'], {'symlink': 'different-target'})
+
+
+class PromotionTests(unittest.TestCase):
+    def exercise(self, change=None, push_failed=False):
+        promoter = module('promote_update')
+        source, kernel, ksu, base = 'a' * 40, 'b' * 40, 'c' * 40, 'd' * 40
+        branch = 'upstream/android17-6.18-' + 'e' * 12 + '-' + 'f' * 12
+        run_url = 'https://github.com/owner/repo/actions/runs/123'
+        responses = {
+            'jobs': {'jobs': [{'name': 'build', 'conclusion': 'success'}]},
+            'status': {'statuses': [{'context': 'Konoha / GKI and modules', 'state': 'success',
+                                     'target_url': run_url}]},
+            'proposals': [{'number': 1, 'draft': False, 'head': {'sha': source},
+                           'html_url': 'https://github.com/owner/repo/pull/1'}],
+            'pins': {'content': base64.b64encode(json.dumps(
+                {'common': {'revision': kernel, 'kernel': '6.18.38'}}).encode()).decode()},
+            'base': {'object': {'sha': base}},
+            'comparison': {'status': 'ahead'},
+            'merged': {'merged': True},
+        }
+        if change:
+            change(responses)
+        def api(path):
+            if path.endswith('/jobs'): return responses['jobs']
+            if path.endswith('/status'): return responses['status']
+            if '/pulls?' in path: return responses['proposals']
+            if '/contents/' in path: return responses['pins']
+            if '/git/ref/' in path: return responses['base']
+            if '/compare/' in path: return responses['comparison']
+            if path.endswith('/pulls/1'): return responses['merged']
+            raise AssertionError(path)
+        commands = []
+        def run(args, **kwargs):
+            commands.append(args)
+            if args[:2] == ['git', 'push'] and push_failed:
+                responses['base'] = {'object': {'sha': '0' * 40}}
+                return SimpleNamespace(returncode=1, stderr='stale lease')
+            return SimpleNamespace(returncode=0, stderr='')
+        with patch.object(promoter, 'api', side_effect=api), \
+                patch.object(promoter.subprocess, 'run', side_effect=run), \
+                patch.object(promoter, 'record_result') as record:
+            try:
+                result = promoter.promote('owner/repo', branch, source, kernel, ksu, run_url)
+            except ValueError as error:
+                result = {'error': str(error)}
+            return result, commands, record.call_args_list
+
+    def test_success_promotes_exact_tested_commit_with_atomic_base_check(self):
+        result, commands, records = self.exercise()
+        push = next(args for args in commands if args[:2] == ['git', 'push'])
+        self.assertIn('--force-with-lease=refs/heads/android17-6.18:' + 'd' * 40, push)
+        self.assertIn('a' * 40 + ':refs/heads/android17-6.18', push)
+        self.assertEqual(records[0].args, ('owner/repo', 'b' * 40, 'c' * 40, 'a' * 40))
+        self.assertIn('PR merged', result['status'])
+
+    def test_failed_build_cannot_promote(self):
+        result, commands, records = self.exercise(lambda r: r['jobs']['jobs'][0].update(conclusion='failure'))
+        self.assertIn('not succeeded', result['error'])
+        self.assertEqual(commands, [])
+        self.assertEqual(records, [])
+
+    def test_other_builds_status_cannot_promote(self):
+        result, commands, records = self.exercise(lambda r: r['status']['statuses'][0].update(target_url='other'))
+        self.assertIn('verification status', result['error'])
+        self.assertEqual(commands, [])
+
+    def test_changed_candidate_requires_new_build(self):
+        result, commands, records = self.exercise(lambda r: r['proposals'][0]['head'].update(sha='0' * 40))
+        self.assertIn('Candidate changed', result['status'])
+        self.assertEqual(commands, [])
+
+    def test_changed_base_requires_replay(self):
+        result, commands, records = self.exercise(lambda r: r['comparison'].update(status='diverged'))
+        self.assertIn('new candidate', result['status'])
+        self.assertEqual(commands, [])
+
+    def test_base_race_does_not_record_unpromoted_build(self):
+        result, commands, records = self.exercise(push_failed=True)
+        self.assertIn('advanced during promotion', result['status'])
+        self.assertEqual(records, [])
+
+    def test_wrong_kernel_pin_cannot_promote(self):
+        def change(r):
+            r['pins']['content'] = base64.b64encode(json.dumps(
+                {'common': {'revision': '0' * 40, 'kernel': '6.18.38'}}).encode()).decode()
+        result, commands, records = self.exercise(change)
+        self.assertIn('source pins', result['error'])
+        self.assertEqual(commands, [])
 
 
 if __name__ == '__main__':

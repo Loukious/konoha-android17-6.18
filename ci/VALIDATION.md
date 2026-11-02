@@ -16,11 +16,16 @@ Before publication on 2026-11-02:
 - The refreshed production CoreSight callbacks passed 94 lifecycle cases
   under ASan/UBSan. Original callbacks and five regressions were rejected;
   required source patches restore the checkout after a simulated build failure.
-- Twenty-one automation tests cover exact branch/revision checks, pin/blob refresh,
+- Twenty-eight automation tests cover exact branch/revision checks, pin/blob refresh,
   unchanged-input detection, KernelSU-only updates, source omissions/edits,
   patch integration/conflicts, partial publisher recovery, duplicate/closed PRs,
   stale CI/source build-state writes, executable/symlink preservation, source
   branch selection, and new KernelSU builds while an LTS candidate remains open.
+- Automatic promotion additionally requires the complete build job and its
+  source status to succeed, validates the built kernel pin and candidate head,
+  and uses an atomic base lease for an exact fast-forward. Failed builds,
+  changed heads, changed bases, mismatched pins and a concurrent push are
+  rejected without recording an unpromoted build.
 - Both workflows pass actionlint; Python compilation and Bash syntax checks pass.
 
 The accepted 6.18.33 baseline passed local GKI/module/DT builds and bounded
