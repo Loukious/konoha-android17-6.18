@@ -160,6 +160,25 @@ class RebaseTests(unittest.TestCase):
             self.assertEqual(result['already_integrated_upstream'], ['drivers/core.c'])
             self.assertEqual((port / 'common-patches/effective.patch').read_bytes(), b'')
 
+    def test_manifest_selects_local_and_upstream_replay_patches(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            port, common = self.setup_fixture(Path(temporary))
+            patches = port / 'common-patches'
+            (common / 'drivers/thermal.c').write_text('private class\n')
+            (patches / 'required.patch').write_text(
+                (patches / 'upstream-platform-remove.patch').read_text() +
+                'diff --git a/drivers/thermal.c b/drivers/thermal.c\n'
+                '--- a/drivers/thermal.c\n+++ b/drivers/thermal.c\n'
+                '@@ -1 +1 @@\n-private class\n+typed registration\n')
+            (patches / 'manifest.json').write_text(json.dumps(
+                {'patch': 'effective.patch', 'replay_patch': 'required.patch'}))
+            with patch.object(refresh, 'PORT', port):
+                result = refresh.refresh(common)
+            self.assertEqual(result['active_common_patches'], 2)
+            self.assertIn('typed registration', (patches / 'effective.patch').read_text())
+            self.assertEqual((common / 'drivers/thermal.c').read_text(), 'private class\n')
+
     def test_conflict_does_not_mutate_recipe(self):
         refresh = module('refresh_recipe')
         with tempfile.TemporaryDirectory() as temporary:

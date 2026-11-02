@@ -68,6 +68,12 @@ jobs:
           python3 ci/snapshot_common.py "$RUNNER_TEMP/konoha-workspace"
       - name: Verify CoreSight lifecycle correction
         run: python3 source/port/validation/clock_suspend_resume/verify_platform_remove.py "$RUNNER_TEMP/konoha-workspace"
+      - name: Verify Xiaomi thermal control and cleanup
+        run: |
+          if [[ -f source/port/verify_mi_thermal.py ]]; then
+            python3 source/port/verify_mi_thermal.py \
+              "$RUNNER_TEMP/konoha-workspace/onyx/drivers/thermal/xiaomi/mi_thermal_interface.c"
+          fi
       - name: Build matching GKI and every ported module with latest KernelSU Next dev
         env:
           DIAGNOSTIC: ${{ inputs.diagnostic || false }}

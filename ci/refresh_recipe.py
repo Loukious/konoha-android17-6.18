@@ -26,7 +26,8 @@ def replay(repo, patch, reverse=False):
 
 def refresh(common):
     patch_dir = PORT / 'common-patches'
-    original = (patch_dir / 'upstream-platform-remove.patch').read_bytes()
+    manifest = json.loads((patch_dir / 'manifest.json').read_text())
+    original = (patch_dir / manifest.get('replay_patch', 'upstream-platform-remove.patch')).read_bytes()
     pieces = re.split(rb'(?=diff --git )', original)
     header, diffs = pieces[0], pieces[1:]
     active, integrated, files = [], [], {}
@@ -48,7 +49,6 @@ def refresh(common):
                 raise ValueError(f'Common patch conflicts with upstream: {name}')
             files[name] = {'before_sha256': sha(data), 'candidate_sha256': sha(target.read_bytes())}
         patch = header + b''.join(active) if active else b''
-        manifest = json.loads((patch_dir / 'manifest.json').read_text())
         manifest.update(files=files, patch_sha256=sha(patch), integrated_upstream=integrated)
         # Refresh opt-in diagnostic sources, also requiring exact application.
         evidence = PORT / 'validation/clock_suspend_resume'
