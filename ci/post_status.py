@@ -16,5 +16,5 @@ url = f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/{os.environ[
 state = 'error' if a.state == 'cancelled' else a.state
 subprocess.run(['gh', 'api', f'repos/{repository}/statuses/{a.revision}', '--method', 'POST',
                 '-f', 'state=' + state, '-f', 'context=Konoha / GKI and modules',
-                '-f', 'target_url=' + url, '-f', 'description=GKI, 318 modules, DTs and CRC verification'],
+                '-f', 'target_url=' + url, '-f', 'description=GKI, platform modules, DTs and CRC verification'],
                stdout=subprocess.DEVNULL, check=True)
