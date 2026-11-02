@@ -3522,6 +3522,10 @@ static int mca_quick_charge_process_event(int event, int value, void *data)
 
 	mca_log_info("event: %d, value: %d\n", event, value);
 	switch (event) {
+	case MCA_EVENT_HANDLE_ALLOW_CHARGE:
+		if (value != 0 && value != 1)
+			return -EINVAL;
+		return mca_vote_policy(info->chg_en_voter, "handle", !value, 0);
 	case MCA_EVENT_MASTER_BATT_CLOSE:
 		mca_log_err("master batt close event %d\n", value);
 		info->base_close_curr = value *

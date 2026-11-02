@@ -1391,5 +1391,13 @@
   {
     "target": "hl7603",
     "output": "hl7603.ko"
+  },
+  {
+    "target": "coresight_tpda",
+    "output": "coresight-tpda.ko"
+  },
+  {
+    "target": "coresight_tmc",
+    "output": "coresight-tmc.ko"
   }
 ]

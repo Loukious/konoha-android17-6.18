@@ -29825,5 +29825,53 @@
     "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
     "path": "drivers/hwtracing/coresight/coresight-tpda.h",
     "blob": "c6af3d2da3efeaeef64ba9023f1c280583b542e6"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tpda.c",
+    "blob": "333b3cb236859f0feb1498f4ab81037c772143fd"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-trace-id.h",
+    "blob": "db68e1ec56b607900a01732fb5161b2feaaac419"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-core.c",
+    "blob": "36599c431be6203e871fdcb8de569cc6701c52bb"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-etf.c",
+    "blob": "0f45ab5e5249933ce7059dfee7fe7376ab33ed2d"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-etr.c",
+    "blob": "9144b273d415f0952aa17359775d7ceb473c7544"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc.h",
+    "blob": "cbb4ba43915855a8acbb9205167e87185c9a8c6c"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-etm-perf.h",
+    "blob": "5febbcdb8696b0c0b937e681ff007cfff6814f6a"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-catu.h",
+    "blob": "6e6b7aac206dcae9ff062355e50179637b4d1703"
   }
 ]

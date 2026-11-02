@@ -35,6 +35,9 @@ struct tpda_drvdata {
 	struct device		*dev;
 	struct coresight_device	*csdev;
 	spinlock_t		spinlock;
+	bool			legacy;
+	u32			legacy_dsb[TPDA_MAX_INPORTS];
+	u32			legacy_cmb[TPDA_MAX_INPORTS];
 	u8			atid;
 	u32			dsb_esize;
 	u32			cmb_esize;

@@ -176,11 +176,20 @@ void business_charger_update_usb_psy(int real_type, struct usb_psy_info *info)
 
 void business_usb_psy_event_process(struct usb_psy_info *info)
 {
+	struct power_supply *battery;
+
 	if (!info)
 		return;
-	guard(mutex)(&info->lock);
-	if (!info->stopping)
+	scoped_guard(mutex, &info->lock) {
+		if (info->stopping)
+			return;
 		power_supply_changed(info->usb_psy);
+	}
+	battery = power_supply_get_by_name("battery");
+	if (battery) {
+		power_supply_changed(battery);
+		power_supply_put(battery);
+	}
 }
 
 struct usb_psy_info *business_charger_usb_psy_init(struct device *dev)

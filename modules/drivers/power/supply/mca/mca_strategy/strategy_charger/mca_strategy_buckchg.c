@@ -1257,11 +1257,19 @@ strategy_buckchg_check_reverse_quick_charge(struct strategy_buckchg_dev *info,
 	int soc;
 	bool otg = false;
 	int eligible = 0;
+	int ret;
 
-	strategy_class_fg_ops_get_temperature(&batt_temp);
+	*out = 0;
+	ret = strategy_class_fg_ops_get_temperature(&batt_temp);
+	if (ret)
+		return ret;
 	soc = strategy_class_fg_ops_get_soc();
+	if (soc < 0)
+		return soc;
 	batt_temp /= 10;
-	protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
+	ret = protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
+	if (ret)
+		return ret;
 	mca_log_info(
 		"otg_present = %d, batt_temp = %d, thermal_board_temp =%d\n",
 		otg, batt_temp, info->thermal_board_temp);
@@ -3631,6 +3639,39 @@ strategy_buckchg_soc_limit_stepper_workfunc(struct work_struct *work)
 	strategy_buckchg_soc_limit_stepper_workfunc_locked(work);
 }
 
+/* A user request changes the existing wired PD gear, never peer authentication. */
+static int strategy_buckchg_request_reverse(struct strategy_buckchg_dev *info,
+                                           int value)
+{
+	bool old_gate = info->reverse_qc_gate0;
+	int eligible = 0, ret;
+
+	if (value != 0 && value != 1)
+		return -EINVAL;
+	if (!info->support_reverse_quick_charge)
+		return -EOPNOTSUPP;
+	if (value && (!info->cp_revert_auth || !info->reverse_auth))
+		return -EACCES;
+	info->reverse_qc_gate0 = !value;
+	if (value) {
+		ret = strategy_buckchg_check_reverse_quick_charge(info, &eligible);
+		if (ret)
+			goto restore;
+		if (!eligible) {
+			ret = -EAGAIN;
+			goto restore;
+		}
+	}
+	ret = protocol_class_pd_set_gear_shift(TYPEC_PORT_0, eligible);
+	if (ret)
+		goto restore;
+	info->source_boost_status = eligible;
+	return 0;
+restore:
+	info->reverse_qc_gate0 = old_gate;
+	return ret;
+}
+
 static int strategy_buckchg_process_event(int event, int value, void *data)
 {
 	struct strategy_buckchg_dev *info = data;
@@ -3640,6 +3681,21 @@ static int strategy_buckchg_process_event(int event, int value, void *data)
 
 	if (!info)
 		return -EINVAL;
+	if (event == MCA_EVENT_START_QUICK_REVCHG) {
+		guard(mutex)(&info->policy_lock);
+		if (info->stopping)
+			return -ENODEV;
+		return strategy_buckchg_request_reverse(info, value);
+	}
+	/* Handle policy needs a synchronous result for business-layer rollback. */
+	if (event == MCA_EVENT_HANDLE_ALLOW_CHARGE) {
+		if (value != 0 && value != 1)
+			return -EINVAL;
+		guard(mutex)(&info->policy_lock);
+		if (info->stopping)
+			return -ENODEV;
+		return mca_vote_policy(info->chg_enable_voter, "handle", !value, 0);
+	}
 	if (event == MCA_EVENT_WIRELESS_REVCHG &&
 	    !IS_ENABLED(CONFIG_MCA_BUCK_WLS_REV_COORDINATION))
 		return -EOPNOTSUPP;

@@ -2,6 +2,7 @@
 #define _MCA_COMMON_MCA_VOTER_H_
 
 #include <linux/types.h>
+#include <linux/errno.h>
 
 struct mca_votable;
 
@@ -52,5 +53,23 @@ bool mca_is_named_override_vote_enabled(const char *name);
 bool mca_named_votable_exists(const char *name);
 
 int mca_rerun_named_election(const char *name);
+
+/* Caller serializes this client's updates with the owning policy lock. */
+static inline int mca_vote_policy(struct mca_votable *votable,
+                                 const char *client, bool enabled, int value)
+{
+	bool old_enabled = mca_is_client_vote_enabled(votable, client);
+	int old_value = old_enabled ? mca_get_client_vote(votable, client) : 0;
+	int ret, restore;
+
+	ret = mca_vote(votable, client, enabled, value);
+	if (!ret)
+		return 0;
+	/* mca_vote updates cached votes even when the hardware callback fails. */
+	restore = mca_vote(votable, client, old_enabled, old_value);
+	if (restore || mca_rerun_election(votable))
+		return -EIO;
+	return ret;
+}
 
 #endif /* _MCA_COMMON_MCA_VOTER_H_ */

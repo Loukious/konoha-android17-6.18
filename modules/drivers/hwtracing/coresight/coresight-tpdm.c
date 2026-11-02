@@ -282,12 +282,19 @@ static void set_dsb_mode(struct tpdm_drvdata *drvdata, u32 *val)
 	u32 mode;
 
 	/* Set the test accurate mode */
-	mode = TPDM_DSB_MODE_TEST(drvdata->dsb->mode);
-	*val &= ~TPDM_DSB_CR_TEST_MODE;
-	*val |= FIELD_PREP(TPDM_DSB_CR_TEST_MODE, mode);
+	if (drvdata->legacy) {
+		/* Native v1 cycle-accurate mode occupies bits 9..11. */
+		mode = drvdata->dsb->mode & GENMASK(2, 0);
+		*val &= ~GENMASK(11, 9);
+		*val |= FIELD_PREP(GENMASK(11, 9), mode);
+	} else {
+		mode = TPDM_DSB_MODE_TEST(drvdata->dsb->mode);
+		*val &= ~TPDM_DSB_CR_TEST_MODE;
+		*val |= FIELD_PREP(TPDM_DSB_CR_TEST_MODE, mode);
+	}
 
 	/* Set the byte lane for high-performance mode */
-	mode = TPDM_DSB_MODE_HPBYTESEL(drvdata->dsb->mode);
+	mode = FIELD_GET(GENMASK(8, 4), drvdata->dsb->mode);
 	*val &= ~TPDM_DSB_CR_HPSEL;
 	*val |= FIELD_PREP(TPDM_DSB_CR_HPSEL, mode);
 
@@ -575,6 +582,10 @@ static int tpdm_datasets_setup(struct tpdm_drvdata *drvdata)
 	/*  Get the datasets present on the TPDM. */
 	pidr = readl_relaxed(drvdata->base + CORESIGHT_PERIPHIDR0);
 	drvdata->datasets |= pidr & GENMASK(TPDM_DATASETS - 1, 0);
+	/* This provider implements DSB/CMB/MCMB, not legacy BC/TC/GPR. */
+	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB |
+				  TPDM_PIDR0_DS_MCMB)))
+		return -EOPNOTSUPP;
 
 	if (tpdm_has_dsb_dataset(drvdata) && (!drvdata->dsb)) {
 		drvdata->dsb = devm_kzalloc(drvdata->dev,
@@ -639,7 +650,13 @@ static ssize_t integration_test_store(struct device *dev,
 	if (!drvdata->enable)
 		return -EINVAL;
 
-	if (val == 1)
+	if (drvdata->legacy) {
+		/* Native v1 uses dataset-specific integration packets. */
+		bool cmb = !tpdm_has_dsb_dataset(drvdata);
+
+		val = val == 1 ? (cmb ? 0x401e9600 : 0x401e9700) :
+				 (cmb ? 0x400e9600 : 0x400e9700);
+	} else if (val == 1)
 		val = ATBCNTRL_VAL_64;
 	else
 		val = ATBCNTRL_VAL_32;
@@ -1360,6 +1377,7 @@ static int tpdm_probe(struct amba_device *adev, const struct amba_id *id)
 	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
 	if (!drvdata)
 		return -ENOMEM;
+	drvdata->legacy = id->data != NULL;
 	drvdata->dev = &adev->dev;
 	dev_set_drvdata(dev, drvdata);
 
@@ -1423,6 +1441,12 @@ static const struct amba_id tpdm_ids[] = {
 		.id	= 0x001f0e00,
 		.mask	= 0x00ffff00,
 	},
+	{
+		/* Pinned Qualcomm v1: verified DSB/CMB layout; distinct mode bits. */
+		.id = 0x0003b968,
+		.mask = 0x0003ffff,
+		.data = (void *)1,
+	},
 	{ 0, 0, NULL },
 };
 
@@ -1435,6 +1459,8 @@ static struct amba_driver tpdm_driver = {
 	.id_table	= tpdm_ids,
 	.remove		= tpdm_remove,
 };
+
+MODULE_DEVICE_TABLE(amba, tpdm_ids);
 
 module_amba_driver(tpdm_driver);
 

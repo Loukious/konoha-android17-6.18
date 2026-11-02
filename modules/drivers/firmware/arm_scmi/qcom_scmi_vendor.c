@@ -7,7 +7,7 @@
 #include <linux/qcom_scmi_vendor.h>
 
 #define	EXTENDED_MSG_ID			0
-#define	SCMI_MAX_TX_RX_SIZE		128
+#define	SCMI_MAX_TX_SIZE			128
 #define	PROTOCOL_PAYLOAD_SIZE		16
 #define	SET_PARAM			0x10
 #define	GET_PARAM			0x11
@@ -23,10 +23,11 @@ static int qcom_scmi_set_param(const struct scmi_protocol_handle *ph, void *buf,
 
 	if (!ph || !ph->xops || (size && !buf))
 		return ret;
-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
 		return -EMSGSIZE;
+	/* RX size zero selects the active transport limit (104 on shmem). */
 	ret = ph->xops->xfer_get_init(ph, SET_PARAM, size + PROTOCOL_PAYLOAD_SIZE,
-			SCMI_MAX_TX_RX_SIZE, &t);
+			0, &t);
 	if (ret)
 		return ret;
 	msg = t->tx.buf;
@@ -34,7 +35,8 @@ static int qcom_scmi_set_param(const struct scmi_protocol_handle *ph, void *buf,
 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
 	*msg++ = cpu_to_le32(param_id);
-	memcpy(msg, buf, size);
+	if (size)
+		memcpy(msg, buf, size);
 	ret = ph->xops->do_xfer(ph, t);
 	ph->xops->xfer_put(ph, t);
 	return ret;
@@ -50,10 +52,10 @@ static int qcom_scmi_get_param(const struct scmi_protocol_handle *ph, void *buf,
 
 	if (!ph || !ph->xops || !buf)
 		return ret;
-	if (tx_size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+	if (tx_size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
 		return -EMSGSIZE;
 	ret = ph->xops->xfer_get_init(ph, GET_PARAM, tx_size + PROTOCOL_PAYLOAD_SIZE,
-			SCMI_MAX_TX_RX_SIZE, &t);
+			0, &t);
 	if (ret)
 		return ret;
 	msg = t->tx.buf;
@@ -87,10 +89,10 @@ static int qcom_scmi_start_activity(const struct scmi_protocol_handle *ph,
 
 	if (!ph || !ph->xops || (size && !buf))
 		return ret;
-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
 		return -EMSGSIZE;
 	ret = ph->xops->xfer_get_init(ph, START_ACTIVITY, size + PROTOCOL_PAYLOAD_SIZE,
-			SCMI_MAX_TX_RX_SIZE, &t);
+			0, &t);
 	if (ret)
 		return ret;
 	msg = t->tx.buf;
@@ -98,7 +100,8 @@ static int qcom_scmi_start_activity(const struct scmi_protocol_handle *ph,
 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
 	*msg++ = cpu_to_le32(param_id);
-	memcpy(msg, buf, size);
+	if (size)
+		memcpy(msg, buf, size);
 	ret = ph->xops->do_xfer(ph, t);
 	ph->xops->xfer_put(ph, t);
 
@@ -114,10 +117,10 @@ static int qcom_scmi_stop_activity(const struct scmi_protocol_handle *ph, void *
 
 	if (!ph || !ph->xops || (size && !buf))
 		return ret;
-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
 		return -EMSGSIZE;
 	ret = ph->xops->xfer_get_init(ph, STOP_ACTIVITY, size + PROTOCOL_PAYLOAD_SIZE,
-			SCMI_MAX_TX_RX_SIZE, &t);
+			0, &t);
 	if (ret)
 		return ret;
 	msg = t->tx.buf;
@@ -125,7 +128,8 @@ static int qcom_scmi_stop_activity(const struct scmi_protocol_handle *ph, void *
 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
 	*msg++ = cpu_to_le32(param_id);
-	memcpy(msg, buf, size);
+	if (size)
+		memcpy(msg, buf, size);
 	ret = ph->xops->do_xfer(ph, t);
 	ph->xops->xfer_put(ph, t);
 	return ret;

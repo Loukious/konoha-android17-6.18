@@ -308,6 +308,7 @@ struct tpdm_drvdata {
 	struct coresight_device	*csdev;
 	spinlock_t		spinlock;
 	bool			enable;
+	bool			legacy;
 	unsigned long		datasets;
 	struct dsb_dataset	*dsb;
 	struct cmb_dataset	*cmb;

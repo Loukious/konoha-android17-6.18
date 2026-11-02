@@ -4250,6 +4250,8 @@ kernel_module_group(
         ":leds_qcom_lpg",
         ":bam_dma",
         ":coresight_tpdm",
+        ":coresight_tpda",
+        ":coresight_tmc",
         ":mca_ut_test",
         ":hl7603",
 
@@ -4732,7 +4734,7 @@ ddk_headers(
 
 ddk_headers(
     name = "coresight_provider_headers",
-    hdrs = ["drivers/hwtracing/coresight/coresight-priv.h", "drivers/hwtracing/coresight/coresight-tpda.h", "drivers/hwtracing/coresight/coresight-tpdm.h"],
+    hdrs = ["drivers/hwtracing/coresight/coresight-priv.h", "drivers/hwtracing/coresight/coresight-tpda.h", "drivers/hwtracing/coresight/coresight-tpdm.h", "drivers/hwtracing/coresight/coresight-trace-id.h"],
     includes = ["drivers/hwtracing/coresight"],
     linux_includes = [],
 )
@@ -4931,4 +4933,31 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":mca_headers", ":mca_log", ":mca_sysfs", ":mca_event", ":mca_parse_dts"],
+)
+
+ddk_module(
+    name = "coresight_tpda",
+    srcs = ["drivers/hwtracing/coresight/coresight-tpda.c"],
+    out = "coresight-tpda.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
+)
+
+ddk_module(
+    name = "coresight_tmc",
+    srcs = [
+        "drivers/hwtracing/coresight/coresight-tmc-core.c",
+        "drivers/hwtracing/coresight/coresight-tmc-etf.c",
+        "drivers/hwtracing/coresight/coresight-tmc-etr.c",
+        "drivers/hwtracing/coresight/coresight-tmc.h",
+        "drivers/hwtracing/coresight/coresight-etm-perf.h",
+        "drivers/hwtracing/coresight/coresight-catu.h",
+    ],
+    out = "coresight-tmc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
 )

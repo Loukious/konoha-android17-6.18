@@ -14,7 +14,11 @@ def function(path, name):
     while depth:
         depth += (src[end] == '{') - (src[end] == '}')
         end += 1
-    return src[match.start():end]
+    start = match.start()
+    prefix = src[:start].splitlines()
+    if prefix and re.fullmatch(r"static (?:int|void|bool)", prefix[-1]):
+        start -= len(prefix[-1]) + 1
+    return src[start:end]
 
 BASE = r'''
 #define _GNU_SOURCE
@@ -289,10 +293,218 @@ int main(void){
 }
 """
 
+fixtures['scmi-transport-limits'] = BASE + r"""
+#define GENMASK(h,l) ((~0ULL >> (63-(h))) & (~0ULL << (l)))
+#define cpu_to_le32(x) ((u32)(x))
+#define EXTENDED_MSG_ID 0
+#define SCMI_MAX_TX_SIZE 128
+#define PROTOCOL_PAYLOAD_SIZE 16
+#define SET_PARAM 0x10
+#define GET_PARAM 0x11
+#define START_ACTIVITY 0x12
+#define STOP_ACTIVITY 0x13
+struct scmi_xfer {struct {void *buf;size_t len;} tx,rx;};
+struct scmi_protocol_handle;
+struct scmi_xfer_ops {
+ int (*xfer_get_init)(const struct scmi_protocol_handle *,u8,size_t,size_t,struct scmi_xfer **);
+ int (*do_xfer)(const struct scmi_protocol_handle *,struct scmi_xfer *);
+ void (*xfer_put)(const struct scmi_protocol_handle *,struct scmi_xfer *);
+};
+struct scmi_protocol_handle {const struct scmi_xfer_ops *xops;};
+static u32 tx[32],rx[32];static struct scmi_xfer transfer;
+static unsigned maxsize=104,init_calls,sends,releases;static int alloc_error,remote_error;
+static size_t response=4;static unsigned opcode;
+static int init(const struct scmi_protocol_handle *p,u8 op,size_t ts,size_t rs,struct scmi_xfer **out){
+ init_calls++;if(ts>maxsize||rs>maxsize)return -ERANGE;
+ if(alloc_error)return alloc_error;
+ opcode=op;memset(tx,0,sizeof(tx));transfer=(struct scmi_xfer){.tx={tx,ts},.rx={rx,rs?rs:maxsize}};*out=&transfer;return 0;
+}
+static int send(const struct scmi_protocol_handle *p,struct scmi_xfer *t){sends++;assert(tx[0]==0&&tx[1]==0x55667788&&tx[2]==0x11223344&&tx[3]==7);if(!remote_error)t->rx.len=response;rx[0]=0x12345678;return remote_error;}
+static void put(const struct scmi_protocol_handle *p,struct scmi_xfer *t){releases++;}
+""" + ''.join(function('drivers/firmware/arm_scmi/qcom_scmi_vendor.c',n) for n in ['qcom_scmi_set_param','qcom_scmi_get_param','qcom_scmi_start_activity','qcom_scmi_stop_activity']) + r"""
+int main(void){
+ struct scmi_xfer_ops ops={init,send,put};struct scmi_protocol_handle p={&ops};unsigned tests=0;u64 algo=0x1122334455667788ULL;
+ int (*writes[])(const struct scmi_protocol_handle *,void *,u64,u32,size_t)={qcom_scmi_set_param,qcom_scmi_start_activity,qcom_scmi_stop_activity};
+ unsigned commands[]={SET_PARAM,START_ACTIVITY,STOP_ACTIVITY};unsigned char b[120];memset(b,0xa5,sizeof(b));
+ for(unsigned max=104;max<=128;max+=24){maxsize=max;
+  for(unsigned i=0;i<3;i++){
+   sends=releases=0;assert(!writes[i](&p,b,algo,7,4));assert(sends==1&&releases==1&&opcode==commands[i]&&tx[4]==0xa5a5a5a5);tests++;
+   assert(!writes[i](&p,NULL,algo,7,0));tests++;
+   sends=releases=0;assert(writes[i](&p,b,algo,7,113)==-EMSGSIZE&&!sends&&!releases);tests++;
+   alloc_error=-ENOMEM;assert(writes[i](&p,b,algo,7,4)==-ENOMEM&&!sends&&!releases);tests++;alloc_error=0;
+   remote_error=-ERANGE;assert(writes[i](&p,b,algo,7,4)==-ERANGE&&sends==1&&releases==1);tests++;remote_error=0;
+   sends=releases=0;assert(writes[i](&p,b,algo,7,max-16)==0&&sends==1&&releases==1);tests++;
+  }
+  releases=0;response=4;memset(b,0xa5,sizeof(b));assert(!qcom_scmi_get_param(&p,b,algo,7,4,4)&&releases==1);assert(*(u32*)b==0x12345678&&b[4]==0xa5);tests++;
+  response=5;memset(b,0xa5,sizeof(b));assert(qcom_scmi_get_param(&p,b,algo,7,4,4)==-EMSGSIZE&&releases==2&&b[0]==0xa5);tests++;
+  remote_error=-EIO;assert(qcom_scmi_get_param(&p,b,algo,7,4,4)==-EIO&&releases==3&&b[0]==0xa5);tests++;remote_error=0;response=4;
+ }
+ maxsize=104;sends=releases=0;assert(qcom_scmi_set_param(&p,b,algo,7,89)==-ERANGE&&!sends&&!releases);tests++;
+ assert(qcom_scmi_get_param(NULL,b,algo,7,4,4)==-EINVAL);tests++;
+ assert(qcom_scmi_set_param(&p,NULL,algo,7,1)==-EINVAL);tests++;
+ printf("%u\n",tests);
+}
+"""
+
+voter_header=(M/'drivers/power/supply/mca/include/mca/common/mca_voter.h').read_text()
+helper=voter_header[voter_header.index('static inline int mca_vote_policy'):voter_header.index('#endif /*')]
+fixtures['charging-policy-rollback'] = BASE + r"""
+struct mca_votable {bool enabled;int value,thermal,effective;};
+static int fail,restore_fail,rerun_fail,calls;
+static bool mca_is_client_vote_enabled(struct mca_votable *v,const char *c){return v->enabled;}
+static int mca_get_client_vote(struct mca_votable *v,const char *c){return v->value;}
+static int mca_vote(struct mca_votable *v,const char *c,bool e,int value){v->enabled=e;v->value=value;v->effective=v->thermal&&(!e||value);calls++;return calls==1?fail:restore_fail;}
+static int mca_rerun_election(struct mca_votable *v){return rerun_fail;}
+""" + helper + r"""
+int main(void){
+ struct mca_votable v={.thermal=1,.effective=1};unsigned tests=0;
+ assert(!mca_vote_policy(&v,"handle",true,0)&&!v.effective);tests++;
+ calls=0;assert(!mca_vote_policy(&v,"handle",false,0)&&v.effective);tests++;
+ v.thermal=0;calls=0;assert(!mca_vote_policy(&v,"handle",false,0)&&!v.effective);tests++;
+ v.thermal=1;calls=0;fail=-EREMOTEIO;assert(mca_vote_policy(&v,"handle",true,0)==-EREMOTEIO&&!v.enabled&&v.effective&&calls==2);tests++;
+ fail=0;calls=0;assert(!mca_vote_policy(&v,"handle",true,0));tests++;
+ fail=-ENODEV;calls=0;assert(mca_vote_policy(&v,"handle",false,0)==-ENODEV&&v.enabled&&!v.value&&!v.effective);tests++;
+ calls=0;restore_fail=-ENXIO;assert(mca_vote_policy(&v,"handle",false,0)==-EIO);tests++;
+ calls=0;restore_fail=0;rerun_fail=-EIO;assert(mca_vote_policy(&v,"handle",false,0)==-EIO);tests++;
+ printf("%u\n",tests);
+}
+"""
+fixtures['handle-state-transaction'] = BASE + r"""
+#define STRATEGY_FUNC_TYPE_QUICK_CHARGE 1
+#define STRATEGY_FUNC_TYPE_BUCK_CHARGE 2
+#define MCA_EVENT_HANDLE_ALLOW_CHARGE 58
+#define XM_CHARGER_TYPE_PPS 9
+struct usb_info {int charge_enable;};
+struct business_charger {int last_handle_state,last_stop_handle_charge,stop_handle_charge,handle_state,real_type;struct usb_info *usb_psy_info;};
+struct mca_event_notify_data {char *event;int event_len;};
+static int quick,buck,fail_quick,fail_buck,publications;
+static int business_charger_strategy_process(struct business_charger *c,int role,int e,int v){assert(e==MCA_EVENT_HANDLE_ALLOW_CHARGE);if(role==1){if(fail_quick)return fail_quick;quick=v;}else{if(fail_buck)return fail_buck;buck=v;}return 0;}
+static void business_usb_psy_event_process(struct usb_info *i){publications++;}
+static void mca_event_report_uevent(struct mca_event_notify_data *n){}
+static void business_charger_update_wired_quick_charge_type(struct business_charger *c){}
+""" + function('drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c','business_charger_process_handle_logic') + r"""
+int main(void){
+ unsigned tests=0;struct usb_info usb={1};struct business_charger c={.usb_psy_info=&usb};quick=buck=1;
+ assert(!business_charger_process_handle_logic(&c)&&!publications);tests++;
+ c.handle_state=1;fail_quick=-ENODEV;assert(business_charger_process_handle_logic(&c)==-ENODEV&&!c.last_handle_state&&usb.charge_enable==1&&!publications);tests++;
+ fail_quick=0;fail_buck=-EREMOTEIO;assert(business_charger_process_handle_logic(&c)==-EREMOTEIO&&quick==1&&buck==1&&!c.last_handle_state&&!publications);tests++;
+ fail_buck=0;assert(!business_charger_process_handle_logic(&c)&&c.last_handle_state==1&&!usb.charge_enable&&!quick&&!buck&&publications==1);tests++;
+ assert(!business_charger_process_handle_logic(&c)&&publications==1);tests++;
+ c.stop_handle_charge=1;assert(!business_charger_process_handle_logic(&c)&&usb.charge_enable&&quick&&buck&&c.last_stop_handle_charge==1);tests++;
+ c.stop_handle_charge=0;assert(!business_charger_process_handle_logic(&c)&&usb.charge_enable&&c.last_stop_handle_charge==0);tests++;
+ c.handle_state=0;assert(!business_charger_process_handle_logic(&c)&&usb.charge_enable&&!c.last_handle_state);tests++;
+ c.handle_state=1;assert(!business_charger_process_handle_logic(&c)&&!usb.charge_enable);tests++;
+ c.handle_state=0;fail_buck=-EIO;assert(business_charger_process_handle_logic(&c)==-EIO&&!usb.charge_enable&&!quick&&c.last_handle_state==1);tests++;
+ printf("%u\n",tests);
+}
+"""
+fixtures['trace-native-widths-auth'] = BASE + r"""
+#define TPDA_MAX_INPORTS 32
+""" + function('drivers/hwtracing/coresight/coresight-tpda.c','tpda_parse_widths') + function('drivers/hwtracing/coresight/coresight-tpda.c','tpda_legacy_authorized') + r"""
+int main(void){
+ u32 widths[32]={0},good[]={0,32,31,64},dup[]={0,32,0,64},overflow[]={32,32},bad[]={0,16},eight[]={1,8};unsigned tests=0;
+ assert(!tpda_parse_widths(good,4,false,widths)&&widths[0]==32&&widths[31]==64);tests++;
+ memset(widths,0,sizeof(widths));assert(tpda_parse_widths(dup,4,false,widths)==-EINVAL);tests++;
+ memset(widths,0,sizeof(widths));assert(tpda_parse_widths(overflow,2,false,widths)==-EINVAL);tests++;
+ assert(tpda_parse_widths(bad,2,false,widths)==-EINVAL);tests++;
+ assert(tpda_parse_widths(eight,2,false,widths)==-EINVAL);tests++;
+ assert(!tpda_parse_widths(eight,2,true,widths)&&widths[1]==8);tests++;
+ assert(tpda_parse_widths(good,3,false,widths)==-EINVAL);tests++;
+ assert(tpda_parse_widths(good,0,false,widths)==-EINVAL);tests++;
+ assert(tpda_parse_widths(good,66,false,widths)==-EINVAL);tests++;
+ assert(tpda_legacy_authorized(0)&&tpda_legacy_authorized(0xff));tests++;
+ for(unsigned i=0;i<8;i+=2){assert(!tpda_legacy_authorized(2u<<i));tests++;}
+ printf("%u\n",tests);
+}
+"""
+
+fixtures['wired-reverse-eligibility'] = BASE + r"""
+#define TYPEC_PORT_0 0
+struct strategy_buckchg_dev {int thermal_board_temp,source_boost_status,support_reverse_quick_charge,cp_revert_auth;bool reverse_qc_gate0,reverse_qc_gate1,reverse_auth;};
+static int temp=250,soc=80,temp_error,otg_error,gear_error,gear_calls,last_gear;static bool otg=true;
+static int strategy_class_fg_ops_get_temperature(int *p){*p=temp;return temp_error;}
+static int strategy_class_fg_ops_get_soc(void){return soc;}
+static int protocol_class_pd_get_otg_plugin_status(int port,bool *p){*p=otg;return otg_error;}
+static int protocol_class_pd_set_gear_shift(int port,int gear){gear_calls++;last_gear=gear;return gear_error;}
+""" + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_check_reverse_quick_charge') + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_request_reverse') + r"""
+int main(void){
+ struct strategy_buckchg_dev d={.thermal_board_temp=300,.support_reverse_quick_charge=1,.cp_revert_auth=1,.reverse_auth=true};int out=99;unsigned tests=0;
+ assert(!strategy_buckchg_request_reverse(&d,1)&&last_gear==1&&d.source_boost_status==1);tests++;
+ assert(!strategy_buckchg_request_reverse(&d,0)&&d.reverse_qc_gate0&&last_gear==0);tests++;
+ temp_error=-EIO;assert(strategy_buckchg_request_reverse(&d,1)==-EIO&&d.reverse_qc_gate0&&gear_calls==2);tests++;temp_error=0;
+ otg_error=-ENODEV;assert(strategy_buckchg_request_reverse(&d,1)==-ENODEV&&d.reverse_qc_gate0&&gear_calls==2);tests++;otg_error=0;
+ soc=-EIO;assert(strategy_buckchg_request_reverse(&d,1)==-EIO&&d.reverse_qc_gate0);tests++;soc=29;
+ assert(strategy_buckchg_request_reverse(&d,1)==-EAGAIN&&d.reverse_qc_gate0);tests++;soc=30;
+ assert(!strategy_buckchg_request_reverse(&d,1));tests++;
+ d.reverse_qc_gate1=true;assert(strategy_buckchg_request_reverse(&d,1)==-EAGAIN);tests++;d.reverse_qc_gate1=false;
+ d.thermal_board_temp=401;assert(strategy_buckchg_request_reverse(&d,1)==-EAGAIN);tests++;d.thermal_board_temp=400;
+ temp=-10;assert(strategy_buckchg_request_reverse(&d,1)==-EAGAIN);tests++;temp=250;
+ d.reverse_auth=false;assert(strategy_buckchg_request_reverse(&d,1)==-EACCES);tests++;d.reverse_auth=true;
+ d.cp_revert_auth=0;assert(strategy_buckchg_request_reverse(&d,1)==-EACCES);tests++;d.cp_revert_auth=1;
+ otg=false;assert(strategy_buckchg_request_reverse(&d,1)==-EAGAIN);tests++;otg=true;
+ gear_error=-EREMOTEIO;d.reverse_qc_gate0=true;assert(strategy_buckchg_request_reverse(&d,1)==-EREMOTEIO&&d.reverse_qc_gate0);tests++;
+ gear_error=0;d.support_reverse_quick_charge=0;assert(strategy_buckchg_request_reverse(&d,1)==-EOPNOTSUPP);tests++;
+ assert(strategy_buckchg_request_reverse(&d,2)==-EINVAL);tests++;
+ printf("%u\n",tests);
+}
+"""
+
+fixtures['trace-dsb-mode-registers'] = BASE + r"""
+#define BIT(n) (1U<<(n))
+#define GENMASK(h,l) ((~0U >> (31-(h))) & (~0U << (l)))
+#define FIELD_PREP(m,v) (((u32)(v)<<__builtin_ctz(m))&(m))
+#define FIELD_GET(m,v) (((v)&(m))>>__builtin_ctz(m))
+#define TPDM_DSB_MODE_TEST(v) ((v)&3)
+#define TPDM_DSB_CR_TEST_MODE GENMASK(10,9)
+#define TPDM_DSB_CR_HPSEL GENMASK(6,2)
+#define TPDM_DSB_MODE_PERF BIT(3)
+#define TPDM_DSB_CR_MODE BIT(1)
+struct dsb_dataset {u32 mode;};
+struct tpdm_drvdata {bool legacy;struct dsb_dataset *dsb;};
+""" + function('drivers/hwtracing/coresight/coresight-tpdm.c','set_dsb_mode') + r"""
+int main(void){
+ struct dsb_dataset dsb={0};struct tpdm_drvdata d={.legacy=true,.dsb=&dsb};unsigned tests=0;u32 v;
+ for(unsigned i=0;i<8;i++){dsb.mode=i;v=0xdeadbeef;set_dsb_mode(&d,&v);assert(FIELD_GET(GENMASK(11,9),v)==i&&FIELD_GET(GENMASK(6,2),v)==0);tests++;}
+ for(unsigned i=0;i<32;i++){dsb.mode=(i<<4)|BIT(3);v=0;set_dsb_mode(&d,&v);assert(FIELD_GET(GENMASK(6,2),v)==i&&(v&BIT(1)));tests++;}
+ d.legacy=false;dsb.mode=3;v=BIT(11);set_dsb_mode(&d,&v);assert(FIELD_GET(GENMASK(10,9),v)==3&&(v&BIT(11)));tests++;
+ printf("%u\n",tests);
+}
+"""
+
+fixtures['handle-battery-status'] = BASE + r"""
+#define POWER_SUPPLY_PROP_ONLINE 4
+#define POWER_SUPPLY_STATUS_DISCHARGING 2
+#define POWER_SUPPLY_STATUS_NOT_CHARGING 3
+#define POWER_SUPPLY_STATUS_FULL 4
+#define POWER_SUPPLY_STATUS_CHARGING 1
+union power_supply_propval {int intval;};
+static int usb=1,wireless,suspend_vote,buck_vote=-EINVAL,quick_vote=-EINVAL,soc=80,supply_error;static bool full;
+static int mca_get_named_client_vote(const char *name,const char *client){if(!strcmp(name,"input_suspend"))return suspend_vote;return !strcmp(name,"chg_enable")?buck_vote:quick_vote;}
+static int battery_supply_property(const char *name,int prop,union power_supply_propval *v){if(supply_error)return supply_error;v->intval=!strcmp(name,"usb")?usb:wireless;return 0;}
+static int strategy_class_fg_ops_get_soc(void){return soc;}
+static bool strategy_class_fg_ops_get_charging_done(void){return full;}
+""" + function('drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c','battery_status') + r"""
+int main(void){
+ union power_supply_propval v;unsigned tests=0;
+ assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_CHARGING);tests++;
+ buck_vote=quick_vote=0;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_NOT_CHARGING);tests++;
+ quick_vote=-EINVAL;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_CHARGING);tests++;
+ buck_vote=-EINVAL;quick_vote=0;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_CHARGING);tests++;
+ buck_vote=quick_vote=0;usb=0;wireless=1;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_CHARGING);tests++;
+ wireless=0;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_DISCHARGING);tests++;
+ usb=1;suspend_vote=1;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_DISCHARGING);tests++;suspend_vote=0;
+ buck_vote=quick_vote=-EINVAL;soc=100;full=true;assert(!battery_status(&v)&&v.intval==POWER_SUPPLY_STATUS_FULL);tests++;
+ soc=-EIO;assert(battery_status(&v)==-EIO);tests++;
+ soc=101;assert(battery_status(&v)==-ERANGE);tests++;
+ supply_error=-ENODEV;assert(battery_status(&v)==-ENODEV);tests++;
+ printf("%u\n",tests);
+}
+"""
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--report',type=Path);args=p.parse_args()
     report={'status':'PASS','fixtures':[],'source_sha256':{}}
-    paths=['include/soc/qcom/mpam.h',hl+'hl7603.c','drivers/dma/qcom/bam_dma.c','drivers/soc/qcom/qcom_stats.c','drivers/soc/qcom/mpam/cpu_mpam.c','drivers/soc/qcom/pmic-glink-debug.c']
+    paths=['include/soc/qcom/mpam.h',hl+'hl7603.c','drivers/dma/qcom/bam_dma.c','drivers/soc/qcom/qcom_stats.c','drivers/soc/qcom/mpam/cpu_mpam.c','drivers/soc/qcom/pmic-glink-debug.c','drivers/firmware/arm_scmi/qcom_scmi_vendor.c','drivers/hwtracing/coresight/coresight-tpda.c','drivers/hwtracing/coresight/coresight-tpdm.c','drivers/power/supply/mca/include/mca/common/mca_voter.h','drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c','drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c']
     report['source_sha256']={x:hashlib.sha256((M/x).read_bytes()).hexdigest() for x in paths}
     with tempfile.TemporaryDirectory(prefix='konoha-platform-host-') as temp:
         for name,source in fixtures.items():
