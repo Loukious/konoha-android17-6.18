@@ -92,6 +92,7 @@ def main():
     inputs = artifacts / "inputs"
     inputs.mkdir()
     for name in ["sources.json", "imports.json", "onyx-port.xml", "dependency-lock.xml",
+                 "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
                  "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "boot-parameters.txt",
                  "qdss_diagnostic.py", "common_fixes.py",

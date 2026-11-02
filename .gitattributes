@@ -5,3 +5,4 @@ port/patches/*.patch -text -whitespace
 port/common-patches/*.patch -text -whitespace
 port/validation/**/candidate/** -text -whitespace
 port/validation/**/*.patch -text -whitespace
+common/** -text
