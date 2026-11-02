@@ -1,0 +1,1991 @@
+--- a/drivers/soc/qcom/adsp_sleepmon.c
++++ b/drivers/soc/qcom/adsp_sleepmon.c
+@@ -39,7 +39,7 @@
+ #include <asm/arch_timer.h>
+ #include <linux/jiffies.h>
+ #include <linux/suspend.h>
+-#include <../../remoteproc/qcom_common.h>
++#include "../../remoteproc/qcom_common.h"
+ #include <uapi/misc/adsp_sleepmon.h>
+ #include <linux/remoteproc/qcom_rproc.h>
+ 
+@@ -492,10 +492,11 @@
+ 	}
+ }
+ 
+-static int adspsleepmon_smem_init(void)
+-{
+-	size_t size;
++static int __adspsleepmon_smem_init(void)
++{
++	size_t size = 0;
+ 	void *stats = NULL;
++	int ret;
+ 
+ 	g_adspsleepmon.lpm_stats = qcom_smem_get(
+ 						ADSPSLEEPMON_SMEM_ADSP_PID,
+@@ -554,13 +555,25 @@
+ 	 * Register for Resume notifications
+ 	 */
+ 	if (!g_adspsleepmon.suspend_init_done) {
+-		register_pm_notifier(&adsp_sleepmon_pm_nb);
++		ret = register_pm_notifier(&adsp_sleepmon_pm_nb);
++		if (ret)
++			return ret;
+ 		g_adspsleepmon.suspend_init_done = true;
+ 	}
+ 
+ 	g_adspsleepmon.smem_init_done = true;
+ 
+ 	return 0;
++}
++
++static DEFINE_MUTEX(adspsleepmon_smem_lock);
++
++static int adspsleepmon_smem_init(void)
++{
++	guard(mutex)(&adspsleepmon_smem_lock);
++	if (g_adspsleepmon.smem_init_done)
++		return 0;
++	return __adspsleepmon_smem_init();
+ }
+ 
+ static int sleepmon_rpmsg_callback(struct rpmsg_device *dev, void *data,
+@@ -593,7 +606,7 @@
+ 		g_adspsleepmon.audio_stats.num_sessions = 0;
+ 		g_adspsleepmon.audio_stats.num_lpi_sessions = 0;
+ 
+-		del_timer(&adspsleep_timer);
++		timer_delete(&adspsleep_timer);
+ 		g_adspsleepmon.timer_pending = false;
+ 		g_adspsleepmon.accumulated_duration = 0;
+ 		g_adspsleepmon.accumulated_resumes = 0;
+@@ -1422,7 +1435,7 @@
+ 				mod_timer(&adspsleep_timer, jiffies + delay * HZ);
+ 				g_adspsleepmon.timer_pending = true;
+ 			} else if (g_adspsleepmon.timer_pending) {
+-				del_timer(&adspsleep_timer);
++				timer_delete(&adspsleep_timer);
+ 				g_adspsleepmon.timer_pending = false;
+ 				g_adspsleepmon.accumulated_duration = 0;
+ 				g_adspsleepmon.accumulated_resumes = 0;
+@@ -1637,7 +1650,7 @@
+ 			mod_timer(&adspsleep_timer, jiffies + delay * HZ);
+ 			g_adspsleepmon.timer_pending = true;
+ 		} else if (g_adspsleepmon.timer_pending) {
+-			del_timer(&adspsleep_timer);
++			timer_delete(&adspsleep_timer);
+ 			g_adspsleepmon.timer_pending = false;
+ 			g_adspsleepmon.accumulated_duration = 0;
+ 			g_adspsleepmon.accumulated_resumes = 0;
+@@ -1687,17 +1700,27 @@
+ 
+ static int sleepmon_rpmsg_probe(struct rpmsg_device *dev)
+ {
+-	/* Populate child nodes as platform devices */
+-	of_platform_populate(dev->dev.of_node, NULL, NULL, &dev->dev);
+-	g_adspsleepmon.rpmsgdev = dev;
++	int ret;
+ 
+ 	if (!g_adspsleepmon.adsp_rproc &&
+ 			g_adspsleepmon.adsp_rproc_phandle) {
+ 		g_adspsleepmon.adsp_rproc = rproc_get_by_phandle(
+ 				g_adspsleepmon.adsp_rproc_phandle);
+-	}
+-
+-	return adspsleepmon_smem_init();
++		if (!g_adspsleepmon.adsp_rproc)
++			return -EPROBE_DEFER;
++	}
++
++	ret = adspsleepmon_smem_init();
++	if (ret) {
++		if (g_adspsleepmon.adsp_rproc)
++			rproc_put(g_adspsleepmon.adsp_rproc);
++		g_adspsleepmon.adsp_rproc = NULL;
++		return ret;
++	}
++	mutex_lock(&g_adspsleepmon.rpmsg_dev_lock);
++	g_adspsleepmon.rpmsgdev = dev;
++	mutex_unlock(&g_adspsleepmon.rpmsg_dev_lock);
++	return 0;
+ }
+ 
+ static void sleepmon_rpmsg_remove(struct rpmsg_device *dev)
+@@ -1705,6 +1728,9 @@
+ 	mutex_lock(&g_adspsleepmon.rpmsg_dev_lock);
+ 	g_adspsleepmon.rpmsgdev = NULL;
+ 	g_adspsleepmon.adsp_version = 0;
++	if (g_adspsleepmon.adsp_rproc)
++		rproc_put(g_adspsleepmon.adsp_rproc);
++	g_adspsleepmon.adsp_rproc = NULL;
+ 	mutex_unlock(&g_adspsleepmon.rpmsg_dev_lock);
+ }
+ 
+@@ -1756,6 +1782,9 @@
+ 
+ 	mutex_init(&g_adspsleepmon.lock);
+ 	mutex_init(&g_adspsleepmon.rpmsg_dev_lock);
++	init_completion(&g_adspsleepmon.sem);
++	INIT_HLIST_HEAD(&g_adspsleepmon.audio_clients);
++	timer_setup(&adspsleep_timer, adspsleepmon_timer_cb, 0);
+ 	/*
+ 	 * Initialize dtsi config
+ 	 */
+@@ -1769,17 +1798,16 @@
+ 	g_adspsleepmon.worker_task = kthread_run(adspsleepmon_worker,
+ 					NULL, "adspsleepmon-worker");
+ 
+-	if (!g_adspsleepmon.worker_task) {
++	if (IS_ERR(g_adspsleepmon.worker_task)) {
+ 		dev_err(dev, "Failed to create kernel thread\n");
+-		return -ENOMEM;
+-	}
+-
+-	INIT_HLIST_HEAD(&g_adspsleepmon.audio_clients);
++		return PTR_ERR(g_adspsleepmon.worker_task);
++	}
++
+ 	ret = alloc_chrdev_region(&me->devno, 0, 1, ADSPSLEEPMON_DEVICE_NAME_LOCAL);
+ 
+ 	if (ret != 0) {
+ 		dev_err(dev, "Failed to allocate char device region\n");
+-		goto rpmsg_bail;
++		goto thread_bail;
+ 	}
+ 
+ 	cdev_init(&me->cdev, &fops);
+@@ -1795,6 +1823,7 @@
+ 
+ 	if (IS_ERR(me->class)) {
+ 		dev_err(dev, "Failed to create a class\n");
++		ret = PTR_ERR(me->class);
+ 		goto class_bail;
+ 	}
+ 
+@@ -1803,15 +1832,13 @@
+ 
+ 	if (IS_ERR_OR_NULL(me->dev)) {
+ 		dev_err(dev, "Failed to create a device\n");
++		ret = me->dev ? PTR_ERR(me->dev) : -ENOMEM;
+ 		goto device_bail;
+ 	}
+ 
+ 	g_adspsleepmon.debugfs_dir = debugfs_create_dir("adspsleepmon", NULL);
+ 
+-	if (!g_adspsleepmon.debugfs_dir) {
+-		dev_err(dev, "Failed to create debugfs directory for adspsleepmon\n");
+-		goto debugfs_bail;
+-	}
++	/* Debugfs is optional; error dentries are accepted by its helpers. */
+ 
+ 	g_adspsleepmon.b_config_panic_lpm = of_property_read_bool(dev->of_node,
+ 			"qcom,enable_panic_lpm");
+@@ -1900,12 +1927,13 @@
+ 		goto rpmsg_bail;
+ 	}
+ 	g_adspsleepmon.b_rpmsg_register = true;
+-	init_completion(&g_adspsleepmon.sem);
+ 
+ 	g_adspsleepmon.nb.notifier_call = adsp_sleepmon_ssr_notifier;
+ 	notifier = qcom_register_ssr_notifier("lpass", &g_adspsleepmon.nb);
+-	if (IS_ERR(notifier))
++	if (IS_ERR(notifier)) {
++		ret = PTR_ERR(notifier);
+ 		goto ssr_notifier_fail;
++	}
+ 
+ 	g_adspsleepmon.notifier = notifier;
+ 
+@@ -1914,9 +1942,15 @@
+ 
+ ssr_notifier_fail:
+ 	unregister_rpmsg_driver(&sleepmon_rpmsg_client);
++	g_adspsleepmon.b_rpmsg_register = false;
+ rpmsg_bail:
++	complete_all(&g_adspsleepmon.sem);
++	timer_shutdown_sync(&adspsleep_timer);
+ 	debugfs_remove_recursive(g_adspsleepmon.debugfs_dir);
+-debugfs_bail:
++	if (g_adspsleepmon.suspend_init_done) {
++		unregister_pm_notifier(&adsp_sleepmon_pm_nb);
++		g_adspsleepmon.suspend_init_done = false;
++	}
+ 	device_destroy(g_adspsleepmon.class, g_adspsleepmon.cdev.dev);
+ device_bail:
+ 	class_destroy(me->class);
+@@ -1924,35 +1958,42 @@
+ 	cdev_del(&me->cdev);
+ cdev_bail:
+ 	unregister_chrdev_region(me->devno, 1);
++thread_bail:
++	kthread_stop(me->worker_task);
+ 	return ret;
+ }
+ 
+-static int adspsleepmon_driver_remove(struct platform_device *pdev)
++static void adspsleepmon_driver_remove(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 
+ 	qcom_unregister_ssr_notifier(g_adspsleepmon.notifier, &g_adspsleepmon.nb);
++	if (g_adspsleepmon.b_rpmsg_register) {
++		unregister_rpmsg_driver(&sleepmon_rpmsg_client);
++		g_adspsleepmon.b_rpmsg_register = false;
++	}
++	if (g_adspsleepmon.suspend_init_done) {
++		unregister_pm_notifier(&adsp_sleepmon_pm_nb);
++		g_adspsleepmon.suspend_init_done = false;
++	}
++	complete_all(&g_adspsleepmon.sem);
++	timer_shutdown_sync(&adspsleep_timer);
++	kthread_stop(g_adspsleepmon.worker_task);
+ 	device_destroy(g_adspsleepmon.class, g_adspsleepmon.cdev.dev);
+ 	class_destroy(g_adspsleepmon.class);
+ 	cdev_del(&g_adspsleepmon.cdev);
+ 	unregister_chrdev_region(g_adspsleepmon.devno, 1);
+ 	debugfs_remove_recursive(g_adspsleepmon.debugfs_dir);
+-	unregister_pm_notifier(&adsp_sleepmon_pm_nb);
+-
+-	if (g_adspsleepmon.b_rpmsg_register) {
+-		unregister_rpmsg_driver(&sleepmon_rpmsg_client);
+-		g_adspsleepmon.rpmsgdev = NULL;
+-		g_adspsleepmon.adsp_version = 0;
+-	}
+ 
+ 	dev_info(dev, "ADSP sleep monitor remove called\n");
+-	return 0;
+ }
+ 
+ static const struct of_device_id adspsleepmon_match_table[] = {
+ 	{ .compatible = "qcom,adsp-sleepmon" },
+ 	{ },
+ };
++
++MODULE_DEVICE_TABLE(of, adspsleepmon_match_table);
+ 
+ static struct platform_driver adspsleepmon = {
+ 	.probe = adspsleepmon_driver_probe,
+@@ -1960,9 +2001,11 @@
+ 	.driver = {
+ 		.name = "adsp_sleepmon",
+ 		.of_match_table = adspsleepmon_match_table,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+ module_platform_driver(adspsleepmon);
+ 
++MODULE_DESCRIPTION("Qualcomm ADSP sleep and session monitor");
+ MODULE_LICENSE("GPL");
+--- a/drivers/soc/qcom/cdsprm.c
++++ b/drivers/soc/qcom/cdsprm.c
+@@ -437,7 +437,7 @@
+ }
+ EXPORT_SYMBOL_GPL(cdsprm_compute_vtcm_set_partition_map);
+ 
+-int cdsprm_resmgr_pdkill_config(unsigned int b_enable)
++static int cdsprm_resmgr_pdkill_config(unsigned int b_enable)
+ {
+ 	int result = -EINVAL;
+ 	struct sysmon_msg_tx_v2 rpmsg_v2;
+@@ -714,7 +714,11 @@
+ 		for (ii = 0; ii < gcdsprm.corecount; ii++) {
+ 			cpu = gcdsprm.coreno[ii];
+ 
+-			if (!gcdsprm.qos_request) {
++			if (cpu >= nr_cpu_ids || !get_cpu_device(cpu)) {
++				pr_err("Invalid QoS CPU %u\n", cpu);
++				break;
++			}
++			if (!dev_pm_qos_request_active(&gcdsprm.dev_pm_qos_req[ii])) {
+ 				err = dev_pm_qos_add_request(
+ 						get_cpu_device(cpu),
+ 						&gcdsprm.dev_pm_qos_req[ii],
+@@ -1349,7 +1353,7 @@
+ 	}
+ }
+ 
+-char *dcvs_vcorner_ext(unsigned int i)
++static const char *dcvs_vcorner_ext(unsigned int i)
+ {
+ 	switch (i) {
+ 	case 0:
+@@ -1912,6 +1916,7 @@
+ 		if (IS_ERR(tcdev)) {
+ 			dev_err(dev,
+ 				"CDSP thermal driver reg failed\n");
++			return PTR_ERR(tcdev);
+ 		}
+ 
+ 		gcdsprm.cdsp_tcdev = tcdev;
+@@ -2086,6 +2091,7 @@
+ 		if (IS_ERR(tcdev)) {
+ 			dev_err(dev,
+ 				"HVX thermal driver reg failed\n");
++			return PTR_ERR(tcdev);
+ 		}
+ 		gcdsprm.hvx_tcdev = tcdev;
+ 	}
+@@ -2162,7 +2168,7 @@
+ 
+ 	if (IS_ERR(gcdsprm.cdsprm_wq_task)) {
+ 		pr_err("Failed to create kernel thread\n");
+-		return -ENOMEM;
++		return PTR_ERR(gcdsprm.cdsprm_wq_task);
+ 	}
+ 
+ 	gcdsprm.delay_work_queue =
+@@ -2211,9 +2217,24 @@
+ 
+ 	return 0;
+ bail:
++	if (gcdsprm.b_hvxrm_devinit) {
++		platform_driver_unregister(&hvx_rm);
++		gcdsprm.b_hvxrm_devinit = false;
++	}
++	if (gcdsprm.b_cdsprm_devinit) {
++		platform_driver_unregister(&cdsp_rm);
++		gcdsprm.b_cdsprm_devinit = false;
++	}
++	if (!IS_ERR_OR_NULL(gcdsprm.hvx_tcdev))
++		thermal_cooling_device_unregister(gcdsprm.hvx_tcdev);
++	if (!IS_ERR_OR_NULL(gcdsprm.cdsp_tcdev))
++		thermal_cooling_device_unregister(gcdsprm.cdsp_tcdev);
++	debugfs_remove_recursive(gcdsprm.debugfs_dir);
+ 	destroy_workqueue(gcdsprm.delay_work_queue);
+ err_wq:
+ 	kthread_stop(gcdsprm.cdsprm_wq_task);
++	kfree(gcdsprm.dev_pm_qos_req);
++	kfree(gcdsprm.coreno);
+ 
+ 	return err;
+ }
+@@ -2221,6 +2242,7 @@
+ static void __exit cdsprm_exit(void)
+ {
+ 	struct sysmon_msg_tx rpmsg_msg_tx;
++	unsigned int i;
+ 
+ 	pr_info("Exit module called\n");
+ 	if (gcdsprm.qos_request) {
+@@ -2304,6 +2326,16 @@
+ 
+ 	if (gcdsprm.delay_work_queue)
+ 		destroy_workqueue(gcdsprm.delay_work_queue);
++
++	if (gcdsprm.b_silver_en) {
++		for (i = 0; i < gcdsprm.corecount; i++)
++			if (dev_pm_qos_request_active(&gcdsprm.dev_pm_qos_req[i]))
++				dev_pm_qos_remove_request(&gcdsprm.dev_pm_qos_req[i]);
++	} else if (cpu_latency_qos_request_active(&gcdsprm.pm_qos_req)) {
++		cpu_latency_qos_remove_request(&gcdsprm.pm_qos_req);
++	}
++	kfree(gcdsprm.dev_pm_qos_req);
++	kfree(gcdsprm.coreno);
+ 
+ 	if (gcdsprm.b_cdsprm_devinit)
+ 		platform_driver_unregister(&cdsp_rm);
+@@ -2333,4 +2365,5 @@
+ module_init(cdsprm_init);
+ module_exit(cdsprm_exit);
+ 
++MODULE_DESCRIPTION("Qualcomm CDSP resource and VTCM manager");
+ MODULE_LICENSE("GPL");
+--- a/drivers/soc/qcom/memshare/msm_memshare.c
++++ b/drivers/soc/qcom/memshare/msm_memshare.c
+@@ -10,9 +10,11 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/mutex.h>
+ #include <linux/of_device.h>
++#include <linux/of_platform.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/platform_device.h>
+ #include <linux/notifier.h>
++#include <linux/overflow.h>
+ #include <linux/soc/qcom/qmi.h>
+ #include <linux/remoteproc/qcom_rproc.h>
+ #include <linux/rpmsg/qcom_glink.h>
+@@ -33,13 +35,13 @@
+ struct memshare_driver {
+ 	struct device *dev;
+ 	struct mutex mem_share;
+-	struct mutex mem_free;
+-	struct work_struct memshare_init_work;
++	void *ssr_notifier;
+ };
+ 
+ struct memshare_child {
+ 	struct device *dev;
+ 	int client_id;
++	unsigned int index;
+ 	struct qcom_glink_mem_entry *mem_entry;
+ };
+ 
+@@ -58,34 +60,13 @@
+ 
+ static int check_client(int client_id, int proc, int request)
+ {
+-	int i = 0;
+-	int found = DHMS_MEM_CLIENT_INVALID;
+-
+-	for (i = 0; i < num_clients; i++) {
+-		if (memblock[i].client_id == client_id &&
+-				memblock[i].peripheral == proc) {
+-			found = i;
+-			break;
+-		}
+-	}
+-	if ((found == DHMS_MEM_CLIENT_INVALID) && !request) {
+-		dev_dbg(memsh_drv->dev,
+-			"memshare: No registered client for the client_id: %d, adding a new client\n",
+-			client_id);
+-		/* Add a new client */
+-		for (i = 0; i < MAX_CLIENTS; i++) {
+-			if (memblock[i].client_id == DHMS_MEM_CLIENT_INVALID) {
+-				memblock[i].client_id = client_id;
+-				memblock[i].allotted = 0;
+-				memblock[i].guarantee = 0;
+-				memblock[i].peripheral = proc;
+-				found = i;
+-				break;
+-			}
+-		}
+-	}
+-
+-	return found;
++	unsigned int i;
++
++	for (i = 0; i < num_clients; i++)
++		if (memsh_child[i] && memblock[i].client_id == client_id &&
++		    memblock[i].peripheral == proc)
++			return i;
++	return DHMS_MEM_CLIENT_INVALID;
+ }
+ 
+ static void free_client(int id)
+@@ -93,9 +74,47 @@
+ 	memblock[id].phy_addr = 0;
+ 	memblock[id].virtual_addr = 0;
+ 	memblock[id].allotted = 0;
+-	memblock[id].guarantee = 0;
++	memblock[id].size = 0;
++	memblock[id].alloc_size = 0;
++	memblock[id].hyp_mapping = 0;
++	memblock[id].free_memory = 0;
++	memblock[id].alloc_request = 0;
+ 	memblock[id].sequence_id = -1;
+ 	memblock[id].memory_type = MEMORY_CMA;
++}
++
++/* Never return pages to the allocator while a remote VM still owns them. */
++static int memshare_reclaim(unsigned int index)
++{
++	struct mem_blocks *mb = &memblock[index];
++	struct memshare_child *child = memsh_child[index];
++	struct qcom_scm_vmperm dest = {
++		.vmid = QCOM_SCM_VMID_HLOS,
++		.perm = PERM_READ | PERM_WRITE | PERM_EXEC,
++	};
++	u64 source_vmids = 0;
++	unsigned int j;
++	int ret;
++
++	if (!mb->allotted)
++		return 0;
++	if (mb->hyp_mapping) {
++		for (j = 0; j < mb->hyp_map_info.num_vmids; j++)
++			source_vmids |= BIT_ULL(mb->hyp_map_info.vmids[j]);
++		ret = qcom_scm_assign_mem(mb->phy_addr, mb->size,
++					  &source_vmids, &dest, 1);
++		if (ret)
++			return ret;
++		mb->hyp_mapping = 0;
++	}
++	if (child->mem_entry) {
++		qcom_glink_mem_entry_free(child->mem_entry);
++		child->mem_entry = NULL;
++	}
++	dma_free_attrs(child->dev, mb->alloc_size, mb->virtual_addr,
++		       mb->phy_addr, attrs);
++	free_client(index);
++	return 0;
+ }
+ 
+ static void fill_alloc_response(struct mem_alloc_generic_resp_msg_v01 *resp,
+@@ -136,384 +155,141 @@
+ }
+ 
+ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
+-					void *_cmd)
+-{
+-	u64 source_vmids = 0;
+-	int i, j, ret, size = 0;
+-	struct qcom_scm_vmperm dest_vmids[] = {{QCOM_SCM_VMID_HLOS},
+-					       {PERM_READ|PERM_WRITE|PERM_EXEC}};
+-	struct memshare_child *client_node = NULL;
++			     void *data)
++{
++	unsigned int i;
++	int ret;
+ 
+ 	mutex_lock(&memsh_drv->mem_share);
+-
+-	switch (code) {
+-
+-	case QCOM_SSR_BEFORE_SHUTDOWN:
+-		trace_rproc_qcom_event("modem", "QCOM_SSR_BEFORE_SHUTDOWN", "modem_notifier-enter");
++	if (code == QCOM_SSR_BEFORE_SHUTDOWN) {
+ 		bootup_request++;
+-		dev_info(memsh_drv->dev,
+-		"memshare: QCOM_SSR_BEFORE_SHUTDOWN: bootup_request:%llu\n", bootup_request);
+-		for (i = 0; i < MAX_CLIENTS; i++)
++		for (i = 0; i < num_clients; i++)
+ 			memblock[i].alloc_request = 0;
+-		break;
+-
+-	case QCOM_SSR_AFTER_SHUTDOWN:
+-		trace_rproc_qcom_event("modem", "QCOM_SSR_AFTER_SHUTDOWN", "modem_notifier-enter");
+-		break;
+-
+-	case QCOM_SSR_BEFORE_POWERUP:
+-		trace_rproc_qcom_event("modem", "QCOM_SSR_BEFORE_POWERUP", "modem_notifier-enter");
+-		break;
+-
+-	case QCOM_SSR_AFTER_POWERUP:
+-		trace_rproc_qcom_event("modem", "QCOM_SSR_AFTER_POWERUP", "modem_notifier-enter");
+-		dev_info(memsh_drv->dev, "memshare: QCOM_SSR_AFTER_POWERUP: Modem has booted up\n");
+-		for (i = 0; i < MAX_CLIENTS; i++) {
+-			client_node = memsh_child[i];
+-			size = memblock[i].size;
+-			if (memblock[i].free_memory > 0 &&
+-					bootup_request >= 2) {
+-				memblock[i].free_memory -= 1;
+-				dev_dbg(memsh_drv->dev, "memshare: free_memory count: %d for client id: %d\n",
+-					memblock[i].free_memory,
+-					memblock[i].client_id);
+-			}
+-
+-			if (memblock[i].free_memory == 0 &&
+-				memblock[i].peripheral ==
+-				DHMS_MEM_PROC_MPSS_V01 &&
+-				!memblock[i].guarantee &&
+-				!memblock[i].client_request &&
+-				memblock[i].allotted &&
+-				!memblock[i].alloc_request) {
+-				dev_info(memsh_drv->dev,
+-					"memshare: hypervisor unmapping for allocated memory with client id: %d\n",
+-					memblock[i].client_id);
+-				if (memblock[i].hyp_mapping) {
+-					struct memshare_hyp_mapping *source;
+-
+-					source = &memblock[i].hyp_map_info;
+-					for (j = 0; j < source->num_vmids; j++)
+-						source_vmids |= BIT(source->vmids[j]);
+-
+-					ret = qcom_scm_assign_mem(
+-							memblock[i].phy_addr,
+-							memblock[i].size,
+-							&source_vmids,
+-							dest_vmids, 1);
+-					if (ret &&
+-						memblock[i].hyp_mapping == 1) {
+-						/*
+-						 * This is an error case as hyp
+-						 * mapping was successful
+-						 * earlier but during unmap
+-						 * it lead to failure.
+-						 */
+-						dev_err(memsh_drv->dev,
+-							"memshare: failed to hypervisor unmap the memory region for client id: %d\n",
+-							memblock[i].client_id);
+-					} else {
+-						memblock[i].hyp_mapping = 0;
+-					}
+-				}
+-				if (memblock[i].guard_band) {
+-				/*
+-				 *	Check if the client required guard band
+-				 *	support so the memory region of client's
+-				 *	size + guard bytes of 4K can be freed.
+-				 */
+-					size += MEMSHARE_GUARD_BYTES;
+-				}
+-				dma_free_attrs(client_node->dev,
+-					size, memblock[i].virtual_addr,
+-					memblock[i].phy_addr,
+-					attrs);
+-				free_client(i);
++	} else if (code == QCOM_SSR_AFTER_POWERUP) {
++		for (i = 0; i < num_clients; i++) {
++			struct mem_blocks *mb = &memblock[i];
++
++			if (mb->free_memory && bootup_request >= 2)
++				mb->free_memory--;
++			if (!mb->free_memory && mb->peripheral == DHMS_MEM_PROC_MPSS_V01 &&
++			    !mb->guarantee && !mb->client_request && mb->allotted &&
++			    !mb->alloc_request) {
++				ret = memshare_reclaim(i);
++				if (ret)
++					dev_err(memsh_drv->dev, "client %u reclaim failed: %d\n", i, ret);
+ 			}
+ 		}
+ 		bootup_request++;
+-		break;
+-
+-	default:
+-		break;
+ 	}
+ 	mutex_unlock(&memsh_drv->mem_share);
+-	dev_info(memsh_drv->dev, "memshare: notifier_cb processed for code: %lu\n", code);
+-
+-	trace_rproc_qcom_event("modem", "modem_notifier", "exit");
+-	return NOTIFY_DONE;
++	return NOTIFY_OK;
+ }
+ 
+ static struct notifier_block nb = {
+ 	.notifier_call = modem_notifier_cb,
+ };
+ 
+-static void shared_hyp_mapping(int index)
+-{
+-	u64 source_vmlist[] = {BIT(QCOM_SCM_VMID_HLOS)};
+-	struct memshare_hyp_mapping *dest;
+-	struct qcom_scm_vmperm *newvm;
+-	struct mem_blocks *mb;
+-	int ret, j;
+-
+-	if (index >= MAX_CLIENTS) {
+-		dev_err(memsh_drv->dev,
+-			"memshare: hypervisor mapping failure for invalid client\n");
+-		return;
+-	}
+-	mb = &memblock[index];
+-	dest = &mb->hyp_map_info;
+-
+-	newvm = kcalloc(dest->num_vmids, sizeof(struct qcom_scm_vmperm), GFP_KERNEL);
+-	if (!newvm)
+-		return;
+-
+-	for (j = 0; j < dest->num_vmids; j++) {
+-		newvm[j].vmid = dest->vmids[j];
+-		newvm[j].perm = dest->perms[j];
+-	}
+-	ret = qcom_scm_assign_mem(mb->phy_addr, mb->size, source_vmlist,
+-			      newvm, dest->num_vmids);
+-	kfree(newvm);
+-	if (ret != 0) {
+-		dev_err(memsh_drv->dev, "memshare: qcom_scm_assign_mem failed size: %u, err: %d\n",
+-				mb->size, ret);
+-		return;
+-	}
+-	mb->hyp_mapping = 1;
++static int shared_hyp_mapping(unsigned int index)
++{
++	struct mem_blocks *mb = &memblock[index];
++	struct qcom_scm_vmperm dest[2];
++	u64 source_vmids = BIT_ULL(QCOM_SCM_VMID_HLOS);
++	unsigned int j;
++	int ret;
++
++	if (mb->hyp_mapping)
++		return 0;
++	for (j = 0; j < mb->hyp_map_info.num_vmids; j++) {
++		dest[j].vmid = mb->hyp_map_info.vmids[j];
++		dest[j].perm = mb->hyp_map_info.perms[j];
++	}
++	ret = qcom_scm_assign_mem(mb->phy_addr, mb->size, &source_vmids,
++				  dest, mb->hyp_map_info.num_vmids);
++	if (!ret)
++		mb->hyp_mapping = 1;
++	return ret;
+ }
+ 
+ static void handle_alloc_generic_req(struct qmi_handle *handle,
+ 	struct sockaddr_qrtr *sq, struct qmi_txn *txn, const void *decoded_msg)
+ {
+-	struct mem_alloc_generic_req_msg_v01 *alloc_req;
+-	struct mem_alloc_generic_resp_msg_v01 *alloc_resp;
+-	struct memshare_child *client_node = NULL;
+-	int rc, resp = 0, i;
+-	int index = DHMS_MEM_CLIENT_INVALID;
+-	uint32_t size = 0;
+-
++	const struct mem_alloc_generic_req_msg_v01 *req = decoded_msg;
++	struct mem_alloc_generic_resp_msg_v01 resp = { };
++	struct memshare_child *child;
++	struct mem_blocks *mb;
++	unsigned int usable, size;
++	int index, ret, failed = 0;
++
++	resp.resp.result = QMI_RESULT_FAILURE_V01;
++	resp.resp.error = QMI_ERR_NO_MEMORY_V01;
+ 	mutex_lock(&memsh_drv->mem_share);
+-	alloc_req = (struct mem_alloc_generic_req_msg_v01 *)decoded_msg;
+-	dev_info(memsh_drv->dev,
+-		"memshare_alloc: memory alloc request received for client id: %d, proc_id: %d, request size: %d\n",
+-		alloc_req->client_id, alloc_req->proc_id, alloc_req->num_bytes);
+-	alloc_resp = kzalloc(sizeof(*alloc_resp),
+-					GFP_KERNEL);
+-	if (!alloc_resp) {
+-		mutex_unlock(&memsh_drv->mem_share);
+-		return;
+-	}
+-	alloc_resp->resp.result = QMI_RESULT_FAILURE_V01;
+-	alloc_resp->resp.error = QMI_ERR_NO_MEMORY_V01;
+-	index = check_client(alloc_req->client_id, alloc_req->proc_id,
+-								CHECK);
+-
+-	if (index >= MAX_CLIENTS) {
+-		dev_err(memsh_drv->dev,
+-			"memshare_alloc: client not found for index: %d, requested client: %d, proc_id: %d\n",
+-			index, alloc_req->client_id, alloc_req->proc_id);
+-		mutex_unlock(&memsh_drv->mem_share);
+-		goto resp_send;
+-	}
+-
+-	for (i = 0; i < num_clients; i++) {
+-		if (memsh_child[i]->client_id == alloc_req->client_id) {
+-			client_node = memsh_child[i];
+-			dev_info(memsh_drv->dev,
+-				"memshare_alloc: found client with client_id: %d, index: %d\n",
+-				alloc_req->client_id, index);
+-			break;
++	index = check_client(req->client_id, req->proc_id, CHECK);
++	if (index >= MAX_CLIENTS || !req->num_bytes)
++		goto out;
++	child = memsh_child[index];
++	mb = &memblock[index];
++	if (!mb->allotted) {
++		usable = min(req->num_bytes, mb->init_size);
++		if (!usable || check_add_overflow(usable,
++				mb->guard_band ? MEMSHARE_GUARD_BYTES : 0U, &size))
++			goto out;
++		ret = memshare_alloc(child->dev, size, mb);
++		if (ret)
++			goto out;
++		mb->size = usable;
++		mb->allotted = 1;
++		mb->free_memory = 1;
++	}
++	ret = shared_hyp_mapping(index);
++	if (ret) {
++		/* Assignment failure leaves the allocation owned by HLOS. */
++		memshare_reclaim(index);
++		goto out;
++	}
++	if (is_shared_mapping(mb) && !child->mem_entry) {
++		child->mem_entry = qcom_glink_mem_entry_init(child->dev,
++			mb->virtual_addr, mb->phy_addr, mb->size, mb->phy_addr);
++		if (IS_ERR_OR_NULL(child->mem_entry)) {
++			child->mem_entry = NULL;
++			memshare_reclaim(index);
++			goto out;
+ 		}
+ 	}
+-
+-	if (!client_node) {
+-		dev_err(memsh_drv->dev,
+-			"memshare_alloc: No valid client node found\n");
+-		mutex_unlock(&memsh_drv->mem_share);
+-		goto resp_send;
+-	}
+-
+-	if (!memblock[index].allotted && alloc_req->num_bytes > 0) {
+-
+-		if (alloc_req->num_bytes > memblock[index].init_size)
+-			alloc_req->num_bytes = memblock[index].init_size;
+-
+-		if (memblock[index].guard_band)
+-			size = alloc_req->num_bytes + MEMSHARE_GUARD_BYTES;
+-		else
+-			size = alloc_req->num_bytes;
+-		rc = memshare_alloc(client_node->dev, size,
+-					&memblock[index]);
+-		if (rc) {
+-			dev_err(memsh_drv->dev,
+-				"memshare_alloc: unable to allocate memory of size: %d for requested client\n",
+-				size);
+-			resp = 1;
+-		}
+-		if (!resp) {
+-			memblock[index].free_memory += 1;
+-			memblock[index].allotted = 1;
+-			memblock[index].size = alloc_req->num_bytes;
+-			memblock[index].peripheral = alloc_req->proc_id;
+-		}
+-	}
+-
+-	if (is_shared_mapping(&memblock[index])) {
+-		struct mem_blocks *mb = &memblock[index];
+-
+-		client_node->mem_entry = qcom_glink_mem_entry_init(client_node->dev,
+-				mb->virtual_addr, mb->phy_addr, mb->size, mb->phy_addr);
+-	}
+-	dev_dbg(memsh_drv->dev,
+-		"memshare_alloc: free memory count for client id: %d = %d\n",
+-		memblock[index].client_id, memblock[index].free_memory);
+-
+-	memblock[index].sequence_id = alloc_req->sequence_id;
+-	memblock[index].alloc_request = 1;
+-
+-	fill_alloc_response(alloc_resp, index, &resp);
+-	/*
+-	 * Perform the Hypervisor mapping in order to avoid XPU viloation
+-	 * to the allocated region for Modem Clients
+-	 */
+-	if (!memblock[index].hyp_mapping &&
+-		memblock[index].allotted)
+-		shared_hyp_mapping(index);
++	mb->sequence_id = req->sequence_id;
++	mb->alloc_request = 1;
++	fill_alloc_response(&resp, index, &failed);
++out:
+ 	mutex_unlock(&memsh_drv->mem_share);
+-	dev_info(memsh_drv->dev,
+-		"memshare_alloc: client_id: %d, alloc_resp.num_bytes: %d, alloc_resp.resp.result: %lx\n",
+-		alloc_req->client_id,
+-		alloc_resp->dhms_mem_alloc_addr_info[0].num_bytes,
+-		(unsigned long)alloc_resp->resp.result);
+-
+-resp_send:
+-	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
+-			  MEM_ALLOC_GENERIC_RESP_MSG_V01,
+-			  sizeof(struct mem_alloc_generic_resp_msg_v01),
+-			  mem_alloc_generic_resp_msg_data_v01_ei, alloc_resp);
+-	if (rc < 0)
+-		dev_err(memsh_drv->dev,
+-		"memshare_alloc: Error sending the alloc response: %d\n",
+-		rc);
+-
+-	kfree(alloc_resp);
+-	alloc_resp = NULL;
++	ret = qmi_send_response(handle, sq, txn, MEM_ALLOC_GENERIC_RESP_MSG_V01,
++		MEM_ALLOC_REQ_MAX_MSG_LEN_V01, mem_alloc_generic_resp_msg_data_v01_ei, &resp);
++	if (ret < 0)
++		dev_err(memsh_drv->dev, "allocation response failed: %d\n", ret);
+ }
+ 
+ static void handle_free_generic_req(struct qmi_handle *handle,
+ 	struct sockaddr_qrtr *sq, struct qmi_txn *txn, const void *decoded_msg)
+ {
+-	u64 source_vmids = 0;
+-	struct mem_free_generic_req_msg_v01 *free_req;
+-	struct mem_free_generic_resp_msg_v01 free_resp;
+-	struct memshare_child *client_node = NULL;
+-	int rc, flag = 0, ret = 0, size = 0, i, j;
+-	int index = DHMS_MEM_CLIENT_INVALID;
+-	struct qcom_scm_vmperm dest_vmids[] = {{QCOM_SCM_VMID_HLOS},
+-						{PERM_READ|PERM_WRITE|PERM_EXEC}};
+-
+-	mutex_lock(&memsh_drv->mem_free);
+-	free_req = (struct mem_free_generic_req_msg_v01 *)decoded_msg;
+-	memset(&free_resp, 0, sizeof(free_resp));
+-	free_resp.resp.error = QMI_ERR_INTERNAL_V01;
+-	free_resp.resp.result = QMI_RESULT_FAILURE_V01;
+-	dev_info(memsh_drv->dev,
+-		"memshare_free: handling memory free request with client id: %d, proc_id: %d\n",
+-		free_req->client_id, free_req->proc_id);
+-
+-	index = check_client(free_req->client_id, free_req->proc_id, FREE);
+-
+-	if (index >= MAX_CLIENTS) {
+-		dev_err(memsh_drv->dev, "memshare_free: invalid client request to free memory\n");
+-		flag = 1;
+-	}
+-
+-	for (i = 0; i < num_clients; i++) {
+-		if (memsh_child[i]->client_id == free_req->client_id) {
+-			client_node = memsh_child[i];
+-			dev_info(memsh_drv->dev,
+-				"memshare_free: found client with client_id: %d, index: %d\n",
+-				free_req->client_id, index);
+-			break;
+-		}
+-	}
+-
+-	if (!client_node) {
+-		dev_err(memsh_drv->dev,
+-			"memshare_free: No valid client node found\n");
+-		mutex_unlock(&memsh_drv->mem_free);
+-		goto resp_fill;
+-	}
+-
+-	if (client_node->mem_entry) {
+-		qcom_glink_mem_entry_free(client_node->mem_entry);
+-		client_node->mem_entry = NULL;
+-	}
+-
+-	if (!flag && !memblock[index].guarantee &&
+-				!memblock[index].client_request &&
+-				memblock[index].allotted) {
+-		struct memshare_hyp_mapping *source;
+-
+-		dev_dbg(memsh_drv->dev,
+-			"memshare_free: hypervisor unmapping for free_req->client_id: %d - size: %d\n",
+-			free_req->client_id, memblock[index].size);
+-
+-		source = &memblock[index].hyp_map_info;
+-		for (j = 0; j < source->num_vmids; j++)
+-			source_vmids |= BIT(source->vmids[j]);
+-
+-		ret = qcom_scm_assign_mem(memblock[index].phy_addr, memblock[index].size,
+-				      &source_vmids,
+-				      dest_vmids, 1);
+-		if (ret && memblock[index].hyp_mapping == 1) {
+-		/*
+-		 * This is an error case as hyp mapping was successful
+-		 * earlier but during unmap it lead to failure.
+-		 */
+-			dev_err(memsh_drv->dev,
+-				"memshare_free: failed to unmap the region for client id:%d\n",
+-				index);
+-		}
+-		size = memblock[index].size;
+-		if (memblock[index].guard_band) {
+-		/*
+-		 *	Check if the client required guard band support so
+-		 *	the memory region of client's size + guard
+-		 *	bytes of 4K can be freed
+-		 */
+-			size += MEMSHARE_GUARD_BYTES;
+-		}
+-		dma_free_attrs(client_node->dev, size,
+-			memblock[index].virtual_addr,
+-			memblock[index].phy_addr,
+-			attrs);
+-		free_client(index);
+-	} else {
+-		dev_err(memsh_drv->dev,
+-			"memshare_free: cannot free the memory for a guaranteed client (client index: %d)\n",
+-			index);
+-	}
+-
+-	if (flag) {
+-		free_resp.resp.result = QMI_RESULT_FAILURE_V01;
+-		free_resp.resp.error = QMI_ERR_INVALID_ID_V01;
+-	} else {
+-		free_resp.resp.result = QMI_RESULT_SUCCESS_V01;
+-		free_resp.resp.error = QMI_ERR_NONE_V01;
+-	}
+-
+-	mutex_unlock(&memsh_drv->mem_free);
+-
+-resp_fill:
+-	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
+-			  MEM_FREE_GENERIC_RESP_MSG_V01,
+-			  MEM_FREE_REQ_MAX_MSG_LEN_V01,
+-			  mem_free_generic_resp_msg_data_v01_ei, &free_resp);
+-	if (rc < 0)
+-		dev_err(memsh_drv->dev,
+-		"memshare_free: error sending the free response: %d\n", rc);
++	const struct mem_free_generic_req_msg_v01 *req = decoded_msg;
++	struct mem_free_generic_resp_msg_v01 resp = { };
++	int index, ret;
++
++	resp.resp.result = QMI_RESULT_FAILURE_V01;
++	resp.resp.error = QMI_ERR_INTERNAL_V01;
++	mutex_lock(&memsh_drv->mem_share);
++	index = check_client(req->client_id, req->proc_id, FREE);
++	if (index >= MAX_CLIENTS || memblock[index].guarantee || memblock[index].client_request)
++		goto out;
++	ret = memshare_reclaim(index);
++	if (!ret) {
++		resp.resp.result = QMI_RESULT_SUCCESS_V01;
++		resp.resp.error = QMI_ERR_NONE_V01;
++	}
++out:
++	mutex_unlock(&memsh_drv->mem_share);
++	ret = qmi_send_response(handle, sq, txn, MEM_FREE_GENERIC_RESP_MSG_V01,
++		MEM_FREE_REQ_MAX_MSG_LEN_V01, mem_free_generic_resp_msg_data_v01_ei, &resp);
++	if (ret < 0)
++		dev_err(memsh_drv->dev, "free response failed: %d\n", ret);
+ }
+ 
+ static void handle_query_size_req(struct qmi_handle *handle,
+@@ -629,221 +405,179 @@
+ 	if (pblk->virtual_addr == NULL)
+ 		return -ENOMEM;
+ 
++	pblk->alloc_size = block_size;
+ 	return 0;
+ }
+ 
+-static void memshare_init_worker(struct work_struct *work)
+-{
+-	int rc;
+-
+-	mem_share_svc_handle = kzalloc(sizeof(struct qmi_handle),
+-					  GFP_KERNEL);
++static int memshare_start_service(void)
++{
++	int ret;
++
++	mem_share_svc_handle = kzalloc(sizeof(*mem_share_svc_handle), GFP_KERNEL);
+ 	if (!mem_share_svc_handle)
++		return -ENOMEM;
++	ret = qmi_handle_init(mem_share_svc_handle, MEM_ALLOC_REQ_MAX_MSG_LEN_V01,
++			      &server_ops, qmi_memshare_handlers);
++	if (ret)
++		goto free_handle;
++	ret = qmi_add_server(mem_share_svc_handle, MEM_SHARE_SERVICE_SVC_ID,
++			     MEM_SHARE_SERVICE_VERS, MEM_SHARE_SERVICE_INS_ID);
++	if (!ret)
++		return 0;
++	qmi_handle_release(mem_share_svc_handle);
++free_handle:
++	kfree(mem_share_svc_handle);
++	mem_share_svc_handle = NULL;
++	return ret;
++}
++
++static int memshare_child_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct memshare_child *child;
++	struct mem_blocks *mb;
++	const char *label;
++	u32 size, client_id;
++	unsigned int alloc_size, index;
++	int ret;
++
++	if (!memsh_drv)
++		return -EPROBE_DEFER;
++	guard(mutex)(&memsh_drv->mem_share);
++	index = num_clients;
++	if (index >= MAX_CLIENTS)
++		return -ENOSPC;
++	ret = of_property_read_u32(dev->of_node, "qcom,peripheral-size", &size);
++	if (ret)
++		return ret;
++	ret = of_property_read_u32(dev->of_node, "qcom,client-id", &client_id);
++	if (ret)
++		return ret;
++	ret = of_property_read_string(dev->of_node, "label", &label);
++	if (ret)
++		return ret;
++	child = devm_kzalloc(dev, sizeof(*child), GFP_KERNEL);
++	if (!child)
++		return -ENOMEM;
++	child->dev = dev;
++	child->client_id = client_id;
++	child->index = index;
++	mb = &memblock[index];
++	if (!strcmp(label, "modem"))
++		mb->peripheral = DHMS_MEM_PROC_MPSS_V01;
++	else if (!strcmp(label, "adsp"))
++		mb->peripheral = DHMS_MEM_PROC_ADSP_V01;
++	else if (!strcmp(label, "wcnss"))
++		mb->peripheral = DHMS_MEM_PROC_WCNSS_V01;
++	else
++		return -EINVAL;
++	mb->client_id = client_id;
++	mb->init_size = size;
++	mb->guarantee = of_property_read_bool(dev->of_node, "qcom,allocate-boot-time");
++	mb->client_request = of_property_read_bool(dev->of_node, "qcom,allocate-on-request");
++	mb->guard_band = of_property_read_bool(dev->of_node, "qcom,guard-band");
++	mb->hyp_map_info.num_vmids = 1;
++	mb->hyp_map_info.vmids[0] = VMID_MSS_MSA;
++	mb->hyp_map_info.perms[0] = PERM_READ | PERM_WRITE;
++	if (of_property_read_bool(dev->of_node, "qcom,shared")) {
++		mb->hyp_map_info.num_vmids = 2;
++		mb->hyp_map_info.vmids[1] = VMID_HLOS;
++		mb->hyp_map_info.perms[1] = PERM_READ | PERM_WRITE;
++	}
++	if (of_find_property(dev->of_node, "memory-region", NULL)) {
++		ret = of_reserved_mem_device_init(dev);
++		if (ret)
++			return ret;
++	}
++	memsh_child[index] = child;
++	if (mb->guarantee && size) {
++		if (check_add_overflow(size, mb->guard_band ? MEMSHARE_GUARD_BYTES : 0U,
++				       &alloc_size)) {
++			ret = -EOVERFLOW;
++			goto release_region;
++		}
++		ret = memshare_alloc(dev, alloc_size, mb);
++		if (ret)
++			goto release_region;
++		mb->allotted = 1;
++		mb->size = size;
++		ret = shared_hyp_mapping(index);
++		if (ret) {
++			memshare_reclaim(index);
++			goto release_region;
++		}
++	}
++	platform_set_drvdata(pdev, child);
++	num_clients++;
++	return 0;
++release_region:
++	memsh_child[index] = NULL;
++	of_reserved_mem_device_release(dev);
++	return ret;
++}
++
++static void memshare_remove(struct platform_device *pdev)
++{
++	struct memshare_driver *drv;
++	struct memshare_child *child;
++	int ret;
++
++	if (of_device_is_compatible(pdev->dev.of_node, "qcom,memshare-peripheral")) {
++		child = platform_get_drvdata(pdev);
++		ret = memshare_reclaim(child->index);
++		if (ret)
++			dev_err(child->dev, "secure memory retained after reclaim failure: %d\n", ret);
++		memsh_child[child->index] = NULL;
++		of_reserved_mem_device_release(child->dev);
+ 		return;
+-
+-	rc = qmi_handle_init(mem_share_svc_handle,
+-		sizeof(struct qmi_elem_info),
+-		&server_ops, qmi_memshare_handlers);
+-	if (rc < 0) {
+-		dev_err(memsh_drv->dev,
+-			"memshare: Creating mem_share_svc qmi handle failed\n");
+-		kfree(mem_share_svc_handle);
+-		mem_share_svc_handle = NULL;
+-		return;
+-	}
+-	rc = qmi_add_server(mem_share_svc_handle, MEM_SHARE_SERVICE_SVC_ID,
+-		MEM_SHARE_SERVICE_VERS, MEM_SHARE_SERVICE_INS_ID);
+-	if (rc < 0) {
+-		dev_err(memsh_drv->dev,
+-			"memshare: Registering mem share svc failed %d\n", rc);
+-		if (mem_share_svc_handle) {
+-			qmi_handle_release(mem_share_svc_handle);
+-			kfree(mem_share_svc_handle);
+-			mem_share_svc_handle = NULL;
+-		}
+-		return;
+-	}
+-	dev_dbg(memsh_drv->dev, "memshare: memshare_init successful\n");
+-}
+-
+-static int memshare_child_probe(struct platform_device *pdev)
+-{
+-	int rc;
+-	uint32_t size, client_id;
+-	const char *name;
+-	struct memshare_child *drv;
+-	struct device_node *mem_node;
+-
+-	drv = devm_kzalloc(&pdev->dev, sizeof(struct memshare_child),
+-							GFP_KERNEL);
+-
+-	if (!drv)
+-		return -ENOMEM;
+-
+-	drv->dev = &pdev->dev;
+-	platform_set_drvdata(pdev, drv);
+-
+-	rc = of_property_read_u32(pdev->dev.of_node, "qcom,peripheral-size",
+-						&size);
+-	if (rc) {
+-		dev_err(drv->dev, "memshare: Error reading size of clients, rc: %d\n",
+-				rc);
+-		return rc;
+-	}
+-
+-	rc = of_property_read_u32(pdev->dev.of_node, "qcom,client-id",
+-						&client_id);
+-	if (rc) {
+-		dev_err(memsh_drv->dev, "memshare: Error reading client id, rc: %d\n",
+-				rc);
+-		return rc;
+-	}
+-
+-	memblock[num_clients].guarantee = of_property_read_bool(
+-							pdev->dev.of_node,
+-							"qcom,allocate-boot-time");
+-
+-	memblock[num_clients].client_request = of_property_read_bool(
+-							pdev->dev.of_node,
+-							"qcom,allocate-on-request");
+-
+-	memblock[num_clients].guard_band = of_property_read_bool(
+-							pdev->dev.of_node,
+-							"qcom,guard-band");
+-
+-	/* If the shared property is set, allow access from both HLOS and peripheral */
+-	if (of_property_read_bool(pdev->dev.of_node, "qcom,shared")) {
+-		memblock[num_clients].hyp_map_info.num_vmids = 2;
+-		memblock[num_clients].hyp_map_info.vmids[0] = VMID_HLOS;
+-		memblock[num_clients].hyp_map_info.vmids[1] = VMID_MSS_MSA;
+-		memblock[num_clients].hyp_map_info.perms[0] = PERM_READ | PERM_WRITE;
+-		memblock[num_clients].hyp_map_info.perms[1] = PERM_READ | PERM_WRITE;
+-
+-	} else {
+-		memblock[num_clients].hyp_map_info.num_vmids = 1;
+-		memblock[num_clients].hyp_map_info.vmids[0] = VMID_MSS_MSA;
+-		memblock[num_clients].hyp_map_info.perms[0] = PERM_READ | PERM_WRITE;
+-	}
+-
+-	rc = of_property_read_string(pdev->dev.of_node, "label",
+-						&name);
+-	if (rc) {
+-		dev_err(memsh_drv->dev, "memshare: Error reading peripheral info for client, rc: %d\n",
+-					rc);
+-		return rc;
+-	}
+-
+-	if (strcmp(name, "modem") == 0)
+-		memblock[num_clients].peripheral = DHMS_MEM_PROC_MPSS_V01;
+-	else if (strcmp(name, "adsp") == 0)
+-		memblock[num_clients].peripheral = DHMS_MEM_PROC_ADSP_V01;
+-	else if (strcmp(name, "wcnss") == 0)
+-		memblock[num_clients].peripheral = DHMS_MEM_PROC_WCNSS_V01;
+-
+-	memblock[num_clients].init_size = size;
+-	memblock[num_clients].client_id = client_id;
+-	drv->client_id = client_id;
+-
+-	mem_node = of_parse_phandle(pdev->dev.of_node, "memory-region", 0);
+-	of_node_put(mem_node);
+-	if (mem_node) {
+-		rc = of_reserved_mem_device_init(&pdev->dev);
+-		if (rc) {
+-			dev_err(&pdev->dev, "memshare: Failed to initialize memory region rc: %d\n",
+-				rc);
+-			return rc;
+-		}
+-		dev_info(&pdev->dev, "memshare: Memory allocation from shared DMA pool\n");
+-	} else {
+-		dev_info(&pdev->dev, "memshare: Continuing with allocation from CMA\n");
+-	}
+-
+-	/*
+-	 * Memshare allocation for guaranteed clients
+-	 */
+-	if (memblock[num_clients].guarantee && size > 0) {
+-		if (memblock[num_clients].guard_band)
+-			size += MEMSHARE_GUARD_BYTES;
+-		rc = memshare_alloc(drv->dev,
+-				size,
+-				&memblock[num_clients]);
+-		if (rc) {
+-			dev_err(memsh_drv->dev,
+-				"memshare_child: Unable to allocate memory for guaranteed clients, rc: %d\n",
+-				rc);
+-			mem_node = of_parse_phandle(pdev->dev.of_node,
+-						    "memory-region", 0);
+-			of_node_put(mem_node);
+-			if (mem_node)
+-				of_reserved_mem_device_release(&pdev->dev);
+-			return rc;
+-		}
+-		memblock[num_clients].size = size;
+-		memblock[num_clients].allotted = 1;
+-		shared_hyp_mapping(num_clients);
+-	}
+-
+-	memsh_child[num_clients] = drv;
+-	num_clients++;
+-
+-	return 0;
+-}
+-
+-static int memshare_probe(struct platform_device *pdev)
+-{
+-	int rc;
+-	struct memshare_driver *drv;
+-	struct device *dev = &pdev->dev;
+-
+-	if (of_device_is_compatible(dev->of_node,
+-					"qcom,memshare-peripheral"))
+-		return memshare_child_probe(pdev);
+-
+-	drv = devm_kzalloc(&pdev->dev, sizeof(struct memshare_driver),
+-							GFP_KERNEL);
+-	if (!drv)
+-		return -ENOMEM;
+-
+-	drv->dev = &pdev->dev;
+-	memsh_drv = drv;
+-	platform_set_drvdata(pdev, memsh_drv);
+-
+-	/* Memory allocation has been done successfully */
+-	mutex_init(&drv->mem_free);
+-	mutex_init(&drv->mem_share);
+-
+-	INIT_WORK(&drv->memshare_init_work, memshare_init_worker);
+-	schedule_work(&drv->memshare_init_work);
+-
+-	initialize_client();
+-	num_clients = 0;
+-
+-	rc = of_platform_populate(pdev->dev.of_node, NULL, NULL,
+-				&pdev->dev);
+-
+-	if (rc) {
+-		dev_err(memsh_drv->dev,
+-			"memshare: error populating the devices\n");
+-		return rc;
+-	}
+-
+-	qcom_register_ssr_notifier("modem", &nb);
+-	dev_dbg(memsh_drv->dev, "memshare: Memshare inited\n");
+-
+-	return 0;
+-}
+-
+-static int memshare_remove(struct platform_device *pdev)
+-{
+-	if (!memsh_drv)
+-		return 0;
+-
++	}
++	drv = platform_get_drvdata(pdev);
+ 	if (mem_share_svc_handle) {
+ 		qmi_handle_release(mem_share_svc_handle);
+ 		kfree(mem_share_svc_handle);
+ 		mem_share_svc_handle = NULL;
+ 	}
+-	return 0;
++	if (drv->ssr_notifier)
++		qcom_unregister_ssr_notifier(drv->ssr_notifier, &nb);
++	of_platform_depopulate(&pdev->dev);
++	memsh_drv = NULL;
++	num_clients = 0;
++}
++
++static int memshare_probe(struct platform_device *pdev)
++{
++	struct memshare_driver *drv;
++	int ret;
++
++	if (of_device_is_compatible(pdev->dev.of_node, "qcom,memshare-peripheral"))
++		return memshare_child_probe(pdev);
++	if (memsh_drv)
++		return -EBUSY;
++	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
++	if (!drv)
++		return -ENOMEM;
++	drv->dev = &pdev->dev;
++	mutex_init(&drv->mem_share);
++	initialize_client();
++	num_clients = 0;
++	bootup_request = 0;
++	memsh_drv = drv;
++	platform_set_drvdata(pdev, drv);
++	ret = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
++	if (ret)
++		goto cleanup;
++	drv->ssr_notifier = qcom_register_ssr_notifier("modem", &nb);
++	if (IS_ERR(drv->ssr_notifier)) {
++		ret = PTR_ERR(drv->ssr_notifier);
++		drv->ssr_notifier = NULL;
++		goto cleanup;
++	}
++	ret = memshare_start_service();
++	if (!ret)
++		return 0;
++cleanup:
++	memshare_remove(pdev);
++	return ret;
+ }
+ 
+ static const struct of_device_id memshare_match_table[] = {
+@@ -860,6 +594,7 @@
+ 	.driver = {
+ 		.name   = "memshare",
+ 		.of_match_table = memshare_match_table,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+--- a/drivers/soc/qcom/memshare/msm_memshare.h
++++ b/drivers/soc/qcom/memshare/msm_memshare.h
+@@ -48,6 +48,7 @@
+ 	struct memshare_hyp_mapping hyp_map_info;
+ 	/* Size required for client */
+ 	uint32_t size;
++	uint32_t alloc_size;
+ 	/* Available memory size for client */
+ 	uint32_t init_size;
+ 	/*
+--- a/drivers/soc/qcom/memshare/heap_mem_ext_v01.c
++++ b/drivers/soc/qcom/memshare/heap_mem_ext_v01.c
+@@ -349,4 +349,5 @@
+ };
+ EXPORT_SYMBOL_GPL(mem_query_size_resp_msg_data_v01_ei);
+ 
++MODULE_DESCRIPTION("Qualcomm heap memory extension QMI schema");
+ MODULE_LICENSE("GPL");
+--- a/drivers/soc/qcom/sps/sps.c
++++ b/drivers/soc/qcom/sps/sps.c
+@@ -2867,7 +2867,7 @@
+ 	return ret;
+ }
+ 
+-static int msm_sps_remove(struct platform_device *pdev)
++static void msm_sps_remove(struct platform_device *pdev)
+ {
+ 	SPS_DBG3(sps, "sps: Enter\n");
+ 
+@@ -2881,7 +2881,6 @@
+ 		clk_put(sps->pmem_clk);
+ 	clk_put(sps->bamdma_clk);
+ 
+-	return 0;
+ }
+ 
+ static struct platform_driver msm_sps_driver = {
+--- a/drivers/media/rc/ir-spi.c
++++ b/drivers/media/rc/ir-spi.c
+@@ -22,6 +22,7 @@
+ 
+ #define IR_SPI_DEFAULT_FREQUENCY	38000
+ #define IR_SPI_BITS_PER_PULSE		16
++#define IR_SPI_MAX_PERIODS		32768
+ 
+ struct ir_spi_data {
+ 	u32 freq;
+@@ -46,10 +47,15 @@
+ 
+ 	/* convert the pulse/space signal to raw binary signal */
+ 	for (i = 0; i < count; i++) {
+-		buffer[i] = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
+-						  1000000);
+-		len += buffer[i];
++		u64 periods = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
++						   1000000);
++
++		if (periods > IR_SPI_MAX_PERIODS - len)
++			return -EINVAL;
++		len += periods;
+ 	}
++	if (!len)
++		return -EINVAL;
+ 
+ 	tx_buf = kmalloc_array(len, sizeof(*tx_buf), GFP_KERNEL);
+ 	if (!tx_buf)
+@@ -59,6 +65,8 @@
+ 	for (i = 0; i < count; i++) {
+ 		int j;
+ 		u16 val;
++		unsigned int periods = DIV_ROUND_CLOSEST_ULL(
++			(u64)buffer[i] * idata->freq, 1000000);
+ 
+ 		/*
+ 		 * The first value in buffer is a pulse, so that 0, 2, 4, ...
+@@ -66,7 +74,7 @@
+ 		 * contain a space duration.
+ 		 */
+ 		val = (i % 2) ? idata->space : idata->pulse;
+-		for (j = 0; j < buffer[i]; j++)
++		for (j = 0; j < periods; j++)
+ 			tx_buf[len++] = val;
+ 	}
+ 
+@@ -112,6 +120,9 @@
+ {
+ 	struct ir_spi_data *idata = dev->priv;
+ 	int bits = (duty_cycle * 15) / 100;
++
++	if (!duty_cycle || duty_cycle > 100)
++		return -EINVAL;
+ 
+ 	idata->pulse = GENMASK(bits, 0);
+ 
+@@ -157,13 +168,12 @@
+ 	if (ret)
+ 		dc = 50;
+ 
+-	/*
+-	 * ir_spi_set_duty_cycle() cannot fail, it returns int
+-	 * to be compatible with the rc->s_tx_duty_cycle function.
+-	 */
+-	ir_spi_set_duty_cycle(idata->rc, dc);
+-
+-	idata->freq = IR_SPI_DEFAULT_FREQUENCY;
++	ret = ir_spi_set_duty_cycle(idata->rc, dc);
++	if (ret)
++		return ret;
++	ret = ir_spi_set_tx_carrier(idata->rc, IR_SPI_DEFAULT_FREQUENCY);
++	if (ret)
++		return ret;
+ 
+ 	return devm_rc_register_device(dev, idata->rc);
+ }
+--- a/qcom/opensource/securemsm-kernel/crypto-qti/qcrypto.c
++++ b/qcom/opensource/securemsm-kernel/crypto-qti/qcrypto.c
+@@ -666,7 +666,7 @@
+ 
+ static void qcrypto_bw_reaper_timer_callback(struct timer_list *data)
+ {
+-	struct crypto_engine *pengine = from_timer(pengine, data,
++	struct crypto_engine *pengine = timer_container_of(pengine, data,
+ 		bw_reaper_timer);
+ 
+ 	schedule_work(&pengine->bw_reaper_ws);
+@@ -1342,7 +1342,7 @@
+ 
+ 	cancel_work_sync(&pengine->bw_reaper_ws);
+ 	cancel_work_sync(&pengine->bw_allocate_ws);
+-	del_timer_sync(&pengine->bw_reaper_timer);
++	timer_shutdown_sync(&pengine->bw_reaper_timer);
+ 
+ 	if (pengine->icc_path)
+ 		icc_put(pengine->icc_path);
+@@ -1365,7 +1365,7 @@
+ 	}
+ }
+ 
+-static int _qcrypto_remove(struct platform_device *pdev)
++static void _qcrypto_remove(struct platform_device *pdev)
+ {
+ 	struct crypto_engine *pengine;
+ 	struct crypto_priv *cp;
+@@ -1373,7 +1373,7 @@
+ 	pengine = platform_get_drvdata(pdev);
+ 
+ 	if (!pengine)
+-		return 0;
++		return;
+ 	cp = pengine->pcp;
+ 	mutex_lock(&cp->engine_lock);
+ 	_qcrypto_remove_engine(pengine);
+@@ -1381,7 +1381,7 @@
+ 	if (pengine->qce)
+ 		qce_close(pengine->qce);
+ 	kfree_sensitive(pengine);
+-	return 0;
++	return;
+ }
+ 
+ static int _qcrypto_check_aes_keylen(struct crypto_priv *cp, unsigned int len)
+@@ -5308,7 +5308,7 @@
+ 
+ static void _qcrypto_do_suspending(struct crypto_engine *pengine)
+ {
+-	del_timer_sync(&pengine->bw_reaper_timer);
++	timer_delete_sync(&pengine->bw_reaper_timer);
+ 	qcrypto_ce_set_bus(pengine, false);
+ }
+ 
+@@ -5421,6 +5421,7 @@
+ 	.driver     = {
+ 		.name           = "qcrypto",
+ 		.of_match_table = qcrypto_match,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+--- a/qcom/opensource/securemsm-kernel/crypto-qti/qcedev_smmu.h
++++ b/qcom/opensource/securemsm-kernel/crypto-qti/qcedev_smmu.h
+@@ -12,7 +12,6 @@
+ #include <linux/dma-direction.h>
+ #include <linux/iommu.h>
+ #include <linux/msm_dma_iommu_mapping.h>
+-#include <linux/msm_ion.h>
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
+ #include <linux/slab.h>
+--- a/qcom/opensource/securemsm-kernel/crypto-qti/qcedev.c
++++ b/qcom/opensource/securemsm-kernel/crypto-qti/qcedev.c
+@@ -546,7 +546,7 @@
+ 	return ret;
+ };
+ 
+-void qcedev_offload_cipher_req_cb(void *cookie, unsigned char *icv,
++static void qcedev_offload_cipher_req_cb(void *cookie, unsigned char *icv,
+ 			      unsigned char *iv, int ret)
+ {
+ 	struct qcedev_cipher_req *areq;
+@@ -2739,14 +2739,14 @@
+ 	return -EINVAL;
+ };
+ 
+-static int qcedev_remove(struct platform_device *pdev)
++static void qcedev_remove(struct platform_device *pdev)
+ {
+ 	struct qcedev_control *podev;
+ 	int ret = 0;
+ 
+ 	podev = platform_get_drvdata(pdev);
+ 	if (!podev)
+-		return 0;
++		return;
+ 
+ 	qcedev_ce_high_bw_req(podev, true);
+ 	if (podev->qce) {
+@@ -2770,7 +2770,7 @@
+ 	class_destroy(driver_class);
+ 
+ 	unregister_chrdev_region(qcedev_device_no, 1);
+-	return 0;
++	return;
+ };
+ 
+ static int qcedev_suspend(struct platform_device *pdev, pm_message_t state)
+@@ -2837,6 +2837,7 @@
+ 	.driver = {
+ 		.name = "qce",
+ 		.of_match_table = qcedev_match,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+@@ -2938,6 +2939,6 @@
+ 
+ MODULE_LICENSE("GPL v2");
+ MODULE_DESCRIPTION("QTI DEV Crypto driver");
+-MODULE_IMPORT_NS(DMA_BUF);
++MODULE_IMPORT_NS("DMA_BUF");
+ module_init(qcedev_init);
+ module_exit(qcedev_exit);
+--- a/qcom/opensource/securemsm-kernel/crypto-qti/qce50.c
++++ b/qcom/opensource/securemsm-kernel/crypto-qti/qce50.c
+@@ -3482,7 +3482,7 @@
+ 
+ static void qce_multireq_timeout(struct timer_list *data)
+ {
+-	struct qce_device *pce_dev = from_timer(pce_dev, data, timer);
++	struct qce_device *pce_dev = timer_container_of(pce_dev, data, timer);
+ 	int ret = 0;
+ 	int last_seq;
+ 	unsigned long flags;
+@@ -3519,7 +3519,7 @@
+ 	pce_dev->mode = IN_INTERRUPT_MODE;
+ 	local_irq_restore(flags);
+ 
+-	del_timer(&(pce_dev->timer));
++	timer_delete(&(pce_dev->timer));
+ 	pce_dev->qce_stats.no_of_timeouts++;
+ 	pr_debug("pcedev %d mode switch to INTR\n", pce_dev->dev_no);
+ }
+@@ -6742,6 +6742,7 @@
+ 	if (handle == NULL)
+ 		return -ENODEV;
+ 
++	timer_shutdown_sync(&pce_dev->timer);
+ 	mutex_lock(&qce_iomap_mutex);
+ 	qce_enable_clk(pce_dev);
+ 	qce_sps_exit(pce_dev);
+--- a/sound/usb/usb_audio_qmi_svc.c
++++ b/sound/usb/usb_audio_qmi_svc.c
+@@ -141,13 +141,13 @@
+ 			struct qmi_txn *txn,
+ 			const void *decoded_msg);
+ 
+-static struct qmi_msg_handler uaudio_stream_req_handlers = {
++static struct qmi_msg_handler uaudio_stream_req_handlers[] = { {
+ 	.type = QMI_REQUEST,
+ 	.msg_id = QMI_UAUDIO_STREAM_REQ_V01,
+ 	.ei = qmi_uaudio_stream_req_msg_v01_ei,
+-	.decoded_size = QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN,
++	.decoded_size = sizeof(struct qmi_uaudio_stream_req_msg_v01),
+ 	.fn = handle_uaudio_stream_req,
+-};
++}, { } };
+ 
+ enum mem_type {
+ 	MEM_EVENT_RING,
+@@ -715,9 +715,8 @@
+ 
+ 	/* event ring */
+ 	ret = xhci_sideband_create_interrupter(uadev[card_num].sb, 1,
+-						uaudio_qdev->intr_num, false);
+-	if (ret == -ENOMEM) {
+-		ret = -ENODEV;
++						false, 0, uaudio_qdev->intr_num);
++	if (ret < 0) {
+ 		goto drop_sync_ep;
+ 	}
+ 
+@@ -976,20 +975,74 @@
+ }
+ 
+ 
++/* Notify the DSP before xHCI returns an active transfer ring to its allocator. */
++static int uaudio_sideband_notifier(struct usb_interface *intf,
++				  struct xhci_sideband_event *evt)
++{
++	struct snd_usb_audio *chip = usb_get_intfdata(intf);
++	struct uaudio_dev *dev;
++	struct qmi_uaudio_stream_ind_msg_v01 ind = { };
++	unsigned int i, ep;
++	bool active = false;
++
++	if (!chip || !evt || !evt->evt_data ||
++	    evt->type != XHCI_SIDEBAND_XFER_RING_FREE ||
++	    chip->card->number < 0 || chip->card->number >= SNDRV_CARDS)
++		return 0;
++	dev = &uadev[chip->card->number];
++	ep = *(unsigned int *)evt->evt_data;
++	mutex_lock(&chip->mutex);
++	for (i = 0; i < dev->num_intf; i++) {
++		unsigned int data = dev->info[i].data_ep_pipe;
++		unsigned int sync = dev->info[i].sync_ep_pipe;
++
++		if (dev->info[i].in_use &&
++		    ((data && usb_pipeendpoint(data) * 2 - 1 + usb_pipein(data) == ep) ||
++		     (sync && usb_pipeendpoint(sync) * 2 - 1 + usb_pipein(sync) == ep)))
++			active = true;
++	}
++	if (active && dev->udev && uaudio_svc->client_connected) {
++		ind.dev_event = USB_AUDIO_DEV_DISCONNECT_V01;
++		ind.slot_id = dev->udev->slot_id;
++		ind.controller_num = dev->usb_core_id;
++		ind.controller_num_valid = 1;
++		mutex_unlock(&chip->mutex);
++		qmi_send_indication(uaudio_svc->uaudio_svc_hdl, &uaudio_svc->client_sq,
++			QMI_UAUDIO_STREAM_IND_V01, QMI_UAUDIO_STREAM_IND_MSG_V01_MAX_MSG_LEN,
++			qmi_uaudio_stream_ind_msg_v01_ei, &ind);
++		wait_event_timeout(dev->disconnect_wq, !atomic_read(&dev->in_use),
++			msecs_to_jiffies(DEV_RELEASE_WAIT_TIMEOUT));
++		mutex_lock(&chip->mutex);
++	}
++	mutex_unlock(&chip->mutex);
++	return 0;
++}
++
+ static void uaudio_connect(struct snd_usb_audio *chip)
+ {
+ 	struct xhci_sideband *sb;
++	struct usb_interface *intf;
+ 
+ 	uaudio_dbg("chip: %p card_number:%d\n"
+ 			, chip, chip->card->number);
+-	if (chip->card->number >= SNDRV_CARDS) {
++	if (chip->card->number < 0 || chip->card->number >= SNDRV_CARDS) {
+ 		uaudio_err("Invalid card number\n");
+ 		return;
+ 	}
+ 
+-	sb = xhci_sideband_register(chip->dev);
+-	if (!sb)
++	if (uadev[chip->card->number].sb || !try_module_get(THIS_MODULE))
+ 		return;
++	intf = usb_ifnum_to_if(chip->dev, chip->ctrl_intf->desc.bInterfaceNumber);
++	if (!intf) {
++		module_put(THIS_MODULE);
++		return;
++	}
++	sb = xhci_sideband_register(intf, XHCI_SIDEBAND_VENDOR,
++				   uaudio_sideband_notifier);
++	if (!sb) {
++		module_put(THIS_MODULE);
++		return;
++	}
+ 
+ 	uadev[chip->card->number].chip = chip;
+ 	uadev[chip->card->number].sb = sb;
+@@ -1000,6 +1053,7 @@
+ static void uaudio_disconnect(struct snd_usb_audio *chip)
+ {
+ 	int ret;
++	bool put_ref = false;
+ 	struct uaudio_dev *dev;
+ 	int card_num;
+ 	struct uaudio_qmi_svc *svc = uaudio_svc;
+@@ -1062,12 +1116,16 @@
+ 
+ 	uaudio_dev_cleanup(dev);
+ done:
+-	if (dev->sb)
++	if (dev->sb) {
+ 		xhci_sideband_unregister(dev->sb);
++		put_ref = true;
++	}
+ 
+ 	uadev[card_num].chip = NULL;
+ 	uadev[card_num].sb = NULL;
+ 	mutex_unlock(&chip->mutex);
++	if (put_ref)
++		module_put(THIS_MODULE);
+ }
+ 
+ static void uaudio_dev_release(struct uaudio_dev *dev)
+@@ -1185,6 +1243,8 @@
+ 	struct snd_usb_substream *subs = NULL;
+ 	struct snd_usb_audio *chip;
+ 
++	if (card_num >= SNDRV_CARDS || direction > SNDRV_PCM_STREAM_CAPTURE)
++		return NULL;
+ 	chip = uadev[card_num].chip;
+ 	if (!chip || atomic_read(&chip->shutdown)) {
+ 		pr_debug("%s: instance of usb card # %d does not exist\n",
+@@ -1336,7 +1396,7 @@
+ {
+ 	struct snd_usb_substream *subs;
+ 	struct snd_usb_audio *chip;
+-	u8 pcm_card_num, pcm_dev_num, direction;
++	unsigned int pcm_card_num, pcm_dev_num, direction;
+ 
+ 	direction = req_msg->usb_token & SND_PCM_STREAM_DIRECTION;
+ 	pcm_dev_num = (req_msg->usb_token & SND_PCM_DEV_NUM_MASK) >> 8;
+@@ -1386,10 +1446,10 @@
+ 		return -ENODEV;
+ 	}
+ 
+-	if (req_msg->enable && (*info_idx < 0)) {
++	if (*info_idx < 0) {
+ 		uaudio_err("interface# %d already in use card# %d\n",
+-				subs->cur_audiofmt->iface, pcm_card_num);
+-		return -EBUSY;
++				subs->cur_audiofmt ? subs->cur_audiofmt->iface : -1, pcm_card_num);
++		return req_msg->enable ? -EBUSY : -EINVAL;
+ 	}
+ 
+ 	return 0;
+@@ -1409,7 +1469,7 @@
+ 	ktime_t t_request_recvd = ktime_get();
+ 	struct snd_usb_audio *chip = NULL;
+ 
+-	u8 pcm_card_num, pcm_dev_num, direction;
++	unsigned int pcm_card_num, pcm_dev_num, direction;
+ 	int info_idx = -EINVAL, datainterval = -EINVAL, ret = 0;
+ 
+ 	uaudio_dbg("sq_node:%x sq_port:%x sq_family:%x\n", sq->sq_node,
+@@ -1430,6 +1490,10 @@
+ 	direction = req_msg->usb_token & SND_PCM_STREAM_DIRECTION;
+ 	pcm_dev_num = (req_msg->usb_token & SND_PCM_DEV_NUM_MASK) >> 8;
+ 	pcm_card_num = (req_msg->usb_token & SND_PCM_CARD_NUM_MASK) >> 16;
++	if (pcm_card_num >= SNDRV_CARDS || direction > SNDRV_PCM_STREAM_CAPTURE) {
++		ret = -EINVAL;
++		goto response;
++	}
+ 
+ 	subs = find_substream(pcm_card_num, pcm_dev_num, direction);
+ 	chip = uadev[pcm_card_num].chip;
+@@ -1640,6 +1704,7 @@
+ };
+ 
+ static int uaudio_qmi_svc_init(void);
++static void uaudio_qmi_svc_exit(void);
+ 
+ static struct snd_usb_platform_ops offload_ops = {
+ 	.connect_cb = uaudio_connect,
+@@ -1651,11 +1716,8 @@
+ 	int ret;
+ 	struct device_node *node = pdev->dev.of_node;
+ 
+-	if (!uaudio_svc) {
+-		ret = uaudio_qmi_svc_init();
+-		if (ret)
+-			return ret;
+-	}
++	if (uaudio_qdev)
++		return -EBUSY;
+ 
+ 	uaudio_qdev = devm_kzalloc(&pdev->dev, sizeof(struct uaudio_qmi_dev),
+ 		GFP_KERNEL);
+@@ -1668,6 +1730,7 @@
+ 				&uaudio_qdev->sid);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "failed to read sid.\n");
++		uaudio_qdev = NULL;
+ 		return -ENODEV;
+ 	}
+ 
+@@ -1675,13 +1738,16 @@
+ 				&uaudio_qdev->intr_num);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "failed to read intr num.\n");
++		uaudio_qdev = NULL;
+ 		return -ENODEV;
+ 	}
+ 
+-	uaudio_qdev->domain = iommu_domain_alloc(pdev->dev.bus);
+-	if (!uaudio_qdev->domain) {
++	uaudio_qdev->domain = iommu_paging_domain_alloc(&pdev->dev);
++	if (IS_ERR(uaudio_qdev->domain)) {
+ 		dev_err(&pdev->dev, "failed to allocate iommu domain\n");
+-		return -ENODEV;
++		ret = PTR_ERR(uaudio_qdev->domain);
++		uaudio_qdev = NULL;
++		return ret;
+ 	}
+ 
+ 	/* attach to external processor iommu */
+@@ -1702,27 +1768,44 @@
+ 	uaudio_qdev->xfer_buf_iova_size =
+ 		IOVA_XFER_BUF_MAX - IOVA_XFER_BUF_BASE;
+ 
++	ret = uaudio_qmi_svc_init();
++	if (ret)
++		goto detach_device;
+ 	ret = snd_usb_register_platform_ops(&offload_ops);
+-	if (ret < 0)
++	if (ret < 0) {
++		uaudio_qmi_svc_exit();
+ 		goto detach_device;
+-
++	}
++
++	snd_usb_rediscover_devices();
+ 	return 0;
+ 
+ detach_device:
+ 	iommu_detach_device(uaudio_qdev->domain, &pdev->dev);
+ free_domain:
+ 	iommu_domain_free(uaudio_qdev->domain);
++	uaudio_qdev = NULL;
+ 	return ret;
+ }
+ 
+-static int uaudio_qmi_plat_remove(struct platform_device *pdev)
+-{
++static void uaudio_qmi_plat_remove(struct platform_device *pdev)
++{
++	struct iova_info *info, *next;
++
++	/* Connected USB devices hold a module reference until their callback ends. */
+ 	snd_usb_unregister_platform_ops();
++	uaudio_qmi_svc_exit();
+ 	iommu_detach_device(uaudio_qdev->domain, &pdev->dev);
+ 	iommu_domain_free(uaudio_qdev->domain);
+-	uaudio_qdev->domain = NULL;
+-
+-	return 0;
++	list_for_each_entry_safe(info, next, &uaudio_qdev->xfer_ring_list, list) {
++		list_del(&info->list);
++		kfree(info);
++	}
++	list_for_each_entry_safe(info, next, &uaudio_qdev->xfer_buf_list, list) {
++		list_del(&info->list);
++		kfree(info);
++	}
++	uaudio_qdev = NULL;
+ }
+ 
+ static const struct of_device_id of_uaudio_matach[] = {
+@@ -1739,6 +1822,7 @@
+ 	.driver		= {
+ 		.name	= "uaudio-qmi",
+ 		.of_match_table	= of_uaudio_matach,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+@@ -1760,7 +1844,7 @@
+ 	ret = qmi_handle_init(svc->uaudio_svc_hdl,
+ 				QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN,
+ 				&uaudio_svc_ops_options,
+-				&uaudio_stream_req_handlers);
++				uaudio_stream_req_handlers);
+ 	if (ret < 0) {
+ 		pr_err("%s:Error registering uaudio svc %d\n", __func__, ret);
+ 		goto free_svc_hdl;
+@@ -1794,6 +1878,8 @@
+ {
+ 	struct uaudio_qmi_svc *svc = uaudio_svc;
+ 
++	if (!svc)
++		return;
+ 	qmi_handle_release(svc->uaudio_svc_hdl);
+ 	kfree(svc->uaudio_svc_hdl);
+ 	ipc_log_context_destroy(svc->uaudio_ipc_log);
+@@ -1808,7 +1894,6 @@
+ 
+ static void __exit uaudio_qmi_plat_exit(void)
+ {
+-	uaudio_qmi_svc_exit();
+ 	platform_driver_unregister(&uaudio_qmi_driver);
+ }
+ 

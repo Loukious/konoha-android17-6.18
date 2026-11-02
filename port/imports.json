@@ -29255,5 +29255,395 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/thermal/xiaomi/mi_thermal_interface.c",
     "blob": "663fd92aa9ad41e523872335decdd4c88bf6cbf8"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/adsp_sleepmon.c",
+    "blob": "0a78a793563df1fe19ac9d4cbf208240d7d49a96"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/adsp_sleepmon_stats.h",
+    "blob": "50692f872757b3dd4487b9e370b812da254001a7"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/uapi/misc/adsp_sleepmon.h",
+    "blob": "ca7cf3056c92bd653d7a7fb46bdc21690f51ff61"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/cdsprm.c",
+    "blob": "c402365bbd682966fa72e3b2ecb87e9e36922a26"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/cdsprm.h",
+    "blob": "a78e47af039e148385a543b9cdffabf0bdec2890"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/cdsprm_cxlimit.h",
+    "blob": "00e8960d9a53bbc3674b06aeaec409694f4b501b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/cdsprm_dcvs_clients_votes.h",
+    "blob": "00c59937678d017110b23dbf8c7d640243c0926d"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/msm-sps.h",
+    "blob": "efa31a5cb5f06acd1f5a330b441eb8918a1df2e1"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/memshare/msm_memshare.c",
+    "blob": "fb7f69dfad8e70c58f6a672511cc93057ec6b1eb"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/memshare/heap_mem_ext_v01.h",
+    "blob": "a7a5e5df4d385531d37d2c2d8e9b6d0725ce2a3b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/memshare/msm_memshare.h",
+    "blob": "a5ced22ca205b61d708e086a83691ff9707ccff8"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/memshare/heap_mem_ext_v01.c",
+    "blob": "51456ecc9d594cdaad221a681dd3bea4a4a1613a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_core.h",
+    "blob": "b7afdbaa3a025423cd2af4b640a96c8bcf17af89"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_bam.c",
+    "blob": "f3d80f455608f4e31fa530e028b9c4f9532f37cd"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/bam.h",
+    "blob": "8f068dbdbf4bb34ae0d04cf15352c36f70ae24a5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/spsi.h",
+    "blob": "4208d8fcd31e1e439dac0a831467e0b3b070b8d3"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_map.h",
+    "blob": "c490898b95642efce9adcee78e779b50c6eae207"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/bam.c",
+    "blob": "a4aefbdd5272f5c44b391797ad2a68d1a9234357"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_dma.c",
+    "blob": "9be5ddcdf6be1d9d63dbe0cd26264f58f3dde6dc"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_map.c",
+    "blob": "e23aad4e6fe447f66759555027d55906007d192f"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_rm.c",
+    "blob": "565eb664718363e4d404a014cceebe16152fb4b7"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_bam.h",
+    "blob": "aa8eb025393b17e2b2b1159804c3b7e0f86faa5d"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps_mem.c",
+    "blob": "53947cea7f638a83fedbc9703648ebcb4e74a3a6"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sps/sps.c",
+    "blob": "6111a9c8437bcca7f6eacca4f6b43e5dc7e4a6ac"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/media/rc/ir-spi.c",
+    "blob": "392441e0c1164aae15f5fc5d7bf81c944cc07b7a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcrypto.c",
+    "blob": "df9f1307c7c7aa1a10b4c6b7458112cd72de6d33"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qce_ota.h",
+    "blob": "81f2d802062187a422d562c7d00a402002657ebe"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcrypto.h",
+    "blob": "57bf6be54033d5837c99a0c765f66f41ce127717"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcedevi.h",
+    "blob": "04116e6db83448279204bc753419ddcd4f1aac67"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcedev_smmu.h",
+    "blob": "2907703b94a5a60b0fea8d31f9921e6b7161be76"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcedev.c",
+    "blob": "158d26b0e765f7bdcc59db61ae821498f4b60078"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qce50.h",
+    "blob": "c8df63983cede43cb67ae7bbd394fb8ea3bba405"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcom_crypto_device.h",
+    "blob": "5b40096bf07cd9cd070ea2fd8e91c5635d51f5a2"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/compat_qcedev.c",
+    "blob": "f0cbc584b2f835833dfcf0cf7720c0381e9e9f3b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcedev_smmu.c",
+    "blob": "c3cf969b596e3d2999d876b59ad49ccabd4291fb"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qcryptohw_50.h",
+    "blob": "fcc65eb02e362d8dc89bc00b4413325ec27fdd55"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qce.h",
+    "blob": "3b14feacf3f605130b46e24315826549dbb0d06f"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/fips_status.h",
+    "blob": "4b7aeccf5eca23cf3657a9b191b59ce80d10601a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735-modules",
+    "revision": "8500748dae32f10507c02f1c94bc971553cb525b",
+    "path": "qcom/opensource/securemsm-kernel/crypto-qti/qce50.c",
+    "blob": "f9fa186a40e0f2d9ddcf3336a371a78808e4db91"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/midi2.h",
+    "blob": "94a65fcbd58ba758932648ad92ff8f622e3df9b8"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/implicit.h",
+    "blob": "7f1577b6c4d38b2ef52fdf96712c0df5967dc13b"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/endpoint.h",
+    "blob": "ba70f52f68602eb08cc05c3f67579271ef7a6301"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/pcm.h",
+    "blob": "c096021adb2b113aecde6e30742cd325fc0db3b9"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/clock.h",
+    "blob": "ed9fc2dc051031aa28b5b5fd04d2723ab488d2a5"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/proc.h",
+    "blob": "72b1b2d28b445b0739820d0c1e365af9455075af"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/helper.h",
+    "blob": "0372e050b3dc47ed10e43b7511dad4c57deb662e"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/quirks-table.h",
+    "blob": "eafc0d73cca1fb385f3666eab17c1e6f96e63f59"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer_quirks.h",
+    "blob": "4ba01ba3fe8b9b9d786ac534a0379cd3af984cd9"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/usbaudio.h",
+    "blob": "0645a40ff364d58a84cd914a89f06f1da994ead4"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/power.h",
+    "blob": "1fa92ad0ca92518cb850bbac05f367fda0bb4c3f"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/quirks.h",
+    "blob": "f24d6a5a197a641dac36eb3c6eca5dbf5076b495"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/media.h",
+    "blob": "f5bdec1d602fced26476ad122f645f61af2afb8c"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/format.h",
+    "blob": "e70171892f326a06bce9b2169a205c34e78778d7"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer.h",
+    "blob": "167fbfcf01ace9b67b8502adbd3f694975f6d202"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/card.h",
+    "blob": "cd8a62475e6396499e5811d1d6da75c550415c43"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer_scarlett.h",
+    "blob": "bbf063b793705ae553e58a1a83590b05ab325452"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer_us16x08.h",
+    "blob": "7b8583dd3b0701faf2a5c359ff2feeaffe30ff94"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/fcp.h",
+    "blob": "d58cc7db75b1cc699b7155995f96b20dc3801371"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer_scarlett2.h",
+    "blob": "d209362cf41a6c1b245a356c2afbc69e0f0991ce"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/mixer_s1810c.h",
+    "blob": "a79a3743cff330377492074819af79072c1cedfd"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/stream.h",
+    "blob": "61b9a133da018a08d36dea28247266c8cc3113a9"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "sound/usb/midi.h",
+    "blob": "2100f1486b03dd2a491601c5802fd9036cb8b952"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "sound/usb/usb_audio_qmi_svc.c",
+    "blob": "8c48e80571baeedce3ae2427766fc23c543aa19c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "sound/usb/usb_audio_qmi_v01.c",
+    "blob": "d09614c6391cdad9cae092ae1ddd91a79c9a05ac"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "sound/usb/usb_audio_qmi_v01.h",
+    "blob": "47c91ad789c218ae34e7a521beff05f282f2812b"
   }
 ]

@@ -1275,5 +1275,45 @@
   {
     "target": "mi_thermal_interface",
     "output": "mi_thermal_interface.ko"
+  },
+  {
+    "target": "ir_spi",
+    "output": "ir-spi.ko"
+  },
+  {
+    "target": "adsp_sleepmon",
+    "output": "adsp_sleepmon.ko"
+  },
+  {
+    "target": "cdsprm",
+    "output": "cdsprm.ko"
+  },
+  {
+    "target": "heap_mem_ext_v01",
+    "output": "heap_mem_ext_v01.ko"
+  },
+  {
+    "target": "msm_memshare",
+    "output": "msm_memshare.ko"
+  },
+  {
+    "target": "sps_drv",
+    "output": "sps_drv.ko"
+  },
+  {
+    "target": "qce50_dlkm",
+    "output": "qce50_dlkm.ko"
+  },
+  {
+    "target": "qcedev_mod_dlkm",
+    "output": "qcedev-mod_dlkm.ko"
+  },
+  {
+    "target": "qcrypto_msm_dlkm",
+    "output": "qcrypto-msm_dlkm.ko"
+  },
+  {
+    "target": "snd_usb_audio_qmi",
+    "output": "snd-usb-audio-qmi.ko"
   }
 ]

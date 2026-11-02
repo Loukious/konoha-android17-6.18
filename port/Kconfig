@@ -1333,3 +1333,21 @@ config MI_THERMAL_MULTI_CHARGE
 config HAVE_MULTI_SCREEN
 	bool "Xiaomi thermal secondary screen reporting"
 	depends on MI_THERMAL_INTERFACE
+
+config SPS
+    tristate "Qualcomm native Smart Peripheral Switch"
+    select GENERIC_ALLOCATOR
+
+config SPS_SUPPORT_NDP_BAM
+    bool "SPS supports no-data-path BAM"
+    depends on SPS
+
+config CRYPTO_DEV_QCEDEV
+    tristate "Qualcomm crypto userspace interface"
+
+config CRYPTO_DEV_QCRYPTO
+    tristate "Qualcomm crypto API interface"
+
+config CDSPRM_VTCM_DYNAMIC_DEBUG
+    bool "CDSP resource manager VTCM debug interface"
+    default n

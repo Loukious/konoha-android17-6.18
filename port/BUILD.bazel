@@ -4233,6 +4233,16 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":snd_usb_audio_qmi",
+        ":ir_spi",
+        ":adsp_sleepmon",
+        ":cdsprm",
+        ":heap_mem_ext_v01",
+        ":msm_memshare",
+        ":sps_drv",
+        ":qce50_dlkm",
+        ":qcedev_mod_dlkm",
+        ":qcrypto_msm_dlkm",
         ":mi_thermal_interface",
         ":msm_sharedmem",
         ":coresight_funnel",
@@ -4562,4 +4572,126 @@ ddk_module(
     kernel_build = "//common:kernel_aarch64",
     deps = [":input_headers", ":smartcharge_headers", ":mca_headers",
             ":panel_event_notifier", ":mca_smart_charge", ":mca_event"],
+)
+
+# Remaining active Onyx service drivers and native crypto DMA provider.
+ddk_headers(
+    name = "dsp_services_headers",
+    hdrs = glob(["include/linux/soc/qcom/cdsprm*.h"]) + [
+        "include/linux/soc/qcom/adsp_sleepmon_stats.h",
+        "include/uapi/misc/adsp_sleepmon.h",
+    ],
+    linux_includes = ["include", "include/uapi"],
+)
+
+ddk_headers(
+    name = "sps_headers",
+    hdrs = ["include/linux/msm-sps.h"],
+    linux_includes = ["include"],
+)
+
+ddk_headers(
+    name = "qce_headers",
+    hdrs = glob(["qcom/opensource/securemsm-kernel/crypto-qti/*.h"]),
+    includes = ["qcom/opensource/securemsm-kernel/crypto-qti"],
+)
+
+ddk_module(
+    name = "ir_spi",
+    srcs = ["drivers/media/rc/ir-spi.c"],
+    out = "ir-spi.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [],
+)
+
+ddk_module(
+    name = "adsp_sleepmon",
+    srcs = ["drivers/soc/qcom/adsp_sleepmon.c"],
+    out = "adsp_sleepmon.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":dsp_services_headers", ":remote_headers", ":smem", ":rproc_qcom_common", ":qcom_q6v5_pas"],
+)
+
+ddk_module(
+    name = "cdsprm",
+    srcs = ["drivers/soc/qcom/cdsprm.c"],
+    out = "cdsprm.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":dsp_services_headers"],
+)
+
+ddk_module(
+    name = "heap_mem_ext_v01",
+    srcs = ["drivers/soc/qcom/memshare/heap_mem_ext_v01.c", "drivers/soc/qcom/memshare/heap_mem_ext_v01.h"],
+    out = "heap_mem_ext_v01.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":remote_headers", ":qmi_helpers"],
+)
+
+ddk_module(
+    name = "msm_memshare",
+    srcs = ["drivers/soc/qcom/memshare/msm_memshare.c", "drivers/soc/qcom/memshare/msm_memshare.h", "drivers/soc/qcom/memshare/heap_mem_ext_v01.h"],
+    out = "msm_memshare.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":remote_headers", ":loader_headers", ":scm_headers", ":qmi_helpers", ":heap_mem_ext_v01", ":secure_buffer", ":qcom_scm", ":qcom_glink", ":rproc_qcom_common"],
+)
+
+ddk_module(
+    name = "sps_drv",
+    srcs = ["drivers/soc/qcom/sps/sps_core.h", "drivers/soc/qcom/sps/sps_bam.c", "drivers/soc/qcom/sps/bam.h", "drivers/soc/qcom/sps/spsi.h", "drivers/soc/qcom/sps/sps_map.h", "drivers/soc/qcom/sps/bam.c", "drivers/soc/qcom/sps/sps_dma.c", "drivers/soc/qcom/sps/sps_map.c", "drivers/soc/qcom/sps/sps_rm.c", "drivers/soc/qcom/sps/sps_bam.h", "drivers/soc/qcom/sps/sps_mem.c", "drivers/soc/qcom/sps/sps.c"],
+    out = "sps_drv.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":sps_headers", ":platform_headers", ":qcom_ipc_logging"],
+)
+
+ddk_module(
+    name = "qce50_dlkm",
+    srcs = ["qcom/opensource/securemsm-kernel/crypto-qti/qce50.c"],
+    out = "qce50_dlkm.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":qce_headers", ":sps_headers", ":secure_headers", ":sps_drv", ":soc_headers", ":socinfo"],
+)
+
+ddk_module(
+    name = "qcedev_mod_dlkm",
+    srcs = ["qcom/opensource/securemsm-kernel/crypto-qti/qcedev.c", "qcom/opensource/securemsm-kernel/crypto-qti/qcedev_smmu.c", "qcom/opensource/securemsm-kernel/crypto-qti/compat_qcedev.c"],
+    out = "qcedev-mod_dlkm.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":qce_headers", ":sps_headers", ":qce50_dlkm", ":secure_headers", ":scm_headers", ":loader_headers", ":mem_buf_headers", ":iommu_headers", ":smmu_headers", ":secure_buffer", ":mem_buf_dev"],
+)
+
+ddk_module(
+    name = "qcrypto_msm_dlkm",
+    srcs = ["qcom/opensource/securemsm-kernel/crypto-qti/qcrypto.c"],
+    out = "qcrypto-msm_dlkm.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":qce_headers", ":sps_headers", ":qce50_dlkm", ":secure_headers"],
+)
+
+ddk_module(
+    name = "snd_usb_audio_qmi",
+    srcs = ["sound/usb/usb_audio_qmi_svc.c", "sound/usb/usb_audio_qmi_v01.c"] + glob(["sound/usb/*.h"]),
+    out = "snd-usb-audio-qmi.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":remote_headers", ":qmi_helpers", ":platform_headers", ":qcom_ipc_logging"],
 )
