@@ -40,5 +40,6 @@
       "candidate_sha256": "298d5aa9929e706740678ef84947382ce630dec1184428b910002014f1c071fe"
     }
   },
-  "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged"
+  "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",
+  "integrated_upstream": []
 }
