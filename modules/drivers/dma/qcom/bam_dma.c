@@ -1289,9 +1289,24 @@ static struct dma_chan *bam_dma_xlate(struct of_phandle_args *dma_spec,
  *
  * Initialization helper for global bam registers
  */
+static unsigned int bam_mapped_channel_count(struct bam_device *bdev)
+{
+	unsigned int channel, reg;
+	for (channel = 0; channel < bdev->num_channels; channel++) {
+		for (reg = 0; reg < ARRAY_SIZE(bam_v1_7_reg_info); reg++) {
+			size_t offset = (unsigned long)bam_addr(bdev, channel, reg) -
+				(unsigned long)bdev->regs;
+			if (offset > bdev->regs_size || sizeof(u32) > bdev->regs_size - offset)
+				return channel;
+		}
+	}
+	return bdev->num_channels;
+}
+
 static int bam_init(struct bam_device *bdev)
 {
 	u32 val;
+	unsigned int mapped;
 
 	/* read revision and configuration information */
 	if (!bdev->num_ees) {
@@ -1310,11 +1325,14 @@ static int bam_init(struct bam_device *bdev)
 
 	if (!bdev->num_channels || bdev->num_channels > 31)
 		return -EINVAL;
-	for (int reg = 0; reg < ARRAY_SIZE(bam_v1_7_reg_info); reg++) {
-		size_t offset = (unsigned long)bam_addr(bdev, bdev->num_channels - 1, reg) -
-			(unsigned long)bdev->regs;
-		if (offset > bdev->regs_size || sizeof(u32) > bdev->regs_size - offset)
-			return -EINVAL;
+	/* Remote firmware may advertise pipes outside the HLOS register window. */
+	mapped = bam_mapped_channel_count(bdev);
+	if (!mapped)
+		return -EINVAL;
+	if (mapped < bdev->num_channels) {
+		dev_info(bdev->dev, "Register window exposes %u of %u BAM channels\n",
+			 mapped, bdev->num_channels);
+		bdev->num_channels = mapped;
 	}
 	/* Reset BAM now if fully controlled locally */
 	if (!bdev->controlled_remotely && !bdev->powered_remotely)

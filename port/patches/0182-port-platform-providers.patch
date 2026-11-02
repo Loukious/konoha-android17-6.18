@@ -5231,7 +5231,7 @@
  
  		if (i < 32)
  			continue;
-@@ -79,25 +81,32 @@
+@@ -79,25 +81,36 @@
  
  static int msm_show_resume_probe(struct platform_device *pdev)
  {
@@ -5241,11 +5241,15 @@
 -		return -ENXIO;
 +	struct resource *res;
 +	int ret;
-+	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-+	if (IS_ERR(base))
-+		return PTR_ERR(base);
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -EINVAL;
 +	if (resource_size(res) < GICD_ISPENDR + 32 * sizeof(u32))
 +		return -EINVAL;
++	/* The interrupt controller owns this region; the logger only reads it. */
++	base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++	if (!base)
++		return -ENOMEM;
 +	ret = register_trace_prio_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL, INT_MAX);
 +	if (ret)
 +		return ret;
@@ -5778,22 +5782,50 @@
  	}
  
  	bchan->fifo_virt = NULL;
-@@ -1316,6 +1308,14 @@
+@@ -1297,9 +1289,24 @@
+  *
+  * Initialization helper for global bam registers
+  */
++static unsigned int bam_mapped_channel_count(struct bam_device *bdev)
++{
++	unsigned int channel, reg;
++	for (channel = 0; channel < bdev->num_channels; channel++) {
++		for (reg = 0; reg < ARRAY_SIZE(bam_v1_7_reg_info); reg++) {
++			size_t offset = (unsigned long)bam_addr(bdev, channel, reg) -
++				(unsigned long)bdev->regs;
++			if (offset > bdev->regs_size || sizeof(u32) > bdev->regs_size - offset)
++				return channel;
++		}
++	}
++	return bdev->num_channels;
++}
++
+ static int bam_init(struct bam_device *bdev)
+ {
+ 	u32 val;
++	unsigned int mapped;
+ 
+ 	/* read revision and configuration information */
+ 	if (!bdev->num_ees) {
+@@ -1316,6 +1323,17 @@
  		bdev->num_channels = val & BAM_NUM_PIPES_MASK;
  	}
  
 +	if (!bdev->num_channels || bdev->num_channels > 31)
 +		return -EINVAL;
-+	for (int reg = 0; reg < ARRAY_SIZE(bam_v1_7_reg_info); reg++) {
-+		size_t offset = (unsigned long)bam_addr(bdev, bdev->num_channels - 1, reg) -
-+			(unsigned long)bdev->regs;
-+		if (offset > bdev->regs_size || sizeof(u32) > bdev->regs_size - offset)
-+			return -EINVAL;
++	/* Remote firmware may advertise pipes outside the HLOS register window. */
++	mapped = bam_mapped_channel_count(bdev);
++	if (!mapped)
++		return -EINVAL;
++	if (mapped < bdev->num_channels) {
++		dev_info(bdev->dev, "Register window exposes %u of %u BAM channels\n",
++			 mapped, bdev->num_channels);
++		bdev->num_channels = mapped;
 +	}
  	/* Reset BAM now if fully controlled locally */
  	if (!bdev->controlled_remotely && !bdev->powered_remotely)
  		bam_reset(bdev);
-@@ -1345,11 +1345,16 @@
+@@ -1345,11 +1363,16 @@
  
  MODULE_DEVICE_TABLE(of, bam_of_match);
  
@@ -5811,7 +5843,7 @@
  	int ret, i;
  
  	bdev = devm_kzalloc(&pdev->dev, sizeof(*bdev), GFP_KERNEL);
-@@ -1366,14 +1371,20 @@
+@@ -1366,14 +1389,20 @@
  
  	bdev->layout = match->data;
  
@@ -5835,7 +5867,7 @@
  
  	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
  		    "%s start %d\n", __func__, true);
-@@ -1382,6 +1393,8 @@
+@@ -1382,6 +1411,8 @@
  	remote_res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
  						"bam_remote_mem");
  	if (remote_res) {
@@ -5844,7 +5876,7 @@
  		bdev->r_mem.is_r_mem = true;
  		bdev->r_mem.r_pbase = (unsigned long long)remote_res->start;
  		bdev->r_mem.r_vbase = devm_ioremap(&pdev->dev,
-@@ -1412,6 +1425,8 @@
+@@ -1412,6 +1443,8 @@
  		return ret;
  	}
  
@@ -5853,7 +5885,7 @@
  	bdev->controlled_remotely = of_property_read_bool(pdev->dev.of_node,
  						"qcom,controlled-remotely");
  	bdev->powered_remotely = of_property_read_bool(pdev->dev.of_node,
-@@ -1472,13 +1487,10 @@
+@@ -1472,13 +1505,10 @@
  	if (ret)
  		goto err_bam_channel_exit;
  
@@ -5869,7 +5901,7 @@
  
  	platform_set_drvdata(pdev, bdev);
  
-@@ -1527,6 +1539,8 @@
+@@ -1527,6 +1557,8 @@
  err_unregister_dma:
  	dma_async_device_unregister(&bdev->common);
  err_bam_channel_exit:
@@ -5878,7 +5910,7 @@
  	for (i = 0; i < bdev->num_channels; i++)
  		tasklet_kill(&bdev->channels[i].vc.task);
  err_tasklet_kill:
-@@ -1537,42 +1551,34 @@
+@@ -1537,42 +1569,34 @@
  	return ret;
  }
  

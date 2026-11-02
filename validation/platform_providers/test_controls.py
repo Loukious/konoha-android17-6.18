@@ -64,6 +64,26 @@ static int kstrtou32(const char *s, unsigned base, u32 *out) {
 '''
 
 fixtures = {}
+bam_source = (M / 'drivers/dma/qcom/bam_dma.c').read_text()
+bam_layouts = bam_source[bam_source.index('enum bam_reg {'):bam_source.index('/* BAM CTRL */')]
+fixtures['bam-register-window'] = BASE + bam_layouts + r'''
+struct bam_device {void *regs;u32 ee,num_channels;size_t regs_size;const struct reg_offset_data *layout;};
+''' + function('drivers/dma/qcom/bam_dma.c', 'bam_addr') + function('drivers/dma/qcom/bam_dma.c', 'bam_mapped_channel_count') + r'''
+int main(void) {
+ unsigned char regs[0x100000]; unsigned tests=0;
+ struct bam_device b={.regs=regs,.ee=1,.num_channels=31,.regs_size=0x20000,.layout=bam_v1_7_reg_info};
+ assert(bam_mapped_channel_count(&b)==13);tests++;
+ b.regs_size=0x1f830;assert(bam_mapped_channel_count(&b)==13);tests++;
+ b.regs_size=0x1f82f;assert(bam_mapped_channel_count(&b)==12);tests++;
+ b.num_channels=1;b.regs_size=0x13830;assert(bam_mapped_channel_count(&b)==1);tests++;
+ b.num_channels=0;assert(!bam_mapped_channel_count(&b));tests++;
+ b.num_channels=31;b.regs_size=0x1004;assert(!bam_mapped_channel_count(&b));tests++;
+ b.regs_size=0x20000;b.layout=bam_v1_3_reg_info;assert(bam_mapped_channel_count(&b)==31);tests++;
+ b.layout=bam_v1_4_reg_info;assert(bam_mapped_channel_count(&b)==31);tests++;
+ b.regs_size=sizeof(regs);b.layout=bam_v1_7_reg_info;assert(bam_mapped_channel_count(&b)==31);tests++;
+ printf("%u\n",tests);
+}
+'''
 fixtures['gear-input'] = BASE + function('include/soc/qcom/mpam.h', 'qcom_mpam_parse_gear') + r'''
 int main(void) {
     const char *bad[]={"", "gear", "gear=", "prio=1", "gear=-1", "gear=4294967296",

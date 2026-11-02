@@ -83,11 +83,15 @@ static int msm_show_resume_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	int ret;
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
 	if (resource_size(res) < GICD_ISPENDR + 32 * sizeof(u32))
 		return -EINVAL;
+	/* The interrupt controller owns this region; the logger only reads it. */
+	base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	if (!base)
+		return -ENOMEM;
 	ret = register_trace_prio_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL, INT_MAX);
 	if (ret)
 		return ret;
