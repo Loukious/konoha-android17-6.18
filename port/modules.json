@@ -1315,5 +1315,81 @@
   {
     "target": "snd_usb_audio_qmi",
     "output": "snd-usb-audio-qmi.ko"
+  },
+  {
+    "target": "mpam",
+    "output": "mpam.ko"
+  },
+  {
+    "target": "cpu_mpam",
+    "output": "cpu_mpam.ko"
+  },
+  {
+    "target": "platform_mpam",
+    "output": "platform_mpam.ko"
+  },
+  {
+    "target": "mpam_msc",
+    "output": "mpam_msc.ko"
+  },
+  {
+    "target": "mpam_msc_slc",
+    "output": "mpam_msc_slc.ko"
+  },
+  {
+    "target": "slc_mpam",
+    "output": "slc_mpam.ko"
+  },
+  {
+    "target": "llcc_heuristics",
+    "output": "llcc_heuristics.ko"
+  },
+  {
+    "target": "gpio_mi_t1",
+    "output": "gpio-mi-t1.ko"
+  },
+  {
+    "target": "gh_tlmm_vm_mem_access",
+    "output": "gh_tlmm_vm_mem_access.ko"
+  },
+  {
+    "target": "qcom_stats",
+    "output": "qcom_stats.ko"
+  },
+  {
+    "target": "msm_show_resume_irq",
+    "output": "msm_show_resume_irq.ko"
+  },
+  {
+    "target": "pmic_glink_debug",
+    "output": "pmic-glink-debug.ko"
+  },
+  {
+    "target": "spmi_pmic_arb_debug",
+    "output": "spmi-pmic-arb-debug.ko"
+  },
+  {
+    "target": "qcom_pbs",
+    "output": "qcom-pbs.ko"
+  },
+  {
+    "target": "leds_qcom_lpg",
+    "output": "leds-qcom-lpg.ko"
+  },
+  {
+    "target": "bam_dma",
+    "output": "bam_dma.ko"
+  },
+  {
+    "target": "coresight_tpdm",
+    "output": "coresight-tpdm.ko"
+  },
+  {
+    "target": "mca_ut_test",
+    "output": "mca_ut_test.ko"
+  },
+  {
+    "target": "hl7603",
+    "output": "hl7603.ko"
   }
 ]
