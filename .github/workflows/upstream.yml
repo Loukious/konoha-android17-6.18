@@ -61,7 +61,8 @@ jobs:
         if: steps.detect.outputs.kernel_changed == 'true'
         env:
           REVISION: ${{ steps.detect.outputs.latest }}
-        run: python3 ci/publish_update.py "$REVISION"
+          KERNELSU_REVISION: ${{ steps.detect.outputs.kernelsu }}
+        run: python3 ci/publish_update.py "$REVISION" --kernelsu "$KERNELSU_REVISION"
       - name: Rebuild accepted source when its source or KernelSU dev changes
         if: steps.detect.outputs.kernel_changed != 'true' && (steps.detect.outputs.kernelsu_changed == 'true' || steps.detect.outputs.source_changed == 'true')
         run: gh workflow run build.yml --ref ci -f source_ref=android17-6.18

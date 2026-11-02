@@ -188,7 +188,7 @@ class SnapshotTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
-    def exercise(self, proposals, builds):
+    def exercise(self, proposals, builds, kernelsu=None):
         publisher = module('publish_update')
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -213,7 +213,7 @@ class PublicationTests(unittest.TestCase):
                     return json.dumps(builds)
                 return ''
             with patch.object(publisher, 'ROOT', root), patch.object(publisher, 'run', side_effect=run):
-                result = publisher.publish('a' * 40)
+                result = publisher.publish('a' * 40, kernelsu)
             self.assertFalse(any(args[:2] in [['git', 'push'], ['git', 'commit'], ['git', 'checkout']]
                                  for args in calls))
             return result, calls
@@ -244,6 +244,15 @@ class PublicationTests(unittest.TestCase):
                                       [{'displayTitle': 'Build android17-6.18', 'status': 'in_progress',
                                         'conclusion': '', 'url': 'build'}])
         self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
+
+    def test_new_kernelsu_rebuilds_existing_lts_candidate(self):
+        title = 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12
+        result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
+                                      [{'displayTitle': title + ' / KSU ' + 'c' * 40,
+                                        'status': 'completed', 'conclusion': 'success', 'url': 'build'}],
+                                      kernelsu='d' * 40)
+        self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] and
+                            'kernelsu_revision=' + 'd' * 40 in args for args in calls))
 
 
 class BuildStateTests(unittest.TestCase):

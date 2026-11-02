@@ -17,9 +17,11 @@ def run(args, **kwargs):
     return subprocess.check_output(args, cwd=ROOT, text=True, **kwargs).strip()
 
 
-def publish(revision):
+def publish(revision, kernelsu=None):
     if not re.fullmatch('[0-9a-f]{40}', revision):
         raise ValueError('Invalid upstream revision')
+    if kernelsu is not None and not re.fullmatch('[0-9a-f]{40}', kernelsu):
+        raise ValueError('Invalid detected KernelSU revision')
     pins = json.loads((ROOT / 'port/sources.json').read_text())
     if pins['common']['revision'] != revision:
         raise ValueError('Candidate does not match detected upstream')
@@ -65,16 +67,22 @@ def publish(revision):
                        '--title', f'Android 17 LTS {version}', '--body-file', str(path)])
     builds = json.loads(run(['gh', 'run', 'list', '--workflow', 'build.yml', '--branch', TRACK['ci_branch'],
                             '--limit', '100', '--json', 'displayTitle,status,conclusion,url']))
-    builds = [build for build in builds if build['displayTitle'] == 'Build ' + branch]
+    title = 'Build ' + branch + (' / KSU ' + kernelsu if kernelsu else '')
+    builds = [build for build in builds if build['displayTitle'] == title]
     if builds:
         return {'status': 'candidate and build already exist', 'branch': branch,
                 'url': url, 'build': builds[0]}
     # GITHUB_TOKEN pushes do not trigger another workflow; dispatch explicitly.
-    run(['gh', 'workflow', 'run', 'build.yml', '--ref', TRACK['ci_branch'], '-f', 'source_ref=' + branch])
+    dispatch = ['gh', 'workflow', 'run', 'build.yml', '--ref', TRACK['ci_branch'], '-f', 'source_ref=' + branch]
+    if kernelsu:
+        dispatch += ['-f', 'kernelsu_revision=' + kernelsu]
+    run(dispatch)
     return {'status': 'candidate PR opened; complete build dispatched', 'branch': branch, 'url': url}
 
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('revision')
-    print(json.dumps(publish(p.parse_args().revision), indent=2))
+    p.add_argument('--kernelsu', help='detected dev HEAD used to identify a new candidate build')
+    a = p.parse_args()
+    print(json.dumps(publish(a.revision, a.kernelsu), indent=2))
