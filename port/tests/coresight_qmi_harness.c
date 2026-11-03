@@ -10,6 +10,7 @@
 typedef uint8_t u8;
 typedef uint32_t u32;
 typedef uint64_t u64;
+enum cs_mode { CS_MODE_SYSFS };
 typedef int raw_spinlock_t;
 struct mutex { int held; };
 struct qmi_handle { int initialized; };
@@ -124,6 +125,16 @@ static int call(int op) {
     return coresight_qmi_assign_atid(&cs, &atid);
 }
 int main(void) {
+    reset();
+    CHECK(qmi_helper_enable(&cs, CS_MODE_SYSFS, NULL) == -ENOTCONN);
+    fixture.service_connected = true;
+    CHECK(qmi_helper_enable(&cs, CS_MODE_SYSFS, NULL) == 0 && fixture.path_users == 1);
+    CHECK(qmi_helper_enable(&cs, CS_MODE_SYSFS, NULL) == 0 && fixture.path_users == 2);
+    CHECK(qmi_helper_disable(&cs, NULL) == 0 && fixture.path_users == 1);
+    CHECK(qmi_helper_disable(&cs, NULL) == 0 && !fixture.path_users);
+    CHECK(qmi_helper_disable(&cs, NULL) == -EINVAL);
+    fixture.path_users = UINT_MAX; CHECK(qmi_helper_enable(&cs, CS_MODE_SYSFS, NULL) == -EOVERFLOW);
+    fixture.path_users = 0; fixture.removing = true; CHECK(qmi_helper_enable(&cs, CS_MODE_SYSFS, NULL) == -ENODEV);
     for (int op = 0; op < 4; op++) {
         for (int failure = 0; failure < 7; failure++) {
             reset(); fixture.service_connected = true;

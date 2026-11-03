@@ -1,5 +1,5 @@
 diff --git a/drivers/hwtracing/coresight/coresight-tgu.c b/drivers/hwtracing/coresight/coresight-tgu.c
-index 705db7d..e9273cf 100644
+index 705db7d..3a09f69 100644
 --- a/drivers/hwtracing/coresight/coresight-tgu.c
 +++ b/drivers/hwtracing/coresight/coresight-tgu.c
 @@ -16,6 +16,8 @@
@@ -473,7 +473,7 @@ index 705db7d..e9273cf 100644
  }
  static DEVICE_ATTR_WO(set_counter);
  
-@@ -398,6 +362,21 @@ static const struct attribute_group *tgu_attr_grps[] = {
+@@ -398,6 +362,36 @@ static const struct attribute_group *tgu_attr_grps[] = {
  	NULL,
  };
  
@@ -490,12 +490,27 @@ index 705db7d..e9273cf 100644
 +	return 0;
 +}
 +
-+static const struct coresight_ops tgu_ops = {};
++/* TGU is armed through its control attributes, not through a trace path. */
++static int tgu_path_enable(struct coresight_device *csdev, enum cs_mode mode, void *data)
++{
++	return -EOPNOTSUPP;
++}
++
++static int tgu_path_disable(struct coresight_device *csdev, void *data)
++{
++	return -EOPNOTSUPP;
++}
++
++static const struct coresight_ops_helper tgu_helper_ops = {
++	.enable = tgu_path_enable,
++	.disable = tgu_path_disable,
++};
++static const struct coresight_ops tgu_ops = { .helper_ops = &tgu_helper_ops };
 +
  static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  {
  	int ret = 0;
-@@ -406,7 +385,8 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -406,7 +400,8 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  	struct tgu_drvdata *drvdata;
  	struct coresight_desc desc = { 0 };
  
@@ -505,7 +520,7 @@ index 705db7d..e9273cf 100644
  	if (!desc.name)
  		return -ENOMEM;
  	pdata = coresight_get_platform_data(dev);
-@@ -423,10 +403,11 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -423,10 +418,11 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  	dev_set_drvdata(dev, drvdata);
  
  	drvdata->base = devm_ioremap_resource(dev, &adev->res);
@@ -520,7 +535,7 @@ index 705db7d..e9273cf 100644
  
  	ret = of_property_read_u32(adev->dev.of_node, "tgu-steps",
  						&drvdata->max_steps);
-@@ -448,6 +429,10 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -448,6 +444,10 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  	if (ret)
  		return -EINVAL;
  
@@ -531,7 +546,7 @@ index 705db7d..e9273cf 100644
  	/* Alloc memory for Grps, Conditions and Steps */
  	drvdata->grp_data = devm_kzalloc(dev, MAX_GROUP_SETS *
  				       sizeof(*drvdata->grp_data),
-@@ -483,6 +468,9 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -483,6 +483,9 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  	drvdata->enable = false;
  
  	desc.type = CORESIGHT_DEV_TYPE_HELPER;
@@ -541,7 +556,7 @@ index 705db7d..e9273cf 100644
  	desc.pdata = adev->dev.platform_data;
  	desc.dev = &adev->dev;
  	desc.groups = tgu_attr_grps;
-@@ -492,18 +480,30 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -492,18 +495,30 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
  		goto err;
  	}
  
@@ -577,7 +592,7 @@ index 705db7d..e9273cf 100644
  }
  
  static struct amba_id tgu_ids[] = {
-@@ -515,6 +515,8 @@ static struct amba_id tgu_ids[] = {
+@@ -515,6 +530,8 @@ static struct amba_id tgu_ids[] = {
  	{ 0, 0},
  };
  

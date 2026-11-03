@@ -8,6 +8,7 @@
 #include <string.h>
 typedef uint32_t u32;
 typedef size_t resource_size_t;
+enum cs_mode { CS_MODE_SYSFS };
 #define __iomem
 #define U32_MAX UINT32_MAX
 #define CORESIGHT_LAR 0xfb0
@@ -85,6 +86,8 @@ static void reset(void) {
 }
 static void initialized(void) { reset(); CHECK(tgu_probe(&adev, NULL) == 0); CHECK(pm_votes == 0); }
 int main(void) {
+    CHECK(tgu_path_enable(&cs, CS_MODE_SYSFS, NULL) == -EOPNOTSUPP);
+    CHECK(tgu_path_disable(&cs, NULL) == -EOPNOTSUPP);
     for (int fail = 1; fail <= 6; fail++) {
         reset(); fail_alloc = fail; CHECK(tgu_probe(&adev, NULL) == -ENOMEM); CHECK(!unregisters);
     }

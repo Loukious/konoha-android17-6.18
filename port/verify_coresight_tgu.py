@@ -19,7 +19,7 @@ def verify(staged):
     declarations = source[source.index("#define tgu_writel"):source.index("DEFINE_CORESIGHT_DEVLIST")]
     functions = "\n".join(function(source, name) for name in ["enable_tgu_store", "reset_tgu_store",
         "set_group_store", "set_condition_store", "set_select_store", "set_timer_store", "set_counter_store",
-        "tgu_validate_layout", "tgu_probe", "tgu_remove"])
+        "tgu_validate_layout", "tgu_path_enable", "tgu_path_disable", "tgu_probe", "tgu_remove"])
     harness = (HERE / "tests/coresight_tgu_harness.c").read_text()
     with tempfile.TemporaryDirectory(prefix="konoha-tgu-test-") as directory:
         c = Path(directory) / "tgu.c"

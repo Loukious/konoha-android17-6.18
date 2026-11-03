@@ -18,7 +18,8 @@ def verify(staged):
     source, header = [p.read_text() for p in paths]
     selected = ["service_coresight_qmi_new_server", "service_coresight_qmi_del_server",
                 "coresight_qmi_request", "coresight_qmi_remote_etm_enable", "coresight_qmi_remote_etm_disable",
-                "coresight_qmi_etr_assign", "coresight_qmi_assign_atid", "coresight_qmi_probe", "coresight_qmi_remove"]
+                "coresight_qmi_etr_assign", "coresight_qmi_assign_atid", "qmi_helper_enable", "qmi_helper_disable",
+                "coresight_qmi_probe", "coresight_qmi_remove"]
     functions = "\n".join(function(source, name) for name in selected)
     header = "\n".join(line for line in header.splitlines() if not line.startswith("#include "))
     harness = (HERE / "tests/coresight_qmi_harness.c").read_text()

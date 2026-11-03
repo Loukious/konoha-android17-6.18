@@ -1,5 +1,5 @@
 diff --git a/drivers/hwtracing/coresight/coresight-qmi.c b/drivers/hwtracing/coresight/coresight-qmi.c
-index 0f81299..50326da 100644
+index 0f81299..05321d5 100644
 --- a/drivers/hwtracing/coresight/coresight-qmi.c
 +++ b/drivers/hwtracing/coresight/coresight-qmi.c
 @@ -16,6 +16,7 @@
@@ -169,7 +169,10 @@ index 0f81299..50326da 100644
 -	struct coresight_set_etm_resp_msg_v01 resp = { { 0, 0 } };
 -	struct qmi_txn txn;
 -	int ret;
--
++	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	struct coresight_set_etm_req_msg_v01 req = { .state = CORESIGHT_ETM_STATE_ENABLED_V01 };
++	struct coresight_set_etm_resp_msg_v01 resp = {};
+ 
 -	mutex_lock(&drvdata->mutex);
 -	if (!drvdata->service_connected) {
 -		dev_err(drvdata->dev, "QMI service not connected!\n");
@@ -199,10 +202,7 @@ index 0f81299..50326da 100644
 -		qmi_txn_cancel(&txn);
 -		goto err;
 -	}
-+	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
-+	struct coresight_set_etm_req_msg_v01 req = { .state = CORESIGHT_ETM_STATE_ENABLED_V01 };
-+	struct coresight_set_etm_resp_msg_v01 resp = {};
- 
+-
 -	ret = qmi_txn_wait(&txn, msecs_to_jiffies(TIMEOUT_MS));
 -	if (ret < 0) {
 -		dev_err(drvdata->dev, "QMI qmi txn wait failed, ret:%d\n",
@@ -237,7 +237,7 @@ index 0f81299..50326da 100644
  }
  EXPORT_SYMBOL_GPL(coresight_qmi_remote_etm_disable);
  
-@@ -194,138 +122,37 @@ EXPORT_SYMBOL_GPL(coresight_qmi_remote_etm_disable);
+@@ -194,144 +122,77 @@ EXPORT_SYMBOL_GPL(coresight_qmi_remote_etm_disable);
  int coresight_qmi_etr_assign(struct coresight_device *csdev,
  		struct coresight_etr_assign_req_msg_v01 *req)
  {
@@ -336,7 +336,10 @@ index 0f81299..50326da 100644
 -	 *    than service is ready to handle request
 -	 * 3. Connection between QMI client and QMI service failed
 -	 */
--
++	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	struct coresight_atid_assign_resp_msg_v01 resp = {};
++	unsigned int i, j;
+ 
 -	ret = qmi_txn_init(&drvdata->handle, &txn,
 -			coresight_atid_assign_resp_msg_v01_ei,
 -			&resp);
@@ -346,10 +349,7 @@ index 0f81299..50326da 100644
 -				ret);
 -		goto err;
 -	}
-+	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
-+	struct coresight_atid_assign_resp_msg_v01 resp = {};
-+	unsigned int i, j;
- 
+-
 -	ret = qmi_send_request(&drvdata->handle, &drvdata->s_addr,
 -			&txn, CORESIGHT_QMI_ATID_ASSIGN_V01,
 -			CORESIGHT_QMI_ATID_ASSIGN_REQ_MAX_LEN,
@@ -359,13 +359,6 @@ index 0f81299..50326da 100644
 -		dev_err(drvdata->dev, "QMI send ACK failed, ret:%d\n",
 -				ret);
 -		qmi_txn_cancel(&txn);
--		goto err;
--	}
--
--	ret = qmi_txn_wait(&txn, msecs_to_jiffies(TIMEOUT_MS));
--	if (ret < 0) {
--		dev_err(drvdata->dev, "QMI qmi txn wait failed, ret:%d\n",
--				ret);
 -		goto err;
 +	if (!req || !req->num_atids || req->num_atids > ARRAY_SIZE(req->atids) ||
 +	    !req->name[0] || strnlen(req->name, sizeof(req->name)) == sizeof(req->name))
@@ -377,27 +370,72 @@ index 0f81299..50326da 100644
 +			if (req->atids[j] == req->atids[i])
 +				return -EINVAL;
  	}
--
++	return coresight_qmi_request(d, CORESIGHT_QMI_ATID_ASSIGN_V01,
++		CORESIGHT_QMI_ATID_ASSIGN_REQ_MAX_LEN, coresight_atid_assign_req_msg_v01_ei,
++		req, coresight_atid_assign_resp_msg_v01_ei, &resp, &resp.resp);
++}
++EXPORT_SYMBOL_GPL(coresight_qmi_assign_atid);
+ 
+-	ret = qmi_txn_wait(&txn, msecs_to_jiffies(TIMEOUT_MS));
+-	if (ret < 0) {
+-		dev_err(drvdata->dev, "QMI qmi txn wait failed, ret:%d\n",
+-				ret);
+-		goto err;
+-	}
++static int qmi_helper_enable(struct coresight_device *csdev, enum cs_mode mode, void *data)
++{
++	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	unsigned long flags;
++	int ret = 0;
+ 
 -	/* Check the response */
 -	if (resp.resp.result != QMI_RESULT_SUCCESS_V01)
 -		dev_err(drvdata->dev, "QMI request failed 0x%x\n",
 -				resp.resp.error);
--
++	raw_spin_lock_irqsave(&d->server_lock, flags);
++	if (d->removing)
++		ret = -ENODEV;
++	else if (!d->service_connected)
++		ret = -ENOTCONN;
++	else if (d->path_users == UINT_MAX)
++		ret = -EOVERFLOW;
++	else
++		d->path_users++;
++	raw_spin_unlock_irqrestore(&d->server_lock, flags);
++	return ret;
++}
+ 
 -	mutex_unlock(&drvdata->mutex);
--
++static int qmi_helper_disable(struct coresight_device *csdev, void *data)
++{
++	struct qmi_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	unsigned long flags;
++	int ret = 0;
+ 
 -	dev_info(drvdata->dev, "ATID assign for instance %d\n",
 -				drvdata->inst_id);
 -	return 0;
 -err:
 -	mutex_unlock(&drvdata->mutex);
--	return ret;
-+	return coresight_qmi_request(d, CORESIGHT_QMI_ATID_ASSIGN_V01,
-+		CORESIGHT_QMI_ATID_ASSIGN_REQ_MAX_LEN, coresight_atid_assign_req_msg_v01_ei,
-+		req, coresight_atid_assign_resp_msg_v01_ei, &resp, &resp.resp);
++	raw_spin_lock_irqsave(&d->server_lock, flags);
++	if (!d->path_users)
++		ret = -EINVAL;
++	else
++		d->path_users--;
++	raw_spin_unlock_irqrestore(&d->server_lock, flags);
+ 	return ret;
  }
- EXPORT_SYMBOL_GPL(coresight_qmi_assign_atid);
+-EXPORT_SYMBOL_GPL(coresight_qmi_assign_atid);
  
-@@ -347,7 +174,8 @@ static int coresight_qmi_probe(struct platform_device *pdev)
+ static const struct coresight_ops_helper qmi_helper_ops = {
+-	.enable = NULL,
+-	.disable = NULL,
++	.enable = qmi_helper_enable,
++	.disable = qmi_helper_disable,
+ };
+ 
+ static const struct coresight_ops qmi_ops = {
+@@ -347,7 +208,8 @@ static int coresight_qmi_probe(struct platform_device *pdev)
  	struct coresight_desc desc = {0 };
  	int ret;
  
@@ -407,7 +445,7 @@ index 0f81299..50326da 100644
  	if (!desc.name)
  		return -ENOMEM;
  	pdata = coresight_get_platform_data(dev);
-@@ -368,21 +196,25 @@ static int coresight_qmi_probe(struct platform_device *pdev)
+@@ -368,21 +230,25 @@ static int coresight_qmi_probe(struct platform_device *pdev)
  		return ret;
  
  	mutex_init(&drvdata->mutex);
@@ -435,7 +473,7 @@ index 0f81299..50326da 100644
  	desc.pdata = pdev->dev.platform_data;
  	desc.dev = &pdev->dev;
  	desc.ops = &qmi_ops;
-@@ -399,19 +231,26 @@ err:
+@@ -399,19 +265,26 @@ err:
  	return ret;
  }
  
@@ -468,7 +506,7 @@ index 0f81299..50326da 100644
  
  static struct platform_driver coresight_qmi_driver = {
  	.probe          = coresight_qmi_probe,
-@@ -419,6 +258,7 @@ static struct platform_driver coresight_qmi_driver = {
+@@ -419,6 +292,7 @@ static struct platform_driver coresight_qmi_driver = {
  	.driver         = {
  		.name   = "coresight-qmi",
  		.of_match_table = coresight_qmi_match,
@@ -477,7 +515,7 @@ index 0f81299..50326da 100644
  };
  
 diff --git a/drivers/hwtracing/coresight/coresight-qmi.h b/drivers/hwtracing/coresight/coresight-qmi.h
-index 4f0ffe4..4cf42ec 100644
+index 4f0ffe4..7611b4c 100644
 --- a/drivers/hwtracing/coresight/coresight-qmi.h
 +++ b/drivers/hwtracing/coresight/coresight-qmi.h
 @@ -7,6 +7,8 @@
@@ -489,16 +527,17 @@ index 4f0ffe4..4cf42ec 100644
  
  #define CORESIGHT_QMI_SVC_ID			(0x33)
  #define CORESIGHT_QMI_VERSION			(1)
-@@ -39,6 +41,8 @@ struct qmi_drvdata {
+@@ -39,6 +41,9 @@ struct qmi_drvdata {
  	struct qmi_handle	handle;
  	uint32_t		inst_id;
  	bool			service_connected;
 +	bool			removing;
++	unsigned int		path_users;
 +	raw_spinlock_t		server_lock;
  	bool			security;
  	struct sockaddr_qrtr	s_addr;
  };
-@@ -117,6 +121,7 @@ struct cs_qmi_data {
+@@ -117,6 +122,7 @@ struct cs_qmi_data {
  	struct  coresight_atid_assign_req_msg_v01 *atid_data;
  };
  
@@ -506,7 +545,7 @@ index 4f0ffe4..4cf42ec 100644
  static struct qmi_elem_info coresight_etr_assign_req_msg_v01_ei[] = {
  	{
  		.data_type = QMI_UNSIGNED_4_BYTE,
-@@ -299,18 +304,21 @@ static struct qmi_elem_info coresight_atid_assign_resp_msg_v01_ei[] = {
+@@ -299,18 +305,21 @@ static struct qmi_elem_info coresight_atid_assign_resp_msg_v01_ei[] = {
  	},
  };
  
@@ -530,7 +569,7 @@ index 4f0ffe4..4cf42ec 100644
  extern int coresight_qmi_etr_assign(struct coresight_device *csdev,
  		struct coresight_etr_assign_req_msg_v01 *req);
  extern int coresight_qmi_assign_atid(struct coresight_device *csdev,
-@@ -323,8 +331,8 @@ static inline int coresight_qmi_etr_assign(struct coresight_device *csdev,
+@@ -323,8 +332,8 @@ static inline int coresight_qmi_etr_assign(struct coresight_device *csdev,
  		struct coresight_etr_assign_req_msg_v01 *req) {return -EINVAL; }
  static inline int coresight_qmi_assign_atid(struct coresight_device *csdev,
  		struct coresight_atid_assign_req_msg_v01 *req) {return -EINVAL; }

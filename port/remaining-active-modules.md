@@ -116,7 +116,7 @@ drains the QMI handle. Failed lookup or CoreSight publication releases the
 initialized handle. A helper must be owned by the QMI driver before a caller
 can treat its data as QMI state.
 
-`verify_coresight_qmi.py` passes 766 actual-C ASan/UBSan cases for all four
+`verify_coresight_qmi.py` passes 774 actual-C ASan/UBSan cases for all four
 commands, transport/firmware failures, transaction cancellation, endpoint
 replacement, callbacks during a transaction, ATID/name/buffer bounds, probe
 rollback and removal. Firmware and physical trace delivery remain untested while
@@ -133,7 +133,13 @@ TGU before releasing that vote. No PM operation runs under a spinlock. Remove
 drains sysfs before devm state disappears. Explicit native names and register
 layouts are retained, with a dedicated common helper subtype instead of CATU.
 
-`verify_coresight_tgu.py` passes 2,014 actual-C ASan/UBSan cases covering all
+`verify_coresight_tgu.py` passes 2,016 actual-C ASan/UBSan cases covering all
 layout-count boundaries, capacity-filled arrays, selector/word bounds, real
 programming offsets, failed PM/claim/probe paths, re-enable, reset and removal.
 Physical bus-event trigger timing remains untested while the phone is disconnected.
+
+
+The common CoreSight core requires callable helper operations. QMI path activation
+checks service readiness and counts path votes before its source sends commands.
+TGU explicitly rejects trace-path activation because its arming interface is the
+native control attributes; no fitted TGU node has a trace graph connection.
