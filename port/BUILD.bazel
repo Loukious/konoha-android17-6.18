@@ -4311,6 +4311,9 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":coresight_dummy",
+        ":coresight_remote_etm",
+
         ":coresight_tgu",
         ":coresight_qmi",
         ":mca_ibat_ocp_monitor",
@@ -5185,4 +5188,24 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers"],
+)
+
+ddk_module(
+    name = "coresight_dummy",
+    srcs = ["drivers/hwtracing/coresight/coresight-dummy.c"],
+    out = "coresight-dummy.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":coresight_qmi", ":coresight_csr"],
+)
+
+ddk_module(
+    name = "coresight_remote_etm",
+    srcs = ["drivers/hwtracing/coresight/coresight-remote-etm.c"],
+    out = "coresight-remote-etm.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":coresight_qmi", ":coresight_csr"],
 )

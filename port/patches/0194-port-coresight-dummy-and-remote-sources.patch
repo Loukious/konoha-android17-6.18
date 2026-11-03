@@ -1,0 +1,972 @@
+diff --git a/drivers/hwtracing/coresight/coresight-csr.c b/drivers/hwtracing/coresight/coresight-csr.c
+index 166bcb5..40306b4 100644
+--- a/drivers/hwtracing/coresight/coresight-csr.c
++++ b/drivers/hwtracing/coresight/coresight-csr.c
+@@ -96,6 +96,60 @@ out:
+ 	return ret;
+ }
+ 
++/* The primary ID is already owned by the common CSR path helper. */
++int qcom_csr_route_ids(struct coresight_path *path, const u8 *ids, unsigned int count, bool enable)
++{
++	struct coresight_device *sink, *helper = NULL;
++	struct csr_drvdata *d;
++	u32 offset;
++	unsigned int i, j;
++	int conn, ret;
++
++	if (!path || !ids || !count || count > 8)
++		return -EINVAL;
++	for (i = 0; i < count; i++) {
++		if (!IS_VALID_CS_TRACE_ID(ids[i]))
++			return -EINVAL;
++		for (j = 0; j < i; j++)
++			if (ids[i] == ids[j])
++				return -EINVAL;
++	}
++	sink = coresight_get_sink(path);
++	if (!sink)
++		return -EINVAL;
++	/* Native non-ETR sinks have no ATID filter to program. */
++	if (!device_property_present(sink->dev.parent, "coresight-csr"))
++		return 0;
++	for (conn = 0; conn < sink->pdata->nr_outconns; conn++) {
++		helper = sink->pdata->out_conns[conn]->dest_dev;
++		if (helper && helper->type == CORESIGHT_DEV_TYPE_HELPER &&
++		    helper->subtype.helper_subtype == CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR)
++			break;
++		helper = NULL;
++	}
++	if (!helper)
++		return -ENODEV;
++	if (device_property_read_u32(sink->dev.parent, "csr-atid-offset", &offset))
++		return -EINVAL;
++	d = dev_get_drvdata(helper->dev.parent);
++	for (i = 0; i < count; i++) {
++		if (ids[i] == path->trace_id)
++			continue;
++		ret = csr_route(d, offset, ids[i], enable);
++		if (ret)
++			goto rollback;
++	}
++	return 0;
++rollback:
++	if (enable)
++		while (i--) {
++			if (ids[i] != path->trace_id)
++				csr_route(d, offset, ids[i], false);
++		}
++	return ret;
++}
++EXPORT_SYMBOL_GPL(qcom_csr_route_ids);
++
+ static int csr_path_route(struct coresight_device *csdev, void *data, bool enable)
+ {
+ 	struct csr_drvdata *d = dev_get_drvdata(csdev->dev.parent);
+diff --git a/drivers/hwtracing/coresight/coresight-csr.h b/drivers/hwtracing/coresight/coresight-csr.h
+index 783d970..595f749 100644
+--- a/drivers/hwtracing/coresight/coresight-csr.h
++++ b/drivers/hwtracing/coresight/coresight-csr.h
+@@ -5,4 +5,5 @@
+ int qcom_csr_attach(struct device *dev, struct coresight_platform_data *pdata,
+                     struct coresight_device **helper);
+ int qcom_csr_set_byte_counter(struct coresight_device *csdev, u32 offset, u32 count);
++int qcom_csr_route_ids(struct coresight_path *path, const u8 *ids, unsigned int count, bool enable);
+ #endif
+diff --git a/drivers/hwtracing/coresight/coresight-dummy.c b/drivers/hwtracing/coresight/coresight-dummy.c
+index e2a7176..a4ec61e 100644
+--- a/drivers/hwtracing/coresight/coresight-dummy.c
++++ b/drivers/hwtracing/coresight/coresight-dummy.c
+@@ -12,13 +12,19 @@
+ 
+ #include "coresight-priv.h"
+ #include "coresight-trace-id.h"
+-#include "coresight-common.h"
++#include <linux/mutex.h>
++#include <linux/property.h>
+ #include "coresight-qmi.h"
+ struct dummy_drvdata {
+ 	struct device			*dev;
+ 	struct coresight_device		*csdev;
+ 	u8				traceid;
+ 	bool				static_atid;
++	bool				enabled;
++	bool				removing;
++	bool				id_owned;
++	unsigned int			sink_users;
++	struct mutex			mutex;
+ };
+ 
+ DEFINE_CORESIGHT_DEVLIST(source_devs, "dummy_source");
+@@ -32,8 +38,7 @@ DEFINE_CORESIGHT_DEVLIST(sink_devs, "dummy_sink");
+  * Returns	: coresight_device ptr for the QMI device if a QMI is found.
+  *		: NULL otherwise.
+  */
+-static struct coresight_device *
+-dummy_source_get_qmi_device(struct dummy_drvdata *drvdata)
++static struct coresight_device *dummy_source_get_qmi_device(struct dummy_drvdata *drvdata)
+ {
+ 	int i;
+ 	struct coresight_device *tmp, *dummy = drvdata->csdev;
+@@ -43,6 +48,9 @@ dummy_source_get_qmi_device(struct dummy_drvdata *drvdata)
+ 
+ 	for (i = 0; i < dummy->pdata->nr_outconns; i++) {
+ 		tmp = dummy->pdata->out_conns[i]->dest_dev;
++		if (!tmp && fwnode_property_match_string(dummy->pdata->out_conns[i]->dest_fwnode,
++				"compatible", "qcom,coresight-qmi") >= 0)
++			return ERR_PTR(-EPROBE_DEFER);
+ 		if (tmp && coresight_is_qmi_device(tmp))
+ 			return tmp;
+ 	}
+@@ -60,81 +68,92 @@ dummy_source_get_qmi_device(struct dummy_drvdata *drvdata)
+ static int qmi_assign_dummy_source_atid(struct dummy_drvdata *drvdata)
+ {
+ 	struct coresight_device *qmi = dummy_source_get_qmi_device(drvdata);
+-	struct  coresight_atid_assign_req_msg_v01 *atid_data;
+-	const char *trace_name;
++	struct coresight_atid_assign_req_msg_v01 req = {};
++	const char *name;
+ 	int ret;
+ 
+-	ret = of_property_read_string(drvdata->dev->of_node,
+-			"trace-name", &trace_name);
++	if (IS_ERR(qmi))
++		return PTR_ERR(qmi);
++	/* Native dummy endpoints may have no firmware-control helper. */
++	if (!qmi)
++		return 0;
++	ret = device_property_read_string(drvdata->dev, "trace-name", &name);
+ 	if (ret)
+-		return -EINVAL;
+-
+-	atid_data = devm_kzalloc(drvdata->dev, sizeof(*atid_data), GFP_KERNEL);
+-	if (!atid_data)
+-		return -ENOMEM;
+-
+-	strscpy(atid_data->name, trace_name, CORESIGHT_QMI_TRACE_NAME_MAX_LEN);
+-
+-	atid_data->atids[0] = drvdata->traceid;
+-	atid_data->num_atids = 1;
+-
+-	if (qmi)
+-		return coresight_qmi_assign_atid(qmi, atid_data);
+-	return 0;
++		return ret;
++	ret = strscpy(req.name, name, sizeof(req.name));
++	if (ret < 0)
++		return ret;
++	req.atids[0] = drvdata->traceid;
++	req.num_atids = 1;
++	return coresight_qmi_assign_atid(qmi, &req);
+ }
+ 
+ static int dummy_source_enable(struct coresight_device *csdev,
+-			       struct perf_event *event, enum cs_mode mode)
++		struct perf_event *event, enum cs_mode mode, struct coresight_path *path)
+ {
+-	int ret;
+-	int trace_id;
+-	struct dummy_drvdata *drvdata =
+-		 dev_get_drvdata(csdev->dev.parent);
+-
+-	if (!drvdata->static_atid) {
+-		trace_id = coresight_trace_id_get_system_id();
+-		if (trace_id < 0)
+-			return trace_id;
+-
+-		drvdata->traceid = (u8)trace_id;
+-		ret = qmi_assign_dummy_source_atid(drvdata);
+-		if (ret) {
+-			coresight_trace_id_put_system_id(trace_id);
+-			dev_err(drvdata->dev, "Assign dummy source atid fail\n");
+-			return ret;
+-		}
+-	}
++	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	int ret = 0;
+ 
+-	coresight_csr_set_etr_atid(csdev, drvdata->traceid, true, NULL);
+-	dev_dbg(csdev->dev.parent, "Dummy source enabled\n");
+-
+-	return 0;
++	mutex_lock(&d->mutex);
++	if (d->removing) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (d->enabled || !coresight_take_mode(csdev, mode)) {
++		ret = -EBUSY;
++		goto out;
++	}
++	if (!d->static_atid)
++		ret = qmi_assign_dummy_source_atid(d);
++	if (ret)
++		coresight_set_mode(csdev, CS_MODE_DISABLED);
++	else
++		d->enabled = true;
++out:
++	mutex_unlock(&d->mutex);
++	return ret;
+ }
+ 
+-static void dummy_source_disable(struct coresight_device *csdev,
+-				 struct perf_event *event)
++static void dummy_source_disable(struct coresight_device *csdev, struct perf_event *event)
+ {
+-	struct dummy_drvdata *drvdata =
+-		 dev_get_drvdata(csdev->dev.parent);
+-	coresight_csr_set_etr_atid(csdev, drvdata->traceid, false, NULL);
+-	if (!drvdata->static_atid)
+-		coresight_trace_id_put_system_id(drvdata->traceid);
+-	dev_dbg(csdev->dev.parent, "Dummy source disabled\n");
++	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++
++	mutex_lock(&d->mutex);
++	d->enabled = false;
++	coresight_set_mode(csdev, CS_MODE_DISABLED);
++	mutex_unlock(&d->mutex);
+ }
+ 
+-static int dummy_sink_enable(struct coresight_device *csdev, enum cs_mode mode,
+-				void *data)
++static int dummy_sink_enable(struct coresight_device *csdev, enum cs_mode mode, void *data)
+ {
+-	dev_dbg(csdev->dev.parent, "Dummy sink enabled\n");
+-
+-	return 0;
++	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	if (d->removing)
++		ret = -ENODEV;
++	else if (d->sink_users == UINT_MAX)
++		ret = -EOVERFLOW;
++	else if (d->sink_users ? coresight_get_mode(csdev) != mode : !coresight_take_mode(csdev, mode))
++		ret = -EBUSY;
++	else
++		d->sink_users++;
++	mutex_unlock(&d->mutex);
++	return ret;
+ }
+ 
+ static int dummy_sink_disable(struct coresight_device *csdev)
+ {
+-	dev_dbg(csdev->dev.parent, "Dummy sink disabled\n");
+-
+-	return 0;
++	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	if (!d->sink_users)
++		ret = -EINVAL;
++	else if (!--d->sink_users)
++		coresight_set_mode(csdev, CS_MODE_DISABLED);
++	mutex_unlock(&d->mutex);
++	return ret;
+ }
+ 
+ static const struct coresight_ops_source dummy_source_ops = {
+@@ -142,8 +161,17 @@ static const struct coresight_ops_source dummy_source_ops = {
+ 	.disable = dummy_source_disable,
+ };
+ 
++static int dummy_trace_id(struct coresight_device *csdev, enum cs_mode mode,
++		struct coresight_device *sink)
++{
++	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++
++	return d->traceid;
++}
++
+ static const struct coresight_ops dummy_source_cs_ops = {
+ 	.source_ops = &dummy_source_ops,
++	.trace_id = dummy_trace_id,
+ };
+ 
+ static const struct coresight_ops_sink dummy_sink_ops = {
+@@ -187,7 +215,7 @@ static int dummy_probe(struct platform_device *pdev)
+ 	struct coresight_platform_data *pdata;
+ 	struct dummy_drvdata *drvdata;
+ 	struct coresight_desc desc = { 0 };
+-	int trace_id;
++	u32 trace_id;
+ 	int ret;
+ 
+ 	if (of_device_is_compatible(node, "arm,coresight-dummy-source")) {
+@@ -224,46 +252,68 @@ static int dummy_probe(struct platform_device *pdev)
+ 		return -ENOMEM;
+ 
+ 	drvdata->dev = &pdev->dev;
++	mutex_init(&drvdata->mutex);
+ 	platform_set_drvdata(pdev, drvdata);
+ 
+ 	desc.pdata = pdev->dev.platform_data;
+ 	desc.dev = &pdev->dev;
+-	drvdata->csdev = coresight_register(&desc);
+-	if (IS_ERR(drvdata->csdev))
+-		return PTR_ERR(drvdata->csdev);
+-
+-	pm_runtime_enable(dev);
+-
+-	if (of_device_is_compatible(node, "arm,coresight-dummy-source")) {
+-		if (!of_property_read_u32(pdev->dev.of_node, "atid", &trace_id)) {
++	/* Allocate/reserve the native ATID before publishing any source attributes. */
++	if (desc.type == CORESIGHT_DEV_TYPE_SOURCE) {
++		if (device_property_present(dev, "atid")) {
++			ret = device_property_read_u32(dev, "atid", &trace_id);
++			if (ret || !IS_VALID_CS_TRACE_ID(trace_id))
++				return -EINVAL;
+ 			drvdata->static_atid = true;
+-			if (trace_id < CORESIGHT_TRACE_ID_RES_TOP) {
+-				ret = coresight_trace_id_reserve_id(trace_id);
+-				if (ret) {
+-					dev_err(drvdata->dev, "Reserve atid: %d fail\n",
+-						    trace_id);
+-					return ret;
+-				}
+-			}
+-			drvdata->traceid = (u8)trace_id;
++			ret = coresight_trace_id_get_static_system_id(trace_id);
++		} else {
++			ret = coresight_trace_id_get_system_id();
+ 		}
++		if (ret < 0)
++			return ret;
++		drvdata->traceid = ret;
++		drvdata->id_owned = true;
++	}
++	if (device_property_read_string(dev, "coresight-name", &desc.name)) {
++		/* Keep the allocated fallback name. */
++		desc.name = desc.type == CORESIGHT_DEV_TYPE_SOURCE ?
++			coresight_alloc_device_name(&source_devs, dev) :
++			coresight_alloc_device_name(&sink_devs, dev);
++	}
++	if (!desc.name) {
++		ret = -ENOMEM;
++		goto release_id;
++	}
++	pm_runtime_enable(dev);
++	drvdata->csdev = coresight_register(&desc);
++	if (IS_ERR(drvdata->csdev)) {
++		ret = PTR_ERR(drvdata->csdev);
++		pm_runtime_disable(dev);
++		goto release_id;
+ 	}
+-
+ 	dev_dbg(dev, "Dummy device initialized\n");
+ 
+ 	return 0;
++release_id:
++	if (drvdata->id_owned)
++		coresight_trace_id_put_system_id(drvdata->traceid);
++	return ret;
+ }
+ 
+-static int dummy_remove(struct platform_device *pdev)
++static void dummy_remove(struct platform_device *pdev)
+ {
+-	struct dummy_drvdata *drvdata = platform_get_drvdata(pdev);
+-	struct device *dev = &pdev->dev;
+-
+-	pm_runtime_disable(dev);
+-	if (drvdata->static_atid && drvdata->traceid < CORESIGHT_TRACE_ID_RES_TOP)
+-		coresight_trace_id_free_reserved_id(drvdata->traceid);
+-	coresight_unregister(drvdata->csdev);
+-	return 0;
++	struct dummy_drvdata *d = platform_get_drvdata(pdev);
++
++	mutex_lock(&d->mutex);
++	d->removing = true;
++	mutex_unlock(&d->mutex);
++	if (d->enabled)
++		coresight_disable(d->csdev);
++	coresight_unregister(d->csdev);
++	pm_runtime_disable(&pdev->dev);
++	if (d->id_owned) {
++		coresight_trace_id_put_system_id(d->traceid);
++		d->id_owned = false;
++	}
+ }
+ 
+ static const struct of_device_id dummy_match[] = {
+@@ -272,12 +322,15 @@ static const struct of_device_id dummy_match[] = {
+ 	{},
+ };
+ 
++MODULE_DEVICE_TABLE(of, dummy_match);
++
+ static struct platform_driver dummy_driver = {
+ 	.probe	= dummy_probe,
+ 	.remove	= dummy_remove,
+ 	.driver	= {
+ 		.name   = "coresight-dummy",
+ 		.of_match_table = dummy_match,
++		.suppress_bind_attrs = true,
+ 	},
+ };
+ 
+diff --git a/drivers/hwtracing/coresight/coresight-remote-etm.c b/drivers/hwtracing/coresight/coresight-remote-etm.c
+index 26fa5f8..e184c8e 100644
+--- a/drivers/hwtracing/coresight/coresight-remote-etm.c
++++ b/drivers/hwtracing/coresight/coresight-remote-etm.c
+@@ -20,7 +20,8 @@
+ 
+ #include "coresight-qmi.h"
+ #include "coresight-trace-id.h"
+-#include "coresight-common.h"
++#include "coresight-csr.h"
++#include <linux/property.h>
+ 
+ #ifdef CONFIG_CORESIGHT_REMOTE_ETM_DEFAULT_ENABLE
+ static int boot_enable = CONFIG_CORESIGHT_REMOTE_ETM_DEFAULT_ENABLE;
+@@ -38,6 +39,11 @@ struct remote_etm_drvdata {
+ 	u8				*traceids;
+ 	u32				num_trcid;
+ 	bool				static_atid;
++	bool				removing;
++	bool				stop_failed;
++	bool				suspended;
++	unsigned int			reserved;
++	struct coresight_path		*active_path;
+ };
+ 
+ /*
+@@ -48,8 +54,7 @@ struct remote_etm_drvdata {
+  * Returns	: coresight_device ptr for the QMI device if a QMI is found.
+  *		: NULL otherwise.
+  */
+-static struct coresight_device *
+-remote_etm_get_qmi_device(struct remote_etm_drvdata *drvdata)
++static struct coresight_device *remote_etm_get_qmi_device(struct remote_etm_drvdata *drvdata)
+ {
+ 	int i;
+ 	struct coresight_device *tmp, *etm = drvdata->csdev;
+@@ -59,6 +64,9 @@ remote_etm_get_qmi_device(struct remote_etm_drvdata *drvdata)
+ 
+ 	for (i = 0; i < etm->pdata->nr_outconns; i++) {
+ 		tmp = etm->pdata->out_conns[i]->dest_dev;
++		if (!tmp && fwnode_property_match_string(etm->pdata->out_conns[i]->dest_fwnode,
++				"compatible", "qcom,coresight-qmi") >= 0)
++			return ERR_PTR(-EPROBE_DEFER);
+ 		if (tmp && coresight_is_qmi_device(tmp))
+ 			return tmp;
+ 	}
+@@ -66,128 +74,132 @@ remote_etm_get_qmi_device(struct remote_etm_drvdata *drvdata)
+ 	return NULL;
+ }
+ 
+-static int qmi_assign_remote_etm_atid(struct remote_etm_drvdata *drvdata)
++static int qmi_assign_remote_etm_atid(struct remote_etm_drvdata *d)
+ {
+-	struct coresight_device *qmi = remote_etm_get_qmi_device(drvdata);
+-	struct  coresight_atid_assign_req_msg_v01 *atid_data;
+-	const char *trace_name = dev_name(drvdata->dev);
+-	int i, ret;
++	struct coresight_device *qmi = remote_etm_get_qmi_device(d);
++	struct coresight_atid_assign_req_msg_v01 req = {};
++	const char *name;
++	int ret;
+ 
+-	ret = of_property_read_string(drvdata->dev->of_node,
+-			"trace-name", &trace_name);
++	if (IS_ERR(qmi))
++		return PTR_ERR(qmi);
++	if (!qmi)
++		return -ENODEV;
++	ret = device_property_read_string(d->dev, "trace-name", &name);
+ 	if (ret)
+-		return -EINVAL;
+-
+-	atid_data = devm_kzalloc(drvdata->dev, sizeof(*atid_data), GFP_KERNEL);
+-	if (!atid_data)
+-		return -ENOMEM;
+-
+-	strscpy(atid_data->name, trace_name, CORESIGHT_QMI_TRACE_NAME_MAX_LEN);
++		return ret;
++	ret = strscpy(req.name, name, sizeof(req.name));
++	if (ret < 0)
++		return ret;
++	memcpy(req.atids, d->traceids, d->num_trcid);
++	req.num_atids = d->num_trcid;
++	return coresight_qmi_assign_atid(qmi, &req);
++}
+ 
+-	for (i = 0; i < drvdata->num_trcid; i++)
+-		atid_data->atids[i] = drvdata->traceids[i];
+-	atid_data->num_atids = drvdata->num_trcid;
++static int qmi_enable_remote_etm(struct remote_etm_drvdata *d)
++{
++	struct coresight_device *qmi = remote_etm_get_qmi_device(d);
+ 
+-	if (qmi)
+-		return coresight_qmi_assign_atid(qmi, atid_data);
+-	return 0;
++	return IS_ERR(qmi) ? PTR_ERR(qmi) : qmi ? coresight_qmi_remote_etm_enable(qmi) : -ENODEV;
+ }
+ 
+-static int qmi_enable_remote_etm(struct remote_etm_drvdata *drvdata)
++static int qmi_disable_remote_etm(struct remote_etm_drvdata *d)
+ {
+-	struct coresight_device *qmi = remote_etm_get_qmi_device(drvdata);
++	struct coresight_device *qmi = remote_etm_get_qmi_device(d);
+ 
+-	if (qmi)
+-		return coresight_qmi_remote_etm_enable(qmi);
+-	return 0;
++	return IS_ERR(qmi) ? PTR_ERR(qmi) : qmi ? coresight_qmi_remote_etm_disable(qmi) : -ENODEV;
+ }
+ 
+-static int qmi_disable_remote_etm(struct remote_etm_drvdata *drvdata)
++static void remote_etm_release_ids(struct remote_etm_drvdata *d)
+ {
+-	struct coresight_device *qmi = remote_etm_get_qmi_device(drvdata);
+-
+-	if (qmi)
+-		coresight_qmi_remote_etm_disable(qmi);
+-	return 0;
++	while (d->reserved)
++		coresight_trace_id_put_system_id(d->traceids[--d->reserved]);
+ }
+ 
+ static int remote_etm_enable(struct coresight_device *csdev,
+-			     struct perf_event *event, enum cs_mode mode)
++		struct perf_event *event, enum cs_mode mode, struct coresight_path *path)
+ {
+-	struct remote_etm_drvdata *drvdata =
+-		dev_get_drvdata(csdev->dev.parent);
+-	int i, ret;
+-
+-	mutex_lock(&drvdata->mutex);
++	struct remote_etm_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	unsigned int i;
++	int ret;
+ 
+-	if (!drvdata->static_atid) {
+-		ret = qmi_assign_remote_etm_atid(drvdata);
+-		if (ret) {
+-			dev_err(drvdata->dev, "Assign remote etm atid fail\n");
+-			goto unlock_mutex;
++	mutex_lock(&d->mutex);
++	if (d->removing) {
++		ret = -ENODEV;
++		goto out;
++	}
++	/* Never recycle an ID while a previous stop was unconfirmed. */
++	if (d->stop_failed) {
++		ret = qmi_disable_remote_etm(d);
++		if (ret)
++			goto out;
++		d->stop_failed = false;
++		d->enable = false;
++		if (d->static_atid)
++			remote_etm_release_ids(d);
++	}
++	if (d->enable || !coresight_take_mode(csdev, mode)) {
++		ret = -EBUSY;
++		goto out;
++	}
++	if (d->static_atid) {
++		for (i = 0; i < d->num_trcid; i++) {
++			ret = coresight_trace_id_get_static_system_id(d->traceids[i]);
++			if (ret < 0)
++				goto release_ids;
++			d->reserved++;
+ 		}
+ 	} else {
+-		for (i = 0; i < drvdata->num_trcid; i++) {
+-			ret = coresight_trace_id_reserve_id(drvdata->traceids[i]);
+-			if (ret) {
+-				dev_err(drvdata->dev, "reserve atid: %d fail\n",
+-						drvdata->traceids[i]);
+-				break;
+-			}
+-		}
+-		if (i < drvdata->num_trcid) {
+-			for (; i > 0; i--)
+-				coresight_trace_id_free_reserved_id(drvdata->traceids[i - 1]);
+-			goto unlock_mutex;
+-		}
++		ret = qmi_assign_remote_etm_atid(d);
++		if (ret)
++			goto release_ids;
+ 	}
+-
+-	for (i = 0; i < drvdata->num_trcid; i++)
+-		coresight_csr_set_etr_atid(csdev, drvdata->traceids[i], true, NULL);
+-
+-	ret = qmi_enable_remote_etm(drvdata);
++	ret = qcom_csr_route_ids(path, d->traceids, d->num_trcid, true);
++	if (ret)
++		goto release_ids;
++	ret = qmi_enable_remote_etm(d);
+ 	if (ret) {
+-		dev_err(drvdata->dev, "Enable remote etm fail\n");
+-		goto error;
+-	}
+-
+-	dev_info(drvdata->dev, "Enable remote etm success\n");
+-	mutex_unlock(&drvdata->mutex);
+-	return 0;
+-
+-error:
+-	for (i = 0; i < drvdata->num_trcid; i++) {
+-		coresight_csr_set_etr_atid(csdev, drvdata->traceids[i], false, NULL);
+-		if (drvdata->static_atid)
+-			coresight_trace_id_free_reserved_id(drvdata->traceids[i]);
++		qcom_csr_route_ids(path, d->traceids, d->num_trcid, false);
++		if (qmi_disable_remote_etm(d)) {
++			d->stop_failed = true;
++			d->enable = true;
++		}
++		goto release_ids;
+ 	}
+-
+-unlock_mutex:
+-	mutex_unlock(&drvdata->mutex);
++	d->active_path = path;
++	d->enable = true;
++	d->suspended = false;
++	ret = 0;
++	goto out;
++release_ids:
++	if (d->static_atid && !d->stop_failed)
++		remote_etm_release_ids(d);
++	coresight_set_mode(csdev, CS_MODE_DISABLED);
++out:
++	mutex_unlock(&d->mutex);
+ 	return ret;
+ }
+ 
+-static void remote_etm_disable(struct coresight_device *csdev,
+-			       struct perf_event *event)
++static void remote_etm_disable(struct coresight_device *csdev, struct perf_event *event)
+ {
+-	struct remote_etm_drvdata *drvdata =
+-		 dev_get_drvdata(csdev->dev.parent);
+-	int i;
+-
+-	mutex_lock(&drvdata->mutex);
+-
+-	qmi_disable_remote_etm(drvdata);
+-
+-	for (i = 0; i < drvdata->num_trcid; i++)
+-		coresight_csr_set_etr_atid(csdev, drvdata->traceids[i], false, NULL);
+-
+-	for (i = 0; i < drvdata->num_trcid; i++) {
+-		if (drvdata->static_atid)
+-			coresight_trace_id_free_reserved_id(drvdata->traceids[i]);
+-		else
+-			coresight_trace_id_put_system_id(drvdata->traceids[i]);
+-	}
+-	mutex_unlock(&drvdata->mutex);
++	struct remote_etm_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	if (d->enable && !d->suspended)
++		ret = qmi_disable_remote_etm(d);
++	if (d->active_path)
++		qcom_csr_route_ids(d->active_path, d->traceids, d->num_trcid, false);
++	d->active_path = NULL;
++	d->stop_failed = ret != 0;
++	d->enable = d->stop_failed;
++	d->suspended = false;
++	if (!ret && d->static_atid)
++		remote_etm_release_ids(d);
++	if (ret)
++		dev_err(d->dev, "Remote ETM stop unconfirmed (%d); retaining trace IDs\n", ret);
++	coresight_set_mode(csdev, CS_MODE_DISABLED);
++	mutex_unlock(&d->mutex);
+ }
+ 
+ 
+@@ -196,20 +208,28 @@ static const struct coresight_ops_source remote_etm_source_ops = {
+ 	.disable	= remote_etm_disable,
+ };
+ 
++static int remote_etm_trace_id(struct coresight_device *csdev, enum cs_mode mode,
++		struct coresight_device *sink)
++{
++	struct remote_etm_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++
++	return d->traceids[0];
++}
++
+ static const struct coresight_ops remote_cs_ops = {
+ 	.source_ops	= &remote_etm_source_ops,
++	.trace_id = remote_etm_trace_id,
+ };
+ 
+-static ssize_t traceid_show(struct device *dev,
+-			    struct device_attribute *attr, char *buf)
++static ssize_t traceid_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+-	struct remote_etm_drvdata *drvdata = dev_get_drvdata(dev->parent);
++	struct remote_etm_drvdata *d = dev_get_drvdata(dev->parent);
++	unsigned int i;
++	int len = 0;
+ 
+-	if (drvdata->num_trcid == 1)
+-		return scnprintf(buf, PAGE_SIZE, "%#x\n", drvdata->traceids[0]);
+-	else
+-		return scnprintf(buf, PAGE_SIZE, "%#x %#x\n",
+-			drvdata->traceids[0], drvdata->traceids[1]);
++	for (i = 0; i < d->num_trcid; i++)
++		len += sysfs_emit_at(buf, len, "%s%#x", i ? " " : "", d->traceids[i]);
++	return len + sysfs_emit_at(buf, len, "\n");
+ }
+ static DEVICE_ATTR_RO(traceid);
+ 
+@@ -227,50 +247,49 @@ static const struct attribute_group *remote_etm_attr_grps[] = {
+ 	NULL,
+ };
+ 
+-static int remote_etm_get_traceid(struct remote_etm_drvdata *drvdata)
++static int remote_etm_get_traceid(struct remote_etm_drvdata *d)
+ {
+-	int ret, i, trace_id;
+-	struct device *dev = drvdata->dev;
+-	u32 *atid;
+-
+-	ret = of_property_count_u32_elems(dev->of_node, "atid");
+-	if (ret < 0) {
+-		ret = of_property_read_u32(dev->of_node, "qcom,atid-num",
+-				&drvdata->num_trcid);
+-		if (ret)
++	u32 atids[8];
++	unsigned int i, j;
++	int count, ret;
++
++	d->static_atid = device_property_present(d->dev, "atid");
++	if (d->static_atid) {
++		count = of_property_count_u32_elems(d->dev->of_node, "atid");
++		if (count <= 0 || count > (int)ARRAY_SIZE(atids))
+ 			return -EINVAL;
+-	} else {
+-		drvdata->num_trcid = ret;
+-		drvdata->static_atid = true;
+-	}
+-
+-	atid = devm_kcalloc(dev, drvdata->num_trcid, sizeof(*atid), GFP_KERNEL);
+-	if (!atid)
+-		return -ENOMEM;
+-
+-	if (drvdata->static_atid) {
+-		ret = of_property_read_u32_array(dev->of_node, "atid",
+-			atid, drvdata->num_trcid);
++		d->num_trcid = count;
++		ret = of_property_read_u32_array(d->dev->of_node, "atid", atids, count);
+ 		if (ret)
+ 			return ret;
+-	} else {
+-		for (i = 0; i < drvdata->num_trcid; i++) {
+-			trace_id = coresight_trace_id_get_system_id();
+-			if (trace_id < 0)
+-				return trace_id;
+-
+-			atid[i] = trace_id;
++		for (i = 0; i < d->num_trcid; i++) {
++			if (!IS_VALID_CS_TRACE_ID(atids[i]))
++				return -EINVAL;
++			for (j = 0; j < i; j++)
++				if (atids[i] == atids[j])
++					return -EINVAL;
+ 		}
++	} else {
++		ret = device_property_read_u32(d->dev, "qcom,atid-num", &d->num_trcid);
++		if (ret || !d->num_trcid || d->num_trcid > ARRAY_SIZE(atids))
++			return -EINVAL;
+ 	}
+-
+-	drvdata->traceids = devm_kcalloc(dev, drvdata->num_trcid,
+-					sizeof(u8), GFP_KERNEL);
+-	if (!drvdata->traceids)
++	d->traceids = devm_kcalloc(d->dev, d->num_trcid, sizeof(*d->traceids), GFP_KERNEL);
++	if (!d->traceids)
+ 		return -ENOMEM;
+-
+-	for (i = 0; i < drvdata->num_trcid; i++)
+-		drvdata->traceids[i] = (u8)atid[i];
+-
++	for (i = 0; i < d->num_trcid; i++) {
++		if (d->static_atid)
++			d->traceids[i] = atids[i];
++		else {
++			ret = coresight_trace_id_get_system_id();
++			if (ret < 0) {
++				remote_etm_release_ids(d);
++				return ret;
++			}
++			d->traceids[i] = ret;
++			d->reserved++;
++		}
++	}
+ 	return 0;
+ }
+ 
+@@ -282,7 +301,8 @@ static int remote_etm_probe(struct platform_device *pdev)
+ 	struct coresight_desc desc = {0 };
+ 	int ret;
+ 
+-	desc.name = coresight_alloc_device_name(&remote_etm_devs, dev);
++	if (device_property_read_string(dev, "coresight-name", &desc.name))
++		desc.name = coresight_alloc_device_name(&remote_etm_devs, dev);
+ 	if (!desc.name)
+ 		return -ENOMEM;
+ 	pdata = coresight_get_platform_data(dev);
+@@ -305,40 +325,51 @@ static int remote_etm_probe(struct platform_device *pdev)
+ 	desc.pdata = pdev->dev.platform_data;
+ 	desc.dev = &pdev->dev;
+ 	desc.groups = remote_etm_attr_grps;
++	ret = remote_etm_get_traceid(drvdata);
++	if (ret)
++		return ret;
++	pm_runtime_enable(dev);
+ 	drvdata->csdev = coresight_register(&desc);
+ 	if (IS_ERR(drvdata->csdev)) {
+ 		ret = PTR_ERR(drvdata->csdev);
++		pm_runtime_disable(dev);
+ 		goto err;
+ 	}
+-
+-	ret = remote_etm_get_traceid(drvdata);
+-	if (ret) {
+-		coresight_unregister(drvdata->csdev);
+-		return ret;
+-	}
+-
+ 	dev_info(dev, "Remote ETM initialized\n");
+ 
+-	if (boot_enable)
+-		coresight_enable(drvdata->csdev);
++	if (boot_enable) {
++		ret = coresight_enable(drvdata->csdev);
++		if (ret)
++			dev_warn(dev, "Default remote ETM enable failed: %d\n", ret);
++	}
+ 
+ 	return 0;
+ 
+ err:
++	remote_etm_release_ids(drvdata);
+ 	return ret;
+ }
+ 
+-static int remote_etm_remove(struct platform_device *pdev)
++static void remote_etm_remove(struct platform_device *pdev)
+ {
+-	struct remote_etm_drvdata *drvdata = platform_get_drvdata(pdev);
+-	int i;
+-
+-	if (!drvdata->static_atid)
+-		for (i = 0; i < drvdata->num_trcid; i++)
+-			coresight_trace_id_put_system_id(drvdata->traceids[i]);
+-
+-	coresight_unregister(drvdata->csdev);
+-	return 0;
++	struct remote_etm_drvdata *d = platform_get_drvdata(pdev);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	d->removing = true;
++	mutex_unlock(&d->mutex);
++	if (d->active_path)
++		coresight_disable(d->csdev);
++	mutex_lock(&d->mutex);
++	if (d->enable)
++		ret = qmi_disable_remote_etm(d);
++	if (!ret)
++		remote_etm_release_ids(d);
++	else
++		dev_err(d->dev, "Retaining IDs after unconfirmed remote stop: %d\n", ret);
++	mutex_unlock(&d->mutex);
++	coresight_unregister(d->csdev);
++	pm_runtime_disable(&pdev->dev);
+ }
+ 
+ static const struct of_device_id remote_etm_match[] = {
+@@ -346,50 +377,40 @@ static const struct of_device_id remote_etm_match[] = {
+ 	{}
+ };
+ 
+-#ifdef CONFIG_DEEPSLEEP
+ static int remote_etm_suspend(struct device *dev)
+ {
+-	struct remote_etm_drvdata *drvdata = dev_get_drvdata(dev);
+-	struct coresight_device	*csdev = drvdata->csdev;
+-
+-	if (pm_suspend_target_state == PM_SUSPEND_MEM) {
+-		do {
+-			coresight_disable(csdev);
+-		} while (atomic_read(&csdev->refcnt));
++	struct remote_etm_drvdata *d = dev_get_drvdata(dev);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	if (d->enable && !d->suspended) {
++		ret = qmi_disable_remote_etm(d);
++		if (!ret)
++			d->suspended = true;
+ 	}
+-
+-	return 0;
+-}
+-#else
+-static int remote_etm_suspend(struct device *dev)
+-{
+-	return 0;
++	mutex_unlock(&d->mutex);
++	return ret;
+ }
+-#endif
+ 
+-#ifdef CONFIG_HIBERNATION
+-static int remote_etm_freeze(struct device *dev)
++static int remote_etm_resume(struct device *dev)
+ {
+-	struct remote_etm_drvdata *drvdata = dev_get_drvdata(dev);
+-	struct coresight_device	*csdev = drvdata->csdev;
+-
+-	do {
+-		coresight_disable(csdev);
+-	} while (atomic_read(&csdev->refcnt));
+-
+-	return 0;
+-}
+-#else
+-static int remote_etm_freeze(struct device *dev)
+-{
+-	return 0;
++	struct remote_etm_drvdata *d = dev_get_drvdata(dev);
++	int ret = 0;
++
++	mutex_lock(&d->mutex);
++	if (d->enable && d->suspended) {
++		ret = qmi_enable_remote_etm(d);
++		if (!ret)
++			d->suspended = false;
++	}
++	mutex_unlock(&d->mutex);
++	return ret;
+ }
+-#endif
+ 
+ static const struct dev_pm_ops remote_etm_dev_pm_ops = {
+-	.suspend = remote_etm_suspend,
+-	.freeze  = remote_etm_freeze,
++	SET_SYSTEM_SLEEP_PM_OPS(remote_etm_suspend, remote_etm_resume)
+ };
++MODULE_DEVICE_TABLE(of, remote_etm_match);
+ 
+ static struct platform_driver remote_etm_driver = {
+ 	.probe          = remote_etm_probe,
+@@ -397,6 +418,7 @@ static struct platform_driver remote_etm_driver = {
+ 	.driver         = {
+ 		.name   = "coresight-remote-etm",
+ 		.of_match_table = remote_etm_match,
++		.suppress_bind_attrs = true,
+ 		.pm = pm_ptr(&remote_etm_dev_pm_ops),
+ 	},
+ };

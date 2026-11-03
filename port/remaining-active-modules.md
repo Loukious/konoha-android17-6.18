@@ -143,3 +143,26 @@ The common CoreSight core requires callable helper operations. QMI path activati
 checks service readiness and counts path votes before its source sends commands.
 TGU explicitly rejects trace-path activation because its arming interface is the
 native control attributes; no fitted TGU node has a trace graph connection.
+
+
+`coresight_dummy` registers native subsystem-owned source/sink endpoints. IDs are
+allocated before publication and released after unregister; native static IDs
+use the common allocator's collision checks. Source activation propagates QMI
+assignment failures and unresolved suppliers. Passive sinks count shared path
+votes and reject incompatible modes. `coresight_remote_etm` validates the native
+1–8 ATID messages, keeps dynamic IDs until removal, and reserves static IDs only
+while enabled so inactive native overlap remains allowed. Firmware enable/stop
+and suspend/resume errors propagate. Failed start followed by an unconfirmed
+stop retains the reserved IDs; they are not recycled while firmware may emit.
+
+The CSR helper routes the primary path ID. New `qcom_csr_route_ids` routes only
+additional IDs through the sink's actual CSR helper, with per-ID votes and
+rollback. It preserves native non-ETR sinks that have no ATID filter and never
+uses a global CSR pointer or undocumented MMIO bank. Existing DT names, QMI
+commands, secure-component properties and firmware restrictions are unchanged.
+
+`verify_coresight_sources.py` passes 335 actual-C ASan/UBSan cases for multi-ID
+CSR reference rollback and original register bits, every valid/invalid 8-bit ID,
+malformed counts, static collisions, probe allocation failures, firmware errors,
+stop quarantine/retry, suspend/resume, shared dummy sinks and teardown. Physical
+trace delivery remains untested while the phone is disconnected.

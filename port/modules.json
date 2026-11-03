@@ -1471,5 +1471,13 @@
   {
     "target": "cpucp_fast",
     "output": "cpucp_fast.ko"
+  },
+  {
+    "target": "coresight_dummy",
+    "output": "coresight-dummy.ko"
+  },
+  {
+    "target": "coresight_remote_etm",
+    "output": "coresight-remote-etm.ko"
   }
 ]

@@ -30053,5 +30053,17 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/cpucp_fast.c",
     "blob": "68fbd500df63371c36171e754bdd3ce19ddb3b77"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-dummy.c",
+    "blob": "e2a7176ad6ab385606d76c1f4deea0755d33cfdf"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-remote-etm.c",
+    "blob": "26fa5f881c73aad9187ac6cb9e53a338ae7598f7"
   }
 ]
