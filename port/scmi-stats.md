@@ -20,7 +20,16 @@ balanced after the consumer disappears. No ROM, firmware IDs, authentication or
 fuse handling is changed.
 
 `verify_scmi_stats.py` compiles the actual table/map/read functions with MMIO,
-allocation and debugfs service stubs. Thirty-six ASan/UBSan cases cover native
+allocation and debugfs service stubs. Forty-two ASan/UBSan cases cover native
 64-bit counters and text output, malformed lengths/offsets/counts, changing/busy
-sequences, allocation failures, stale tables, and file-reference balancing.
+sequences, allocation failures, stale tables, and file-reference balancing, and genuine standard PERF metadata request/error paths.
 Real firmware address delivery and counter updates require device validation.
+
+V3 requests standard SCMI PERF `PROTOCOL_ATTRIBUTES=1` through the protocol's
+real transfer operations. Its 16-byte response layout is verified against pinned
+6.18 `drivers/firmware/arm_scmi/perf.c`, including little-endian addresses and
+statistics length. Short replies, unsupported commands and zero lengths remain
+errors. This replaces the native unsafe copies/casts of the protocol provider's
+private structures. The consumer does not fabricate addresses or issue vendor
+commands as a fallback. V2 and V3 retain the native `cpufreq_stats` directory;
+firmware/DT should select the applicable provider, as in the native system.

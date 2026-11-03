@@ -1443,5 +1443,9 @@
   {
     "target": "cpufreq_stats_scmi_v2",
     "output": "cpufreq_stats_scmi_v2.ko"
+  },
+  {
+    "target": "cpufreq_stats_scmi_v3",
+    "output": "cpufreq_stats_scmi_v3.ko"
   }
 ]

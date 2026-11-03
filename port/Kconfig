@@ -1446,3 +1446,7 @@ config SHOW_SUSPEND_EPOCH
 config QTI_CPUFREQ_STATS_SCMI_V2
 	tristate "Onyx cpufreq_stats_scmi_v2 native provider"
 	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QTI_CPUFREQ_STATS_SCMI_V3
+	tristate "Onyx cpufreq_stats_scmi_v3 native provider"
+	depends on ARM_SCMI_PROTOCOL

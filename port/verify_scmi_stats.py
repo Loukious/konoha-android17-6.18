@@ -10,6 +10,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 SOURCE = 'drivers/soc/qcom/dcvs/cpufreq_stats_common.h'
+V3 = 'drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v3.c'
 
 
 def function(source, name):
@@ -33,6 +34,14 @@ def verify(staged):
     harness = (HERE / 'tests/scmi_stats_harness.c').read_text()
     harness = harness.replace('/* INSERT_DECLARATIONS */', declarations)
     harness = harness.replace('/* INSERT_FUNCTIONS */', funcs)
+    v3_path = Path(staged) / V3
+    if v3_path.exists():
+        v3 = v3_path.read_text()
+        metadata = v3[v3.index('#define PERF_PROTOCOL_ATTRIBUTES'):v3.index('static int cpufreq_stats_perf_metadata')]
+        metadata += function(v3, 'cpufreq_stats_perf_metadata')
+        harness = harness.replace('/* INSERT_METADATA */', metadata)
+    else:
+        harness = harness.replace('/* INSERT_METADATA */', '')
     with tempfile.TemporaryDirectory(prefix='konoha-scmi-stats-') as directory:
         c = Path(directory) / 'stats.c'
         exe = c.with_suffix('')
@@ -44,7 +53,8 @@ def verify(staged):
         result = subprocess.run([str(exe)], text=True, capture_output=True, check=True)
     return {'status': 'PASS', 'cases': int(result.stdout.strip()),
             'sanitizers': 'ASan+UBSan', 'source_sha256': {
-                SOURCE: hashlib.sha256(path.read_bytes()).hexdigest()},
+                SOURCE: hashlib.sha256(path.read_bytes()).hexdigest(),
+                **({V3: hashlib.sha256(v3_path.read_bytes()).hexdigest()} if v3_path.exists() else {})},
             'limits': ['Provider stubs test firmware table parsing; real SCMI metadata and counter updates require hardware.']}
 
 

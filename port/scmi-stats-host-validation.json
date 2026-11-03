@@ -1,9 +1,10 @@
 {
   "status": "PASS",
-  "cases": 36,
+  "cases": 42,
   "sanitizers": "ASan+UBSan",
   "source_sha256": {
-    "drivers/soc/qcom/dcvs/cpufreq_stats_common.h": "572d22c10dd16f9e1ded649e76fc376db45c27850328d329aede04ca267ec98f"
+    "drivers/soc/qcom/dcvs/cpufreq_stats_common.h": "572d22c10dd16f9e1ded649e76fc376db45c27850328d329aede04ca267ec98f",
+    "drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v3.c": "12c612b8660a7a96e506943792ffd528ff99b5da4962f66e1a45b555c498f587"
   },
   "limits": [
     "Provider stubs test firmware table parsing; real SCMI metadata and counter updates require hardware."

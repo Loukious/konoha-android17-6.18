@@ -29993,5 +29993,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v2.c",
     "blob": "793ca69581cabd7351fdd26be8870d2f048d7bb6"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v3.c",
+    "blob": "b945f302c6ed8f12e470c8d77885affa07545d79"
   }
 ]

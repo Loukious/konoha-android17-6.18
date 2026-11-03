@@ -22,6 +22,25 @@ typedef unsigned long long phys_addr_t;
 struct device { int unused; };
 struct dentry { int unused; };
 struct file { void *private_data; struct {struct dentry *dentry;}f_path; };
+typedef u16 __le16;
+typedef u32 __le32;
+#define le32_to_cpu(v) (v)
+struct scmi_protocol_handle;
+struct scmi_xfer {struct {void *buf;size_t len;}rx;};
+struct scmi_xfer_ops {
+ int (*xfer_get_init)(const struct scmi_protocol_handle *,unsigned char,size_t,size_t,struct scmi_xfer **);
+ int (*do_xfer)(const struct scmi_protocol_handle *,struct scmi_xfer *);
+ void (*xfer_put)(const struct scmi_protocol_handle *,struct scmi_xfer *);
+};
+struct scmi_protocol_handle {const struct scmi_xfer_ops *xops;};
+static int transfer_error, request_error, transfer_count, transfer_put_count;
+static unsigned char response[16];
+static size_t response_len=16;
+static struct scmi_xfer xfer;
+static int request(const struct scmi_protocol_handle *ph,unsigned char id,size_t tx,size_t rx,struct scmi_xfer **out) {assert(id==1 && !tx && rx==16);if(request_error)return request_error;*out=&xfer;xfer.rx.buf=response;xfer.rx.len=response_len;transfer_count++;return 0;}
+static int transfer(const struct scmi_protocol_handle *ph,struct scmi_xfer *x) {assert(x==&xfer);return transfer_error;}
+static void transfer_put(const struct scmi_protocol_handle *ph,struct scmi_xfer *x) {assert(x==&xfer);transfer_put_count++;}
+/* INSERT_METADATA */
 /* INSERT_DECLARATIONS */
 static unsigned char wire[4096];
 static size_t wire_len;
@@ -86,5 +105,16 @@ int main(void) {
  for(int i=1;i<=4;i++){reset();allocation_failure=i;CHECK(cpufreq_stats_map(&device,0x81200000,wire_len)==-ENOMEM && !fs_calls);}
  reset();fs_error=-ENOMEM;CHECK(cpufreq_stats_map(&device,0x81200000,wire_len)==-ENOMEM && fs_calls==1);
  reset();put32(24,0);CHECK(!cpufreq_stats_map(&device,0x81200000,wire_len));file.private_data=&published->entries[0];pos=0;CHECK(!cpufreq_stats_get(&file,out,sizeof(out),&pos) && !file_refs);
- reset();printf("%d\n",cases);return 0;
+ reset();
+#ifdef PERF_PROTOCOL_ATTRIBUTES
+ struct scmi_xfer_ops xops={request,transfer,transfer_put};struct scmi_protocol_handle ph={.xops=&xops};u64 address=0;u32 size=0;
+ CHECK(cpufreq_stats_perf_metadata(NULL,&address,&size)==-EOPNOTSUPP);
+ request_error=-ENOMEM;CHECK(cpufreq_stats_perf_metadata(&ph,&address,&size)==-ENOMEM && !transfer_put_count);request_error=0;
+ transfer_error=-EOPNOTSUPP;CHECK(cpufreq_stats_perf_metadata(&ph,&address,&size)==-EOPNOTSUPP && transfer_put_count==1);transfer_error=0;
+ response_len=15;CHECK(cpufreq_stats_perf_metadata(&ph,&address,&size)==-EPROTO && transfer_put_count==2);response_len=16;
+ CHECK(cpufreq_stats_perf_metadata(&ph,&address,&size)==-ENODATA && transfer_put_count==3);
+ u32 low=0x81200000,high=1,length=128;memcpy(response+4,&low,4);memcpy(response+8,&high,4);memcpy(response+12,&length,4);
+ CHECK(!cpufreq_stats_perf_metadata(&ph,&address,&size) && address==0x181200000ULL && size==128 && transfer_put_count==4);
+#endif
+ printf("%d\n",cases);return 0;
 }
