@@ -1145,6 +1145,17 @@ ddk_module(
     deps = [":pmu_headers", ":cache_irq_headers", ":scmi_vendor_headers", ":cpu_phys_log_map", ":qcom_llcc_pmu", ":qcom_scmi_client"],
 )
 
+ddk_module(
+    name = "memlat",
+    srcs = ["drivers/soc/qcom/dcvs/memlat.c"],
+    out = "memlat.ko",
+    includes = ["drivers/soc/qcom/dcvs"],
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":dcvs_headers", ":pmu_headers", ":scmi_vendor_headers", ":cache_irq_headers", ":qcom_dcvs", ":qcom_pmu_lib", ":qcom_scmi_client", ":cpu_phys_log_map"],
+)
+
 ddk_headers(
     name = "cpufreq_headers",
     hdrs = ["include/linux/qcom-cpufreq-hw.h", "include/trace/events/dcvsh.h"],
@@ -4233,6 +4244,8 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mca_qcom_sysfs",
+        ":mca_vbat_ovp_monitor",
         ":mpam",
         ":cpu_mpam",
         ":platform_mpam",
@@ -4254,6 +4267,7 @@ kernel_module_group(
         ":coresight_tmc",
         ":coresight_csr",
         ":coresight_trace_noc",
+        ":coresight_cti",
         ":mca_ut_test",
         ":hl7603",
 
@@ -4399,6 +4413,7 @@ kernel_module_group(
         ":qcom_dcvs",
         ":bwmon",
         ":qcom_pmu_lib",
+        ":memlat",
         ":qfprom_sys",
         ":debug_symbol",
         ":qcom_logbuf_boot_log",
@@ -4980,6 +4995,43 @@ ddk_module(
     name = "coresight_trace_noc",
     srcs = ["drivers/hwtracing/coresight/coresight-trace-noc.c"],
     out = "coresight-trace-noc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
+)
+
+
+ddk_module(
+    name = "mca_vbat_ovp_monitor",
+    srcs = ["drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c", "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h"],
+    out = "mca_vbat_ovp_monitor.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_mca_headers", ":mca_headers", ":mca_sysfs", ":mca_log", ":mca_hwid", ":mca_parse_dts", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_wireless_class", ":mca_event"],
+)
+
+
+ddk_module(
+    name = "mca_qcom_sysfs",
+    srcs = ["drivers/power/supply/mca/mca_qcom_sysfs/mca_qcom_sysfs.c"],
+    out = "mca_qcom_sysfs.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_mca_headers", ":mca_headers", ":mca_log", ":mca_protocol_class", ":mca_protocol_pd_class", ":mca_strategy_class", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_cp_class", ":mca_platform_fg_ic_ops"],
+)
+
+ddk_module(
+    name = "coresight_cti",
+    srcs = [
+        "drivers/hwtracing/coresight/coresight-cti-core.c",
+        "drivers/hwtracing/coresight/coresight-cti-platform.c",
+        "drivers/hwtracing/coresight/coresight-cti-sysfs.c",
+        "drivers/hwtracing/coresight/coresight-cti.h",
+    ],
+    out = "coresight-cti.ko",
     kernel_build = "//common:kernel_aarch64",
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",

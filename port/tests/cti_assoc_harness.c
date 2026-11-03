@@ -13,7 +13,8 @@ static struct {
     pthread_mutex_t lock;
     pthread_cond_t changed;
     unsigned readers;
-} cti_assoc_srcu = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0};
+    unsigned synchronizations;
+} cti_assoc_srcu = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 0};
 static int srcu_read_lock(void *unused) {
     (void)unused;
     pthread_mutex_lock(&cti_assoc_srcu.lock);
@@ -32,6 +33,8 @@ static void srcu_read_unlock(void *unused, int index) {
 static void synchronize_srcu(void *unused) {
     (void)unused;
     pthread_mutex_lock(&cti_assoc_srcu.lock);
+    cti_assoc_srcu.synchronizations++;
+    pthread_cond_broadcast(&cti_assoc_srcu.changed);
     while (cti_assoc_srcu.readers)
         pthread_cond_wait(&cti_assoc_srcu.changed, &cti_assoc_srcu.lock);
     pthread_mutex_unlock(&cti_assoc_srcu.lock);
@@ -85,7 +88,9 @@ int main(void) {
         pthread_mutex_unlock(&callback_lock);
         assert(!pthread_create(&unloader, NULL, unload_thread, NULL));
         pthread_mutex_lock(&cti_assoc_srcu.lock);
-        while (atomic_load(&cti_assoc_ops))
+        /* Wait for drain entry, so unloader preemption cannot mask a missing drain. */
+        while (atomic_load(&cti_assoc_ops) ||
+               cti_assoc_srcu.synchronizations != direction + 1)
             pthread_cond_wait(&cti_assoc_srcu.changed, &cti_assoc_srcu.lock);
         assert(cti_assoc_srcu.readers && !atomic_load(&removed));
         pthread_mutex_unlock(&cti_assoc_srcu.lock);
@@ -107,7 +112,8 @@ int main(void) {
     coresight_cti_add(&dev);
     coresight_cti_remove(&dev);
     coresight_remove_cti_ops();
-    assert(!cti_assoc_srcu.readers && callback_count == 2);
+    assert(!cti_assoc_srcu.readers && callback_count == 2 &&
+           cti_assoc_srcu.synchronizations == 3);
     cases++;
     printf("%u\n", cases);
 }

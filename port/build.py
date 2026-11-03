@@ -53,6 +53,18 @@ def main():
     vbat_validation = verify_vbat_ovp(workspace / "onyx")
     (artifacts / "vbat-ovp-host-validation.json").write_text(
         json.dumps(vbat_validation, indent=2) + "\n")
+    from verify_qcom_sysfs import verify as verify_qcom_sysfs
+    qcom_sysfs_validation = verify_qcom_sysfs(workspace / "onyx")
+    (artifacts / "qcom-sysfs-host-validation.json").write_text(
+        json.dumps(qcom_sysfs_validation, indent=2) + "\n")
+    from verify_coresight_cti import verify as verify_coresight_cti
+    cti_validation = verify_coresight_cti(workspace / "onyx")
+    (artifacts / "coresight-cti-host-validation.json").write_text(
+        json.dumps(cti_validation, indent=2) + "\n")
+    from verify_memlat import verify as verify_memlat
+    memlat_validation = verify_memlat(workspace / "onyx")
+    (artifacts / "memlat-host-validation.json").write_text(
+        json.dumps(memlat_validation, indent=2) + "\n")
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -116,7 +128,7 @@ def main():
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
                  "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
-                 "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py", "verify_cti_assoc.py",
+                 "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py", "verify_cti_assoc.py", "verify_qcom_sysfs.py", "verify_coresight_cti.py", "verify_memlat.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
         shutil.copyfile(HERE / name, inputs / name)
     shutil.copytree(HERE / "patches", inputs / "patches")
@@ -156,6 +168,9 @@ def main():
         "platform_providers_host_validation": platform_validation,
         "vbat_ovp_host_validation": vbat_validation,
         "cti_assoc_host_validation": cti_assoc_validation,
+        "qcom_sysfs_host_validation": qcom_sysfs_validation,
+        "coresight_cti_host_validation": cti_validation,
+        "memlat_host_validation": memlat_validation,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],

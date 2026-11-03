@@ -13,12 +13,20 @@ Onyx DT identifies these priorities:
 | Module | Retained Onyx configuration | Disposition |
 | --- | --- | --- |
 | `mca_vbat_ovp_monitor` | Enabled; single fuel gauge, native country-specific voltage limits | First port in this branch. |
-| `memlat` | Enabled DDR, LLCC, L3 and DDR-QoS groups and monitors | Next performance-provider audit; requires PMU/SCMI/DCVS and safe CPU/work lifetime handling. |
+| `memlat` | Enabled DDR, LLCC, L3 and DDR-QoS groups and monitors | Native port implemented with PMU/SCMI/DCVS providers and synchronous teardown; see [memlat.md](memlat.md). |
 | `coresight_cti` | 24 enabled AMBA CTI nodes; standard and Qualcomm extended layouts | Pinned native port implemented; combined kernel build and live binding remain to validate. |
-| `mca_qcom_sysfs` | Enabled | Requires an attribute-by-attribute audit of wired operations and unfitted wireless dependencies. |
+| `mca_qcom_sysfs` | Enabled | All 29 native attributes retained with real wired providers and explicit unsupported wireless/authentication writes; see [mca-qcom-sysfs.md](mca-qcom-sysfs.md). |
 | `mca_ibat_ocp_monitor` | Disabled | Preserve native disabled state. |
 | `mca_business_misc_comp` | Disabled | Preserve native disabled state. |
 | `ddr_cdev` | No matching node in applied Onyx DT | Do not assume the load-list name is a fitted cooling device. |
+
+Both checked DT variants contain four memlat groups and 15 sampling-only
+monitors. Their CPU masks fit the physical CPU IDs 0 through 7; maps contain
+2 to 11 rows within the native 14-row limit. The three DDR-QoS monitors retain
+their intentional zero-to-one vote tables. Zero frequency entries remain
+invalid for DDR/LLCC. The 24 CTIs have unique names and 4KiB resources: 22 use
+the Qualcomm extended layout and two the standard layout. None has a CPU
+affinity or GPIO connection. Hardware DEVID counts require runtime validation.
 
 The VBAT monitor imports the exact pinned native source and retains its native
 sysfs names, country voltage limits, charging event and hysteresis. A read error
@@ -69,7 +77,10 @@ create votes. System sleep preserves all enable votes; clock resume errors are
 propagated. Driver teardown drains sysfs, CPU callbacks and association lists
 synchronously, retaining the common device release callback. CPU-affine CTIs
 remain unpowered until synchronized PM setup and skip MMIO while offline. Common-core CTI
-association callbacks additionally require root's SRCU lifetime patch.
+association callbacks use the required common SRCU lifetime patch, which drains
+sleeping association callbacks before module teardown without holding either
+CoreSight registry mutex. Three concurrent sanitizer cases cover add/remove
+versus unload and an empty callback table; a missing-drain mutation is rejected.
 
 `verify_coresight_cti.py` runs 26,417 actual-C ASan/UBSan cases covering all DEVID
 trigger/channel combinations, every trigger/channel boundary, both MMIO layouts,

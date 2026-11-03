@@ -6,3 +6,11 @@
   read_sanitised_ftr_reg
   coresight_add_out_conn
   coresight_get_sink
+  coresight_set_cti_ops
+  coresight_remove_cti_ops
+  coresight_add_helper
+  coresight_add_sysfs_link
+  coresight_remove_sysfs_link
+  __cpuhp_remove_state_cpuslocked
+  mul_u64_u64_div_u64
+  coresight_find_csdev_by_fwnode

@@ -12,3 +12,5 @@
   coresight_add_sysfs_link
   coresight_remove_sysfs_link
   __cpuhp_remove_state_cpuslocked
+  mul_u64_u64_div_u64
+  coresight_find_csdev_by_fwnode

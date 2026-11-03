@@ -302,6 +302,10 @@ config QCOM_PMU_LIB
 	tristate "Onyx CPU performance counter service"
 	depends on PERF_EVENTS && QCOM_LLCC_PMU && QCOM_CPU_PHYS_LOG_MAP && QTI_QCOM_SCMI_CLIENT
 
+config QCOM_MEMLAT
+	tristate "Onyx CPU memory latency monitors"
+	depends on QCOM_DCVS && QCOM_PMU_LIB && QCOM_CPU_PHYS_LOG_MAP
+
 config ARM_QCOM_CPUFREQ_THERMAL
 	tristate "Onyx CPU frequency thermal notification"
 	depends on CPU_FREQ && MAILBOX
