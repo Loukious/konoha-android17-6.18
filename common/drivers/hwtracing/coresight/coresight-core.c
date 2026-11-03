@@ -22,6 +22,7 @@
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
 #include <linux/panic_notifier.h>
+#include <linux/srcu.h>
 
 #include "coresight-etm-perf.h"
 #include "coresight-priv.h"
@@ -53,19 +54,46 @@ struct coresight_node {
 const u32 coresight_barrier_pkt[4] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
 EXPORT_SYMBOL_GPL(coresight_barrier_pkt);
 
-static const struct cti_assoc_op *cti_assoc_ops;
+DEFINE_STATIC_SRCU(cti_assoc_srcu);
+static const struct cti_assoc_op __rcu *cti_assoc_ops;
 
 void coresight_set_cti_ops(const struct cti_assoc_op *cti_op)
 {
-	cti_assoc_ops = cti_op;
+	rcu_assign_pointer(cti_assoc_ops, cti_op);
 }
 EXPORT_SYMBOL_GPL(coresight_set_cti_ops);
 
 void coresight_remove_cti_ops(void)
 {
-	cti_assoc_ops = NULL;
+	rcu_assign_pointer(cti_assoc_ops, NULL);
+	/* Callbacks may sleep while updating the graph. Drain them before unload. */
+	synchronize_srcu(&cti_assoc_srcu);
 }
 EXPORT_SYMBOL_GPL(coresight_remove_cti_ops);
+
+static void coresight_cti_add(struct coresight_device *csdev)
+{
+	const struct cti_assoc_op *ops;
+	int index;
+
+	index = srcu_read_lock(&cti_assoc_srcu);
+	ops = srcu_dereference(cti_assoc_ops, &cti_assoc_srcu);
+	if (ops && ops->add)
+		ops->add(csdev);
+	srcu_read_unlock(&cti_assoc_srcu, index);
+}
+
+static void coresight_cti_remove(struct coresight_device *csdev)
+{
+	const struct cti_assoc_op *ops;
+	int index;
+
+	index = srcu_read_lock(&cti_assoc_srcu);
+	ops = srcu_dereference(cti_assoc_ops, &cti_assoc_srcu);
+	if (ops && ops->remove)
+		ops->remove(csdev);
+	srcu_read_unlock(&cti_assoc_srcu, index);
+}
 
 void coresight_set_percpu_sink(int cpu, struct coresight_device *csdev)
 {
@@ -1403,8 +1431,7 @@ out_unlock:
 	mutex_unlock(&coresight_mutex);
 	/* Success */
 	if (!ret) {
-		if (cti_assoc_ops && cti_assoc_ops->add)
-			cti_assoc_ops->add(csdev);
+		coresight_cti_add(csdev);
 		return csdev;
 	}
 
@@ -1425,8 +1452,7 @@ void coresight_unregister(struct coresight_device *csdev)
 {
 	etm_perf_del_symlink_sink(csdev);
 	/* Remove references of that device in the topology */
-	if (cti_assoc_ops && cti_assoc_ops->remove)
-		cti_assoc_ops->remove(csdev);
+	coresight_cti_remove(csdev);
 	coresight_remove_conns(csdev);
 	coresight_clear_default_sink(csdev);
 	coresight_release_platform_data(csdev, csdev->dev.parent, csdev->pdata);

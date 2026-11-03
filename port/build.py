@@ -64,6 +64,10 @@ def main():
                   if args.qdss_diagnostic else nullcontext())
     with (artifacts / "build.log").open("w") as log:
         with diagnostic, common_fixes(workspace / 'common', artifacts / 'common-fixes'):
+            from verify_cti_assoc import verify as verify_cti_assoc
+            cti_assoc_validation = verify_cti_assoc(workspace / "common")
+            (artifacts / "cti-assoc-host-validation.json").write_text(
+                json.dumps(cti_assoc_validation, indent=2) + "\n")
             subprocess.run(command, cwd=workspace, stdout=log,
                            stderr=subprocess.STDOUT, check=True)
     execution_root = Path(subprocess.check_output(
@@ -112,7 +116,7 @@ def main():
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
                  "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
-                 "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py",
+                 "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py", "verify_cti_assoc.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
         shutil.copyfile(HERE / name, inputs / name)
     shutil.copytree(HERE / "patches", inputs / "patches")
@@ -151,6 +155,7 @@ def main():
         "device_services_host_validation": services_validation,
         "platform_providers_host_validation": platform_validation,
         "vbat_ovp_host_validation": vbat_validation,
+        "cti_assoc_host_validation": cti_assoc_validation,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],

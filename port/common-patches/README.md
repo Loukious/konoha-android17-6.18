@@ -35,3 +35,10 @@ successful runtime resume. Lifecycle tests preserve and document that limit.
 This series does not include the separately discussed September platform
 probe-failure fix. Neither removal tests nor a clean startup establish the
 cause of the historical warnings from `amba_pm_runtime_suspend()`.
+
+The native CTI port also protects the shared CTI association callbacks with
+SRCU. Register/unregister callbacks can sleep while changing the graph;
+`coresight_remove_cti_ops()` publishes NULL and drains existing callbacks before
+the CTI module can unload. It holds no graph mutex while waiting. The actual
+wrappers have concurrent add/remove-versus-unload host tests in
+`verify_cti_assoc.py`, and the normal GKI build checks the real SRCU API.
