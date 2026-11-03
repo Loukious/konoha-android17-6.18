@@ -1431,5 +1431,9 @@
   {
     "target": "msm_show_epoch",
     "output": "msm_show_epoch.ko"
+  },
+  {
+    "target": "mca_business_misc_comp",
+    "output": "mca_business_misc_comp.ko"
   }
 ]

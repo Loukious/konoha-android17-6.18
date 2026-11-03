@@ -4244,6 +4244,8 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mca_business_misc_comp",
+
         ":boot_stats",
         ":msm_show_epoch",
         ":mca_qcom_sysfs",
@@ -5056,4 +5058,18 @@ ddk_module(
     kernel_build = "//common:kernel_aarch64",
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
+)
+
+ddk_module(
+    name = "mca_business_misc_comp",
+    srcs = [
+        "drivers/power/supply/mca/mca_business/business_misc/mca_business_misc.c",
+        "drivers/power/supply/mca/mca_business/business_misc/mca_business_votable.c",
+        "drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h",
+    ],
+    out = "mca_business_misc_comp.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mca_headers", ":mca_log", ":mca_common"],
 )

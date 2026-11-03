@@ -29957,5 +29957,23 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/msm_show_epoch.c",
     "blob": "f51924ce38988d1a2c896557342fff2682a664b5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_business/business_misc/mca_business_misc.c",
+    "blob": "53ca271f46efe94c570d7961f8d1241512181c3a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_business/business_misc/mca_business_votable.c",
+    "blob": "8ea8f24c2eb440edc357f433695b58307ee22522"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h",
+    "blob": "f84c63d58f5ff7f6abb78aaa303f57740d6e15ac"
   }
 ]

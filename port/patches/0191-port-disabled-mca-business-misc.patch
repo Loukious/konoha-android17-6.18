@@ -1,0 +1,172 @@
+--- a/drivers/power/supply/mca/mca_business/business_misc/mca_business_misc.c
++++ b/drivers/power/supply/mca/mca_business/business_misc/mca_business_misc.c
+@@ -51,10 +51,10 @@
+ 	misc->dev = &pdev->dev;
+ 	platform_set_drvdata(pdev, misc);
+ 
+-	ret = business_votable_init(misc->dev);
++	ret = business_votable_init(misc);
+ 	if (ret < 0) {
+ 		mca_log_err("business_votable_init fail\n");
+-		return -EINVAL;
++		return ret;
+ 	}
+ 
+ 	mca_log_err("probe end\n");
+@@ -62,19 +62,22 @@
+ 	return 0;
+ }
+ 
+-static int business_misc_remove(struct platform_device *pdev)
++static void business_misc_remove(struct platform_device *pdev)
+ {
+-	return 0;
++	business_votable_exit(platform_get_drvdata(pdev));
+ }
+ 
+ static void business_misc_shutdown(struct platform_device *pdev)
+ {
++	business_votable_exit(platform_get_drvdata(pdev));
+ }
+ 
+ static const struct of_device_id match_table[] = {
+ 	{ .compatible = "mca,business-misc" },
+ 	{},
+ };
++
++MODULE_DEVICE_TABLE(of, match_table);
+ 
+ static struct platform_driver business_misc_driver = {
+ 	.driver = {
+--- a/drivers/power/supply/mca/mca_business/business_misc/mca_business_votable.c
++++ b/drivers/power/supply/mca/mca_business/business_misc/mca_business_votable.c
+@@ -17,6 +17,8 @@
+  *
+  */
+ #include <linux/slab.h>
++#include <linux/pm_wakeup.h>
++#include "inc/mca_business_misc.h"
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ #include <linux/string.h>
+@@ -60,61 +62,72 @@
+ 						 void *data, int value,
+ 						 const char *client)
+ {
+-	int ret = 0;
++	/* Native callback has no smart-battery hardware operation. */
++	return -EOPNOTSUPP;
++}
+ 
+-	mca_log_info("vote SMART_BATT = %d\n", value);
+-	return ret;
++static void business_destroy_votables(void *data)
++{
++	struct business_votable_info *vote_info = data;
++
++	/* The named-vote SRCU grace period drains callbacks before devm data. */
++	mca_destroy_votable(vote_info->smart_batt_votable);
++	vote_info->smart_batt_votable = NULL;
++	mca_destroy_votable(vote_info->awake_votable);
++	vote_info->awake_votable = NULL;
++	pm_relax(vote_info->dev);
++	device_init_wakeup(vote_info->dev, false);
+ }
+ 
+ static int business_create_votable(struct business_votable_info *vote_info)
+ {
+-	int ret = 0;
++	int ret;
+ 
+-	vote_info->awake_votable =
+-		mca_create_votable("AWAKE", MCA_VOTE_OR,
+-				   business_awake_vote_callback, 0, vote_info);
++	vote_info->awake_votable = mca_create_votable("AWAKE", MCA_VOTE_OR,
++		business_awake_vote_callback, 0, vote_info);
+ 	if (IS_ERR(vote_info->awake_votable)) {
+ 		ret = PTR_ERR(vote_info->awake_votable);
+ 		vote_info->awake_votable = NULL;
+-		mca_destroy_votable(vote_info->awake_votable);
+-		mca_log_err("%s: failed to create voter AWAKE\n", __func__);
+ 		return ret;
+ 	}
+-
+-	vote_info->smart_batt_votable = mca_create_votable(
+-		"SMART_BATT", MCA_VOTE_MIN,
++	vote_info->smart_batt_votable = mca_create_votable("SMART_BATT", MCA_VOTE_MIN,
+ 		startegy_chg_smart_batt_vote_callback, 0, vote_info);
+ 	if (IS_ERR(vote_info->smart_batt_votable)) {
+ 		ret = PTR_ERR(vote_info->smart_batt_votable);
+ 		vote_info->smart_batt_votable = NULL;
+-		mca_destroy_votable(vote_info->smart_batt_votable);
+-		mca_log_err("%s: failed to create voter SMART_BATT\n",
+-			    __func__);
++		return ret;
+ 	}
+-
+ 	return 0;
+ }
+ 
+-int business_votable_init(struct device *dev)
++int business_votable_init(struct business_misc *misc)
+ {
+ 	struct business_votable_info *vote_info;
+-	int ret = 0;
++	int ret;
+ 
+-	mca_log_info("init start\n");
+-	vote_info = devm_kzalloc(dev, sizeof(*vote_info), GFP_KERNEL);
++	vote_info = devm_kzalloc(misc->dev, sizeof(*vote_info), GFP_KERNEL);
+ 	if (!vote_info)
+ 		return -ENOMEM;
+-	vote_info->dev = dev;
++	vote_info->dev = misc->dev;
++	ret = device_init_wakeup(misc->dev, true);
++	if (ret)
++		return ret;
++	ret = devm_add_action_or_reset(misc->dev, business_destroy_votables, vote_info);
++	if (ret)
++		return ret;
++	misc->vote_info = vote_info;
++	ret = business_create_votable(vote_info);
++	if (ret)
++		business_votable_exit(misc);
++	return ret;
++}
+ 
+-	ret = business_create_votable(vote_info);
+-	if (ret < 0) {
+-		mca_log_err("create votable fail\n");
+-		return ret;
+-	}
+-
+-	mca_log_info("int end\n");
+-
+-	return 0;
++void business_votable_exit(struct business_misc *misc)
++{
++	if (!misc || !misc->vote_info)
++		return;
++	devm_release_action(misc->dev, business_destroy_votables, misc->vote_info);
++	misc->vote_info = NULL;
+ }
+ 
+ MODULE_DESCRIPTION("business votable");
+--- a/drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h
++++ b/drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h
+@@ -21,10 +21,14 @@
+ 
+ #define PROBE_CNT_MAX 50
+ 
++struct business_votable_info;
++
+ struct business_misc {
+ 	struct device *dev;
++	struct business_votable_info *vote_info;
+ };
+ 
+-int business_votable_init(struct device *dev);
++int business_votable_init(struct business_misc *misc);
++void business_votable_exit(struct business_misc *misc);
+ 
+ #endif /*__BUSINESS_MISC_H__*/
