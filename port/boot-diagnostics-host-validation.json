@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "cases": 16,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/soc/qcom/boot_stats.c": "0808573c09d791def15f74ed5af349d5ce6f51cdd9b1235b4efab433060547e6",
+    "drivers/soc/qcom/msm_show_epoch.c": "d3138c1f951584526d4bc4817a863da9240774211f9cfc78d831d65846cadf17"
+  },
+  "limits": [
+    "Host MMIO/hook stubs verify bounds and cleanup; physical boot timestamps and suspend logs need device validation."
+  ]
+}

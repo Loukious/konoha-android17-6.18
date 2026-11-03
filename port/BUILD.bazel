@@ -4244,6 +4244,8 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":boot_stats",
+        ":msm_show_epoch",
         ":mca_qcom_sysfs",
         ":mca_vbat_ovp_monitor",
         ":mpam",
@@ -5036,4 +5038,22 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers"],
+)
+
+ddk_module(
+    name = "boot_stats",
+    srcs = ["drivers/soc/qcom/boot_stats.c"],
+    out = "boot_stats.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+)
+
+ddk_module(
+    name = "msm_show_epoch",
+    srcs = ["drivers/soc/qcom/msm_show_epoch.c"],
+    out = "msm_show_epoch.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
 )

@@ -1423,5 +1423,13 @@
   {
     "target": "coresight_cti",
     "output": "coresight-cti.ko"
+  },
+  {
+    "target": "boot_stats",
+    "output": "boot_stats.ko"
+  },
+  {
+    "target": "msm_show_epoch",
+    "output": "msm_show_epoch.ko"
   }
 ]

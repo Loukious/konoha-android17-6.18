@@ -29945,5 +29945,17 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/dcvs/memlat.c",
     "blob": "e0c32012b70e3f8d9adba7ed56ac041aa501b1e6"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/boot_stats.c",
+    "blob": "6857cc67183724d0f6922cc9d855b5374e82e4e5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/msm_show_epoch.c",
+    "blob": "f51924ce38988d1a2c896557342fff2682a664b5"
   }
 ]

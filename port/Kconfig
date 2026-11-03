@@ -1434,3 +1434,11 @@ config QCOM_QTI_PMIC_GLINK_DEBUG
 
 config QCOM_GH_TLMM_VM_MEM_ACCESS
     tristate "Onyx TLMM VM sharing"
+
+config MSM_BOOT_STATS
+	tristate "Qualcomm bootloader statistics"
+	depends on OF && HAS_IOMEM
+
+config SHOW_SUSPEND_EPOCH
+	tristate "Qualcomm suspend epoch logging"
+	depends on ANDROID_VENDOR_HOOKS
