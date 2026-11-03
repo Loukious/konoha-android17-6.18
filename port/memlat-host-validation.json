@@ -3,7 +3,7 @@
   "cases": 89,
   "sanitizers": "ASan+UBSan",
   "source_sha256": {
-    "drivers/soc/qcom/dcvs/memlat.c": "d31827d588938777ef0f0403ffb450463a115302638e214424fa24ed1538f732"
+    "drivers/soc/qcom/dcvs/memlat.c": "816f25b048aaaaddbe49d6dd3dcf9bb3883ae84af2355be20a631eeb401f19ac"
   },
   "limits": [
     "Mocked firmware/providers validate C control flow; device votes and timing need hardware validation."

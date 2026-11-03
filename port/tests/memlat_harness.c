@@ -69,6 +69,7 @@ struct qcom_scmi_vendor_ops {
 #define min_t(t,a,b) min((t)(a),(t)(b))
 #define max_t(t,a,b) max((t)(a),(t)(b))
 #define unlikely(a) (a)
+#define current get_current()
 #define READ_ONCE(a) (a)
 #define WRITE_ONCE(a,b) ((a)=(b))
 #define container_of(p,t,m) ((t *)((char *)(p)-offsetof(t,m)))
