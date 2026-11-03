@@ -1458,3 +1458,7 @@ config CORESIGHT_QMI
 config CORESIGHT_TGU
 	tristate "Onyx CoreSight trigger generation unit"
 	depends on CORESIGHT
+
+config QTI_CPUCP_LOG
+	tristate "Onyx cpucp_log native provider"
+	depends on MAILBOX && QCOM_CPUCP && QTI_QCOM_SCMI_CLIENT

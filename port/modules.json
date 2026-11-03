@@ -1455,5 +1455,9 @@
   {
     "target": "coresight_tgu",
     "output": "coresight-tgu.ko"
+  },
+  {
+    "target": "cpucp_log",
+    "output": "cpucp_log.ko"
   }
 ]

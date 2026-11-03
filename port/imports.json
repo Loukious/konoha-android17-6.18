@@ -30017,5 +30017,17 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/hwtracing/coresight/coresight-tgu.c",
     "blob": "705db7d74d8eefa1626bbd78a09cab516bf4f00f"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/cpucp_log.c",
+    "blob": "5d445bb9631ed92f13a2d20aa69e860fa17b6833"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/trace_cpucp.h",
+    "blob": "501abbebab333d3a7ac5ad59fe8bda8db323967b"
   }
 ]
