@@ -29975,5 +29975,17 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h",
     "blob": "f84c63d58f5ff7f6abb78aaa303f57740d6e15ac"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c",
+    "blob": "5943ef57e70a0291326c26f9122bb7e0ac76fc3c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h",
+    "blob": "d08126c696bef0f3f7e6d0129dd869427fc6ba99"
   }
 ]

@@ -1,0 +1,511 @@
+--- a/drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c
++++ b/drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c
+@@ -17,6 +17,7 @@
+  *
+  */
+ #include <linux/kernel.h>
++#include <linux/limits.h>
+ #include <linux/init.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
+@@ -48,161 +49,116 @@
+ 
+ static int mca_ibat_mon_get_ibat_ocp_flag(struct mca_ibat_ocp_mon_dev *info)
+ {
+-	int master_ocp = 0;
+-	int slave_ocp = 0;
+-	int flag;
+-	int master_curr, slave_curr;
+-
+-	(void)platform_fg_ops_get_curr(FG_IC_MASTER, &master_curr);
+-	(void)platform_fg_ops_get_curr(FG_IC_SLAVE, &slave_curr);
+-
+-	if (info->fake_master_ibat_override_ma > 0)
+-		master_curr = info->fake_master_ibat_override_ma;
+-	if (info->fake_slave_ibat_override_ma > 0)
+-		slave_curr = info->fake_slave_ibat_override_ma;
++	int role, current, ret, flag = 0;
++	s64 magnitude;
+ 
+-	if (abs(master_curr) > info->ocp_threshold[FG_IC_MASTER]) {
+-		master_ocp = 1;
++	for (role = FG_IC_MASTER; role <= FG_IC_SLAVE; role++) {
++		ret = platform_fg_ops_get_curr(role, &current);
++		if (ret)
++			return ret;
++		/* Native FG current and thresholds are microamps, despite _ma names. */
++		magnitude = current < 0 ? -(s64)current : current;
++		magnitude = max_t(s64, magnitude, role == FG_IC_MASTER ?
++			info->fake_master_ibat_override_ma : info->fake_slave_ibat_override_ma);
++		if (magnitude > info->ocp_threshold[role])
++			flag |= role == FG_IC_MASTER ? 2 : 1;
+ 	}
+-	if (abs(slave_curr) > info->ocp_threshold[FG_IC_SLAVE]) {
+-		slave_ocp = 1;
+-	}
+-
+-	flag = (master_ocp << 1) | slave_ocp;
+-	flag &= 0x03;
+-
+ 	return flag;
+ }
+ 
+ static int mca_ibat_mon_get_ibat_ocp_status(struct mca_ibat_ocp_mon_dev *info)
+ {
+-	int ret, ffc_sts, ocp_flag;
++	int ret, ffc_sts;
+ 	int usb_online = 0, wireless_online = 0;
+-	static int ibat_ocp_triggered = 0;
++	bool loadsw_present;
+ 
+-	if (!info)
+-		return 0;
+-
+-	/* to do, now only support parallel battery */
+-	if (info->fg_type != MCA_FG_TYPE_PARALLEL)
++	ret = platform_class_buckchg_ops_get_online(MAIN_BUCK_CHARGER, &usb_online);
++	if (ret)
++		return ret;
++	if (!usb_online && info->has_wireless) {
++		ret = platform_class_wireless_is_present(WIRELESS_ROLE_MASTER, &wireless_online);
++		if (ret)
++			return ret;
++	}
++	if (!usb_online && !wireless_online)
+ 		return 0;
+-
+-	ret = platform_class_buckchg_ops_get_online(MAIN_BUCK_CHARGER,
+-						    &usb_online);
+-	ret |= platform_class_wireless_is_present(WIRELESS_ROLE_MASTER,
+-						  &wireless_online);
+-
+-	if (ret) {
++	ret = platform_class_loadsw_get_present(LOADSW_ROLE_MASTER, &loadsw_present);
++	if (ret)
++		return ret;
++	if (!loadsw_present)
++		mca_charge_mievent_report(CHARGE_DFX_LOAD_SWITCH_I2C_ERR, NULL, 0);
++	ffc_sts = strategy_class_fg_get_fastcharge();
++	if (ffc_sts < 0)
++		return ffc_sts;
++	if (!ffc_sts)
+ 		return 0;
+-	} else {
+-		/* no need to monitor when power absent */
+-		if (!usb_online && !wireless_online) {
+-			return 0;
+-		} else {
+-			bool loadsw_present = true;
+-			platform_class_loadsw_get_present(LOADSW_ROLE_MASTER, &loadsw_present);
+-			if (!loadsw_present)
+-				mca_charge_mievent_report(CHARGE_DFX_LOAD_SWITCH_I2C_ERR, NULL, 0);
+-
+-			ffc_sts = strategy_class_fg_get_fastcharge();
+-			if (!ffc_sts)
+-				return 0;
+-
+-			ocp_flag = mca_ibat_mon_get_ibat_ocp_flag(info);
+-			mca_log_info("ocp_flag = %d, ibat_ocp_triggered: %d\n",
+-				     ocp_flag, ibat_ocp_triggered);
+-			if (!ibat_ocp_triggered && ocp_flag) {
+-				ibat_ocp_triggered = 1;
+-				mca_log_err(
+-					"ibat ocp triggered: ibat_ocp_triggered = %d\n",
+-					ibat_ocp_triggered);
+-				return ocp_flag;
+-			} else if (ibat_ocp_triggered && !ocp_flag) {
+-				ibat_ocp_triggered = 0;
+-				mca_log_info(
+-					"ibat ocp cleared: ibat_ocp_triggered = %d\n",
+-					ibat_ocp_triggered);
+-				return 0;
+-			} else if (ibat_ocp_triggered) {
+-				return ocp_flag;
+-			}
+-		}
+-	}
+-
+-	return 0;
++	return mca_ibat_mon_get_ibat_ocp_flag(info);
+ }
+ 
+ static void mca_ibat_ocp_monitor_workfunc(struct work_struct *work)
+ {
+ 	struct mca_ibat_ocp_mon_dev *info = container_of(
+ 		work, struct mca_ibat_ocp_mon_dev, monitor_ibat_ocp_work.work);
+-	int ibat_ocp_confirmed = 0;
+-	int interval = NORMAL_HEARTBEAT_TIMER_MS;
+-	int fake_ibat_ocp = 0;
+-
+-	mca_log_info("fake_ibat_for_debug = %d\n", info->fake_ibat_for_debug);
+-	if (info->fake_ibat_for_debug > 13000000)
+-		fake_ibat_ocp = 1;
+-	else
+-		fake_ibat_ocp = 0;
+-
+-	if (info->fake_ibat_ocp_status != fake_ibat_ocp) {
+-		info->fake_ibat_ocp_status = fake_ibat_ocp;
+-		mca_log_err("fake_ibat_ocp = %d\n", fake_ibat_ocp);
+-		mca_event_block_notify(MCA_EVENT_TYPE_HW_INFO,
+-				       MCA_EVENT_IBAT_OCP_CHANGE,
+-				       &info->fake_ibat_ocp_status);
+-		goto next;
+-	}
++	int status, interval = NORMAL_HEARTBEAT_TIMER_MS;
+ 
+-	ibat_ocp_confirmed = mca_ibat_mon_get_ibat_ocp_status(info);
+-
+-	if (info->batt_ocp_status != ibat_ocp_confirmed) {
+-		info->batt_ocp_status = ibat_ocp_confirmed;
++	mutex_lock(&info->lock);
++	if (info->stopping)
++		goto out;
++	status = mca_ibat_mon_get_ibat_ocp_status(info);
++	if (status < 0) {
++		mca_log_err("IBAT observation failed: %d\n", status);
++		status = info->batt_ocp_status;
++		interval = FAST_HEARTBEAT_TIMER_MS;
++	}
++	info->fake_ibat_ocp_status = info->fake_ibat_for_debug > 13000000;
++	/* Debug can assert protection, never hide a measured master/slave fault. */
++	status |= info->fake_ibat_ocp_status;
++	if (info->batt_ocp_status != status) {
++		info->batt_ocp_status = status;
+ 		mca_event_block_notify(MCA_EVENT_TYPE_HW_INFO,
+-				       MCA_EVENT_IBAT_OCP_CHANGE,
+-				       &info->batt_ocp_status);
++			MCA_EVENT_IBAT_OCP_CHANGE, &info->batt_ocp_status);
+ 	}
+-
+-	if (ibat_ocp_confirmed)
++	if (status)
+ 		interval = FAST_HEARTBEAT_TIMER_MS;
+-	else
+-		interval = NORMAL_HEARTBEAT_TIMER_MS;
+-next:
+-	schedule_delayed_work(&info->monitor_ibat_ocp_work,
+-			      msecs_to_jiffies(interval));
++	schedule_delayed_work(&info->monitor_ibat_ocp_work, msecs_to_jiffies(interval));
++out:
++	mutex_unlock(&info->lock);
+ }
+ 
+ static int mca_ibat_ocp_mon_parse_dt(struct mca_ibat_ocp_mon_dev *info)
+ {
+-	struct device_node *np = info->dev->of_node;
+-	int ret = 0, ret2 = 0;
++	struct device_node *np = info->dev->of_node, *charger;
++	u32 fg_type = MCA_FG_TYPE_SINGLE, thresholds[2], support_wls;
++	int ret, i;
+ 
+-	if (!np) {
+-		mca_log_err("device tree info missing\n");
+-		return -1;
+-	}
+-
+-	ret = mca_parse_dts_u32(np, "fg_type", &info->fg_type,
+-				MCA_FG_TYPE_SINGLE);
++	if (!np)
++		return -EINVAL;
++	if (of_find_property(np, "fg_type", NULL)) {
++		ret = of_property_read_u32(np, "fg_type", &fg_type);
++		if (ret)
++			return ret;
++	}
++	/* The pinned monitor only implements two parallel fuel gauges. */
++	if (fg_type != MCA_FG_TYPE_PARALLEL)
++		return -EOPNOTSUPP;
++	info->fg_type = fg_type;
++	ret = of_property_read_u32_array(np, "ocp_threshold", thresholds, 2);
+ 	if (ret)
+-		mca_log_err("parse fg_type failed\n");
+-
+-	ret2 = mca_parse_dts_u32_array(np, "ocp_threshold", info->ocp_threshold,
+-				       2);
+-	if (ret2 || ret) {
+-		info->ocp_threshold[FG_IC_MASTER] = OCP_THRESHOLD_MAINT;
+-		info->ocp_threshold[FG_IC_SLAVE] = OCP_THRESHOLD_FLIP;
+-		mca_log_err("parse ocp_threshold failed, use default value\n");
+-		mca_log_info("ocp_threshold : %d %d\n", info->ocp_threshold[0],
+-			     info->ocp_threshold[1]);
+-		return -1;
+-	}
+-
+-	mca_log_info("ocp_threshold : %d %d\n", info->ocp_threshold[0],
+-		     info->ocp_threshold[1]);
+-
+-	return 0;
++		return ret;
++	for (i = 0; i < 2; i++) {
++		if (!thresholds[i] || thresholds[i] > INT_MAX)
++			return -ERANGE;
++		info->ocp_threshold[i] = thresholds[i];
++	}
++	charger = of_find_compatible_node(NULL, NULL, "mca,business_charger");
++	if (!charger)
++		return -ENODEV;
++	ret = of_property_read_u32(charger, "support-wls", &support_wls);
++	if (!ret && support_wls > 1)
++		ret = -EINVAL;
++	info->has_wireless = !ret && of_device_is_available(charger) && support_wls;
++	of_node_put(charger);
++	return ret;
+ }
+ 
+ static ssize_t ibat_ocp_sysfs_show(struct device *dev,
+@@ -229,94 +185,68 @@
+ };
+ 
+ static ssize_t ibat_ocp_sysfs_show(struct device *dev,
+-				   struct device_attribute *attr, char *buf)
++		struct device_attribute *attr, char *buf)
+ {
+-	struct mca_sysfs_attr_info *attr_info;
+-	ssize_t count = 0;
++	struct mca_sysfs_attr_info *field = mca_sysfs_lookup_attr(attr->attr.name,
++		ibat_ocp_sysfs_field_tbl, IBAT_OVP_SYSFS_ATTRS_SIZE);
+ 	struct mca_ibat_ocp_mon_dev *info = dev_get_drvdata(dev);
+-	int ibat, ibat_override;
++	ssize_t ret;
++	int value;
+ 
+-	attr_info = mca_sysfs_lookup_attr(attr->attr.name,
+-					  ibat_ocp_sysfs_field_tbl,
+-					  IBAT_OVP_SYSFS_ATTRS_SIZE);
+-	if (!attr_info)
+-		return -1;
+-
+-	if (!info) {
+-		mca_log_err("%s dev_driverdata is null\n", __func__);
+-		return -1;
+-	}
+-	switch (attr_info->sysfs_attr_name) {
+-	case FAKE_IBAT_FOR_DEBUG:
+-		ibat = info->fake_ibat_for_debug;
+-		count = scnprintf(buf, PAGE_SIZE, "%d\n", ibat);
+-		break;
+-	case FAKE_MASTER_IBAT_OVERRIDE:
+-		ibat_override = info->fake_master_ibat_override_ma;
+-		count = scnprintf(buf, PAGE_SIZE, "%d\n", ibat_override);
+-		break;
+-	case FAKE_SLAVE_IBAT_OVERRIDE:
+-		ibat_override = info->fake_slave_ibat_override_ma;
+-		count = scnprintf(buf, PAGE_SIZE, "%d\n", ibat_override);
+-		break;
+-	default:
+-		break;
+-	}
+-	return count;
++	if (!field)
++		return -EINVAL;
++	if (!info)
++		return -ENODEV;
++	mutex_lock(&info->lock);
++	if (info->stopping) {
++		ret = -ENODEV;
++		goto out;
++	}
++	switch (field->sysfs_attr_name) {
++	case FAKE_IBAT_FOR_DEBUG: value = info->fake_ibat_for_debug; break;
++	case FAKE_MASTER_IBAT_OVERRIDE: value = info->fake_master_ibat_override_ma; break;
++	case FAKE_SLAVE_IBAT_OVERRIDE: value = info->fake_slave_ibat_override_ma; break;
++	default: ret = -EINVAL; goto out;
++	}
++	ret = scnprintf(buf, PAGE_SIZE, "%d\n", value);
++out:
++	mutex_unlock(&info->lock);
++	return ret;
+ }
+ 
+ static ssize_t ibat_ocp_sysfs_store(struct device *dev,
+-				    struct device_attribute *attr,
+-				    const char *buf, size_t count)
++		struct device_attribute *attr, const char *buf, size_t count)
+ {
+-	struct mca_sysfs_attr_info *attr_info;
++	struct mca_sysfs_attr_info *field = mca_sysfs_lookup_attr(attr->attr.name,
++		ibat_ocp_sysfs_field_tbl, IBAT_OVP_SYSFS_ATTRS_SIZE);
+ 	struct mca_ibat_ocp_mon_dev *info = dev_get_drvdata(dev);
+-	int val;
++	int value, ret;
+ 
+-	attr_info = mca_sysfs_lookup_attr(attr->attr.name,
+-					  ibat_ocp_sysfs_field_tbl,
+-					  IBAT_OVP_SYSFS_ATTRS_SIZE);
+-	if (!attr_info)
+-		return -1;
+-
+-	if (!info) {
+-		mca_log_err("%s dev_driverdata is null\n", __func__);
+-		return -1;
+-	}
+-
+-	if (kstrtoint(buf, 10, &val))
++	if (!field)
+ 		return -EINVAL;
+-
+-	switch (attr_info->sysfs_attr_name) {
+-	case FAKE_IBAT_FOR_DEBUG:
+-		info->fake_ibat_for_debug = val;
+-		mca_log_err("set the %d fake vbat for debug = %d\n",
+-			    attr_info->sysfs_attr_name, val);
+-
+-		cancel_delayed_work(&info->monitor_ibat_ocp_work);
+-		schedule_delayed_work(&info->monitor_ibat_ocp_work, 0);
+-		break;
+-	case FAKE_MASTER_IBAT_OVERRIDE:
+-		info->fake_master_ibat_override_ma = val;
+-		mca_log_err("set the %d fake vbat override = %d\n",
+-			    attr_info->sysfs_attr_name, val);
+-
+-		cancel_delayed_work(&info->monitor_ibat_ocp_work);
+-		schedule_delayed_work(&info->monitor_ibat_ocp_work, 0);
+-		break;
+-	case FAKE_SLAVE_IBAT_OVERRIDE:
+-		info->fake_slave_ibat_override_ma = val;
+-		mca_log_err("set the %d fake vbat override = %d\n",
+-			    attr_info->sysfs_attr_name, val);
+-
+-		cancel_delayed_work(&info->monitor_ibat_ocp_work);
+-		schedule_delayed_work(&info->monitor_ibat_ocp_work, 0);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return count;
++	if (!info)
++		return -ENODEV;
++	ret = kstrtoint(buf, 10, &value);
++	if (ret)
++		return ret;
++	if (value < 0 && value != -22)
++		return -EINVAL;
++	mutex_lock(&info->lock);
++	if (info->stopping) {
++		ret = -ENODEV;
++		goto out;
++	}
++	switch (field->sysfs_attr_name) {
++	case FAKE_IBAT_FOR_DEBUG: info->fake_ibat_for_debug = value; break;
++	case FAKE_MASTER_IBAT_OVERRIDE: info->fake_master_ibat_override_ma = value; break;
++	case FAKE_SLAVE_IBAT_OVERRIDE: info->fake_slave_ibat_override_ma = value; break;
++	default: ret = -EINVAL; goto out;
++	}
++	mod_delayed_work(system_wq, &info->monitor_ibat_ocp_work, 0);
++	ret = count;
++out:
++	mutex_unlock(&info->lock);
++	return ret;
+ }
+ 
+ static int ibat_ocp_mon_sysfs_create_group(struct device *dev)
+@@ -335,36 +265,55 @@
+ 	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
+ 	if (!info)
+ 		return -ENOMEM;
+-
+ 	info->dev = &pdev->dev;
++	mutex_init(&info->lock);
++	info->stopping = true;
+ 	platform_set_drvdata(pdev, info);
+ 	ret = mca_ibat_ocp_mon_parse_dt(info);
+-	if (ret) {
+-		mca_log_err("parse dt faile\n");
+-		return -1;
+-	}
+-
+-	info->batt_ocp_status = 0;
+-	info->fake_ibat_ocp_status = 0;
++	if (ret)
++		return dev_err_probe(info->dev, ret, "Invalid IBAT OCP configuration\n");
+ 	info->fake_ibat_for_debug = -22;
+ 	info->fake_master_ibat_override_ma = -22;
+ 	info->fake_slave_ibat_override_ma = -22;
+-	INIT_DELAYED_WORK(&info->monitor_ibat_ocp_work,
+-			  mca_ibat_ocp_monitor_workfunc);
++	INIT_DELAYED_WORK(&info->monitor_ibat_ocp_work, mca_ibat_ocp_monitor_workfunc);
++	ret = ibat_ocp_mon_sysfs_create_group(info->dev);
++	if (ret)
++		return ret;
++	mutex_lock(&info->lock);
++	info->sysfs_created = true;
++	info->stopping = false;
+ 	schedule_delayed_work(&info->monitor_ibat_ocp_work,
+-			      msecs_to_jiffies(NORMAL_HEARTBEAT_TIMER_MS));
+-	ibat_ocp_mon_sysfs_create_group(info->dev);
+-	mca_log_err("%s success\n", __func__);
++		msecs_to_jiffies(NORMAL_HEARTBEAT_TIMER_MS));
++	mutex_unlock(&info->lock);
+ 	return 0;
+ }
+ 
+-static int mca_ibat_ocp_mon_remove(struct platform_device *pdev)
++static void mca_ibat_ocp_mon_stop(struct platform_device *pdev)
+ {
+-	return 0;
++	struct mca_ibat_ocp_mon_dev *info = platform_get_drvdata(pdev);
++	bool remove_sysfs;
++
++	if (!info)
++		return;
++	mutex_lock(&info->lock);
++	info->stopping = true;
++	remove_sysfs = info->sysfs_created;
++	info->sysfs_created = false;
++	mutex_unlock(&info->lock);
++	if (remove_sysfs)
++		mca_sysfs_remove_link_group(SYSFS_DEV_5, "ibat_ocp", info->dev,
++			&ibat_ocp_sysfs_attr_group);
++	cancel_delayed_work_sync(&info->monitor_ibat_ocp_work);
++}
++
++static void mca_ibat_ocp_mon_remove(struct platform_device *pdev)
++{
++	mca_ibat_ocp_mon_stop(pdev);
+ }
+ 
+ static void mca_ibat_ocp_mon_shutdown(struct platform_device *pdev)
+ {
++	mca_ibat_ocp_mon_stop(pdev);
+ }
+ 
+ static const struct of_device_id match_table[] = {
+@@ -372,6 +321,8 @@
+ 	{},
+ };
+ 
++MODULE_DEVICE_TABLE(of, match_table);
++
+ static struct platform_driver mca_ibat_ocp_mon_driver = {
+ 	.driver = {
+ 		.owner = THIS_MODULE,
+@@ -397,4 +348,4 @@
+ 
+ MODULE_DESCRIPTION("battery ocp software protection");
+ MODULE_AUTHOR("yinshunan@xiaomi.com");
+-MODULE_LICENSE("GPL v2");
+\ No newline at end of file
++MODULE_LICENSE("GPL v2");
+--- a/drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h
++++ b/drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h
+@@ -20,6 +20,8 @@
+ #ifndef __IBAT_OCP_MONITOR_H__
+ #define __IBAT_OCP_MONITOR_H__
+ 
++#include <linux/mutex.h>
++
+ #define OCP_THRESHOLD_MAINT 9280000
+ #define OCP_THRESHOLD_FLIP 3540000
+ 
+@@ -41,6 +43,10 @@
+ 
+ struct mca_ibat_ocp_mon_dev {
+ 	struct device *dev;
++	struct mutex lock;
++	bool stopping;
++	bool sysfs_created;
++	bool has_wireless;
+ 	struct delayed_work monitor_ibat_ocp_work;
+ 	int fake_ibat_for_debug;
+ 	int fake_master_ibat_override_ma;

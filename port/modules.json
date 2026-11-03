@@ -1435,5 +1435,9 @@
   {
     "target": "mca_business_misc_comp",
     "output": "mca_business_misc_comp.ko"
+  },
+  {
+    "target": "mca_ibat_ocp_monitor",
+    "output": "mca_ibat_ocp_monitor.ko"
   }
 ]
