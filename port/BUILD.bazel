@@ -5124,9 +5124,8 @@ ddk_module(
 
 ddk_headers(
     name = "coresight_qmi_headers",
-    hdrs = ["drivers/hwtracing/coresight/coresight-qmi.h"],
+    hdrs = ["drivers/hwtracing/coresight/coresight-qmi.h", ":remote_headers"],
     includes = ["drivers/hwtracing/coresight"],
-    deps = [":remote_headers"],
 )
 
 ddk_module(
