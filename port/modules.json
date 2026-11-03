@@ -1447,5 +1447,9 @@
   {
     "target": "cpufreq_stats_scmi_v3",
     "output": "cpufreq_stats_scmi_v3.ko"
+  },
+  {
+    "target": "coresight_qmi",
+    "output": "coresight-qmi.ko"
   }
 ]

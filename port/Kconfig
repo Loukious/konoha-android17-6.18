@@ -1450,3 +1450,7 @@ config QTI_CPUFREQ_STATS_SCMI_V2
 config QTI_CPUFREQ_STATS_SCMI_V3
 	tristate "Onyx cpufreq_stats_scmi_v3 native provider"
 	depends on ARM_SCMI_PROTOCOL
+
+config CORESIGHT_QMI
+	tristate "Onyx CoreSight QMI firmware control"
+	depends on CORESIGHT

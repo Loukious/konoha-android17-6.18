@@ -104,3 +104,20 @@ modules, including inactive variants and recovery/debug providers. The user
 requested continued ports while away; the phone is disconnected. No module in
 this batch has been installed or hardware-validated. See
 [validation summary](validation/active_provider_batch/summary.json).
+
+
+The next CoreSight provider batch starts with `coresight_qmi`: six enabled Onyx
+helpers retain their native QMI service/instance IDs, commands, message layouts,
+timeout and names. Every firmware rejection returns an error. Requests snapshot
+the endpoint under an IRQ-safe lock; receive callbacks avoid the transaction
+mutex. Old-server deletion cannot disconnect a replacement endpoint. Removal
+closes new requests, finishes any active transaction, unregisters CoreSight and
+drains the QMI handle. Failed lookup or CoreSight publication releases the
+initialized handle. A helper must be owned by the QMI driver before a caller
+can treat its data as QMI state.
+
+`verify_coresight_qmi.py` passes 766 actual-C ASan/UBSan cases for all four
+commands, transport/firmware failures, transaction cancellation, endpoint
+replacement, callbacks during a transaction, ATID/name/buffer bounds, probe
+rollback and removal. Firmware and physical trace delivery remain untested while
+the phone is disconnected. No disabled DT nodes are enabled.

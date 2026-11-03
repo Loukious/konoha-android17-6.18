@@ -4264,6 +4264,8 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":coresight_qmi",
+
         ":mca_ibat_ocp_monitor",
 
         ":mca_business_misc_comp",
@@ -5109,4 +5111,21 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":mca_headers", ":mca_sysfs", ":mca_log", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_wireless_class", ":mca_platform_fg_ic_ops", ":mca_platform_loadsw_class", ":mca_charge_mievent", ":mca_event"],
+)
+
+ddk_headers(
+    name = "coresight_qmi_headers",
+    hdrs = ["drivers/hwtracing/coresight/coresight-qmi.h"],
+    includes = ["drivers/hwtracing/coresight"],
+    deps = [":remote_headers"],
+)
+
+ddk_module(
+    name = "coresight_qmi",
+    srcs = ["drivers/hwtracing/coresight/coresight-qmi.c"],
+    out = "coresight-qmi.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":qmi_helpers"],
 )
