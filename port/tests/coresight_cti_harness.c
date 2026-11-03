@@ -37,7 +37,7 @@ struct cti_trig_con {
     const char *con_dev_name, *con_node_name;
     struct cti_trig_con *next;
 };
-struct cti_device { struct cti_trig_con *trig_cons; };
+struct cti_device { struct cti_trig_con *trig_cons; int cpu; };
 #define list_for_each_entry(item, head, node) for ((item) = *(head); (item); (item) = (item)->next)
 struct cti_drvdata {
     void *base;
@@ -60,6 +60,7 @@ static u32 mmio[1024];
 static int claims, disclaims, claim_error, clock_error, clock_enables, clock_disables;
 static int gpio_error, gpio_enables, gpio_disables, register_error, assoc_published, force_error;
 static bool link_success;
+static bool cpu_is_online;
 static int helpers, link_removes;
 static const char *linked_name;
 static unsigned int cases;
@@ -119,6 +120,9 @@ static int cti_driver, cti_assoc_ops;
 static void coresight_set_cti_ops(void *ops) { assoc_published = 1; }
 static void coresight_remove_cti_ops(void) { assoc_published = 0; }
 static int amba_driver_register(void *driver) { return register_error; }
+static void cpus_read_lock(void) { }
+static void cpus_read_unlock(void) { }
+static bool cpu_online(int cpu) { return cpu_is_online; }
 static bool cti_add_sysfs_link(struct cti_drvdata *drv, struct cti_trig_con *con) {
     linked_name = con->con_dev_name; return link_success;
 }
@@ -136,6 +140,7 @@ static void reset(bool extended, int triggers, int channels) {
     memset(&d, 0, sizeof(d)); memset(mmio, 0, sizeof(mmio));
     in.trig = out.trig = -1;
     d.base = mmio; d.regs_size = sizeof(mmio); d.extended_cti = extended;
+    d.ctidev.cpu = -1;
     d.csdev = &cs; d.gpio_trigin = &in; d.gpio_trigout = &out;
     parent.data = &d; cs.dev.parent = &parent;
     mmio[CORESIGHT_DEVID / 4] = (triggers << 8) | (channels << 16);
@@ -272,6 +277,12 @@ int main(void) {
     CHECK(helpers == 1 && !connection.con_dev);
     CHECK(!strcmp(connection.con_dev_name, connection.con_node_name));
     cti_remove_conn_xrefs(&d); CHECK(link_removes == 1);
+    initialized(true, 128, 4);
+    d.ctidev.cpu = 0; d.config.hw_powered = false; d.config.enable_req_count = 1;
+    cpu_is_online = false; cti_restore_hw(&d);
+    CHECK(!d.config.hw_powered && !d.config.hw_enabled && !mmio[CTICONTROL / 4]);
+    cpu_is_online = true; cti_restore_hw(&d);
+    CHECK(d.config.hw_powered && d.config.hw_enabled && d.config.enable_req_count == 1);
     printf("%u\n", cases);
     return 0;
 }

@@ -31,7 +31,7 @@ def verify(staged):
         "coresight-cti-core.c": ["cti_write_all_hw_regs", "cti_enable_hw", "cti_cpuhp_enable_hw",
             "cti_disable_hw", "cti_write_single_reg", "cti_write_intack", "cti_set_default_config",
             "cti_channel_trig_op", "cti_channel_gate_op", "cti_channel_setop", "cti_disable_atclk",
-            "cti_runtime_suspend", "cti_runtime_resume", "cti_suspend", "cti_resume", "cti_init",
+            "cti_runtime_suspend", "cti_runtime_resume", "cti_restore_hw", "cti_suspend", "cti_resume", "cti_init",
             "cti_update_conn_xrefs", "cti_remove_conn_xrefs"],
         "coresight-cti-sysfs.c": ["inout_sel_store", "inen_store", "outen_store", "gate_store",
             "asicctl_store", "appset_store", "appclear_store", "apppulse_store"],
@@ -48,6 +48,8 @@ def verify(staged):
     assert "list_del_init(&drvdata->node)" in function(core, "cti_remove")
     assert "cti_cpu_drvdata[drvdata->ctidev.cpu] = NULL" in function(core, "cti_pm_release")
     assert "sysfs_remove_groups" in function(core, "cti_remove")
+    assert "drvdata->config.hw_powered = drvdata->ctidev.cpu < 0" in function(core, "cti_probe")
+    assert "if (cpu_online(cpu))" in function(core, "cti_pm_setup")
     harness = (HERE / "tests/coresight_cti_harness.c").read_text()
     with tempfile.TemporaryDirectory(prefix="konoha-cti-test-") as directory:
         c = Path(directory) / "cti.c"
