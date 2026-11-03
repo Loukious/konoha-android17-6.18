@@ -1,0 +1,52 @@
+{
+  "status": "PASS",
+  "assertions": 235135120,
+  "sanitizers": "ASan+UBSan",
+  "functions": [
+    "glink_pkt_mapped_length",
+    "glink_pkt_skb_data",
+    "glink_pkt_kfree_skb",
+    "glink_pkt_clear_queues",
+    "glink_pkt_rpdev_no_copy_cb",
+    "glink_pkt_rpdev_copy_cb",
+    "glink_pkt_rpdev_cb",
+    "glink_pkt_rpdev_sigs",
+    "glink_pkt_drv_try_register",
+    "glink_pkt_begin_unregister",
+    "glink_pkt_finish_unregister",
+    "glink_pkt_drv_try_unregister",
+    "glink_pkt_idle_work",
+    "glink_pkt_queue_idle",
+    "glink_pkt_cancel_idle",
+    "glink_pkt_open",
+    "glink_pkt_release",
+    "glink_pkt_read",
+    "glink_pkt_write",
+    "glink_pkt_tiocmset",
+    "glink_pkt_mapping_vma",
+    "glink_pkt_zap_mapping",
+    "glink_pkt_revoke_pending",
+    "glink_pkt_vma_close",
+    "glink_pkt_vma_mremap",
+    "glink_pkt_mmap",
+    "glink_pkt_zerocopy_done",
+    "glink_pkt_vaddr_to_page",
+    "glink_pkt_mapping_extent",
+    "glink_pkt_zerocopy_receive",
+    "glink_pkt_zerocopy_rollback",
+    "glink_pkt_ioctl"
+  ],
+  "source_sha256": {
+    "drivers/rpmsg/glink_pkt.c": "7dba08f8aa96bf80e7265252e3a5a5cb0834ba7996f0815461c27b987759cc7d",
+    "drivers/rpmsg/qcom_glink_native.c": "a29501761e4d7414d06034e6d72aefacd901cd4c203a8c235039a4748968a068"
+  },
+  "signals": {
+    "status": "PASS",
+    "result": "synchronous-detach PASS",
+    "source_sha256": "a29501761e4d7414d06034e6d72aefacd901cd4c203a8c235039a4748968a068"
+  },
+  "limits": [
+    "MM/PTE, firmware ACK, waits and workqueue scheduling are host stubs.",
+    "No runtime playback, physical DSP mapping, or platform probe/unload validation is claimed."
+  ]
+}

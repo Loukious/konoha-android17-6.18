@@ -1,0 +1,1898 @@
+--- a/drivers/rpmsg/glink_pkt.c
++++ b/drivers/rpmsg/glink_pkt.c
+@@ -18,6 +18,10 @@
+ #include <linux/uaccess.h>
+ #include <linux/termios.h>
+ #include <linux/string.h>
++#include <linux/sched/mm.h>
++#include <linux/vmalloc.h>
++#include <linux/limits.h>
++#include <linux/workqueue.h>
+ 
+ #include "qcom_glink_native.h"
+ 
+@@ -55,7 +59,7 @@
+ #define MODULE_NAME "glink_pkt"
+ static dev_t glink_pkt_major;
+ static struct class *glink_pkt_class;
+-static int num_glink_pkt_devs;
++#define GLINK_PKT_MAX_DEVS 256
+ 
+ static DEFINE_IDA(glink_pkt_minor_ida);
+ 
+@@ -87,6 +91,14 @@
+  * @rdata_len:  remaining data to be read from skb
+  */
+ struct glink_pkt_device {
++	struct list_head owner_node;
++	bool removing;
++	bool disconnecting;
++	bool unregistering;
++	struct completion drv_idle;
++	struct work_struct idle_work;
++	u64 read_generation;
++	u64 mapping_cookie;
+ 	struct device dev;
+ 	struct cdev cdev;
+ 
+@@ -119,28 +131,56 @@
+ 	size_t rdata_len;
+ };
+ 
++/* Exactly fits skb->cb on both supported native word sizes. */
++struct glink_pkt_zerocopy_cb {
++	void *external;
++	struct mm_struct *mm;
++	unsigned long leading_page;
++	unsigned long trailing_page;
++	unsigned long address;
++	u64 cookie;
++};
++
++struct glink_pkt_owner {
++	struct list_head devices;
++};
++
++static const struct vm_operations_struct glink_pkt_vm_ops;
++static void glink_pkt_revoke_pending(struct glink_pkt_device *gpdev);
++
++static unsigned long glink_pkt_mapped_length(struct sk_buff *skb)
++{
++	struct glink_pkt_zerocopy_cb *cb = (void *)skb->cb;
++
++	return PAGE_ALIGN(offset_in_page(cb->external) + skb->len);
++}
++
++static unsigned char *glink_pkt_skb_data(struct sk_buff *skb)
++{
++	struct glink_pkt_zerocopy_cb *cb = (void *)skb->cb;
++
++	return cb->external ? cb->external : skb->data;
++}
++
+ #define dev_to_gpdev(_dev) container_of(_dev, struct glink_pkt_device, dev)
+ #define cdev_to_gpdev(_cdev) container_of(_cdev, struct glink_pkt_device, cdev)
+ #define drv_to_rpdrv(_drv) container_of(_drv, struct rpmsg_driver, drv)
+ #define rpdrv_to_gpdev(_rdrv) container_of(_rdrv, struct glink_pkt_device, drv)
+ 
+ static ssize_t open_timeout_store(struct device *dev,
+-				  struct device_attribute *attr,
+-				  const char *buf, size_t n)
++		struct device_attribute *attr, const char *buf, size_t n)
+ {
+ 	struct glink_pkt_device *gpdev = dev_to_gpdev(dev);
+-	long tmp;
+-
++	int value, ret;
++
++	ret = kstrtoint(buf, 0, &value);
++	if (ret)
++		return ret;
++	if (value < 0 || value > INT_MAX / 1000)
++		return -ERANGE;
+ 	mutex_lock(&gpdev->lock);
+-	if (kstrtol(buf, 0, &tmp)) {
+-		mutex_unlock(&gpdev->lock);
+-		GLINK_PKT_ERR("unable to convert string to int for /dev/%s\n",
+-			      gpdev->dev_name);
+-		return -EINVAL;
+-	}
+-	gpdev->open_tout = tmp;
++	gpdev->open_tout = value;
+ 	mutex_unlock(&gpdev->lock);
+-
+ 	return n;
+ }
+ 
+@@ -162,21 +202,22 @@
+ 
+ static void glink_pkt_kfree_skb(struct glink_pkt_device *gpdev, struct sk_buff *skb)
+ {
+-	int ret;
+-
+-	if (gpdev->rx_done) {
+-		GLINK_PKT_INFO("channel:%s\n", gpdev->ch_name);
+-		ret = qcom_glink_rx_done(gpdev->rpdev->ept, skb->data);
+-		if (ret < 0)
+-			GLINK_PKT_INFO("Failed channel:%s ret:%d\n", gpdev->ch_name, ret);
+-		/*
+-		 * Data memory is freed by qcom_glink_rx_done(), reset the
+-		 * skb data pointers so kfree_skb() does not try to free
+-		 * a second time.
+-		 */
+-		skb->head = NULL;
+-		skb->data = NULL;
+-	}
++	struct glink_pkt_zerocopy_cb *cb = (void *)skb->cb;
++
++	/* All mappings have already been revoked before returning native data. */
++	if (cb->leading_page)
++		free_page(cb->leading_page);
++	if (cb->trailing_page)
++		free_page(cb->trailing_page);
++	if (cb->mm)
++		mmdrop(cb->mm);
++	if (cb->external) {
++		int ret = qcom_glink_rx_done(gpdev->rpdev->ept, cb->external);
++
++		if (ret)
++			GLINK_PKT_ERR("RX acknowledgement failed on %s: %d\n", gpdev->ch_name, ret);
++	}
++	/* skb->head still belongs to alloc_skb, never to the transport. */
+ 	kfree_skb(skb);
+ }
+ 
+@@ -185,192 +226,258 @@
+ 	struct sk_buff *skb;
+ 	unsigned long flags;
+ 
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
++	/* RX_DONE may wait on transport TX space; never send it under queue_lock. */
++	gpdev->read_generation++;
+ 	if (gpdev->rskb) {
+ 		glink_pkt_kfree_skb(gpdev, gpdev->rskb);
+ 		gpdev->rskb = NULL;
+ 		gpdev->rdata = NULL;
+ 		gpdev->rdata_len = 0;
+ 	}
+-
+-	while ((skb = skb_dequeue(&gpdev->queue)))
++	for (;;) {
++		spin_lock_irqsave(&gpdev->queue_lock, flags);
++		skb = skb_dequeue(&gpdev->queue);
++		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++		if (!skb)
++			break;
+ 		glink_pkt_kfree_skb(gpdev, skb);
+-	while ((skb = skb_dequeue(&gpdev->pending)))
+-		glink_pkt_kfree_skb(gpdev, skb);
+-
++	}
++	WARN_ON_ONCE(!skb_queue_empty(&gpdev->pending));
++}
++
++static int glink_pkt_rpdev_no_copy_cb(struct rpmsg_device *rpdev, void *buf,
++		int len, void *priv, u32 addr)
++{
++	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
++	struct sk_buff *skb;
++	unsigned long flags;
++
++	if (!gpdev)
++		return -ENETRESET;
++	if (len < 0 || (len && !buf))
++		return -EINVAL;
++	skb = alloc_skb(0, GFP_ATOMIC);
++	if (!skb)
++		return -ENOMEM;
++	memset(skb->cb, 0, sizeof(skb->cb));
++	((struct glink_pkt_zerocopy_cb *)skb->cb)->external = buf;
++	skb->len = len;
++	spin_lock_irqsave(&gpdev->queue_lock, flags);
++	if (gpdev->disconnecting || gpdev->removing) {
++		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++		/* Framework acknowledges an unaccepted external buffer itself. */
++		kfree_skb(skb);
++		return -ENETRESET;
++	}
++	skb_queue_tail(&gpdev->queue, skb);
+ 	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-}
+-
+-static int glink_pkt_rpdev_no_copy_cb(struct rpmsg_device *rpdev, void *buf,
+-				      int len, void *priv, u32 addr)
++	wake_up_interruptible(&gpdev->readq);
++	return RPMSG_DEFER;
++}
++
++static int glink_pkt_rpdev_copy_cb(struct rpmsg_device *rpdev, void *buf,
++		int len, void *priv, u32 addr)
++{
++	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
++	struct sk_buff *skb;
++	unsigned long flags;
++
++	if (!gpdev)
++		return -ENETRESET;
++	if (len < 0 || (len && !buf))
++		return -EINVAL;
++	skb = alloc_skb(len, GFP_ATOMIC);
++	if (!skb)
++		return -ENOMEM;
++	memset(skb->cb, 0, sizeof(skb->cb));
++	skb_put_data(skb, buf, len);
++	spin_lock_irqsave(&gpdev->queue_lock, flags);
++	if (gpdev->disconnecting || gpdev->removing) {
++		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++		/* Framework acknowledges an unaccepted external buffer itself. */
++		kfree_skb(skb);
++		return -ENETRESET;
++	}
++	skb_queue_tail(&gpdev->queue, skb);
++	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++	wake_up_interruptible(&gpdev->readq);
++	return 0;
++}
++
++static int glink_pkt_rpdev_cb(struct rpmsg_device *rpdev, void *buf, int len,
++		void *priv, u32 addr)
++{
++	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
++
++	if (!gpdev)
++		return -ENETRESET;
++	return gpdev->rx_done ? glink_pkt_rpdev_no_copy_cb(rpdev, buf, len, priv, addr) :
++		glink_pkt_rpdev_copy_cb(rpdev, buf, len, priv, addr);
++}
++
++static int glink_pkt_rpdev_sigs(struct rpmsg_device *rpdev, void *priv, u32 old, u32 new)
+ {
+ 	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
+ 	unsigned long flags;
+-	struct sk_buff *skb;
+-
+-	if (!gpdev) {
+-		GLINK_PKT_ERR("channel is in reset\n");
++
++	if (!gpdev)
+ 		return -ENETRESET;
+-	}
+-
+-	GLINK_PKT_INFO("Data received on:%s len:%d\n", gpdev->ch_name, len);
+-
+-	skb = alloc_skb(0, GFP_ATOMIC);
+-	if (!skb) {
+-		GLINK_PKT_ERR("Failed to allocate skb\n");
+-		return -ENOMEM;
+-	}
+-
+-	skb->head = buf;
+-	skb->data = buf;
+-	skb_reset_tail_pointer(skb);
+-	skb_set_end_offset(skb, len);
+-	skb_put(skb, len);
+-
+ 	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb_queue_tail(&gpdev->queue, skb);
++	if (!gpdev->disconnecting && !gpdev->removing)
++		gpdev->sig_change = true;
+ 	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-	/* wake up any blocking processes, waiting for new data */
+ 	wake_up_interruptible(&gpdev->readq);
+-
+-	GLINK_PKT_INFO("Data queued on:%s len:%d\n", gpdev->ch_name, len);
+-
+-	return RPMSG_DEFER;
+-}
+-
+-static int glink_pkt_rpdev_copy_cb(struct rpmsg_device *rpdev, void *buf,
+-				   int len, void *priv, u32 addr)
++	return 0;
++}
++
++static int glink_pkt_rpdev_probe(struct rpmsg_device *rpdev)
++{
++	struct glink_pkt_device *gpdev = rpdrv_to_gpdev(drv_to_rpdrv(rpdev->dev.driver));
++	unsigned long flags;
++
++	mutex_lock(&gpdev->lock);
++	if (gpdev->removing) {
++		mutex_unlock(&gpdev->lock);
++		return -ENODEV;
++	}
++	gpdev->rpdev = rpdev;
++	gpdev->rx_done = strcmp(gpdev->edge, "slate") && qcom_glink_rx_done_supported(rpdev->ept);
++	dev_set_drvdata(&rpdev->dev, gpdev);
++	spin_lock_irqsave(&gpdev->queue_lock, flags);
++	gpdev->disconnecting = false;
++	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++	if (strcmp(gpdev->edge, "slate"))
++		qcom_glink_register_signals_cb(rpdev->ept, glink_pkt_rpdev_sigs);
++	complete_all(&gpdev->ch_open);
++	mutex_unlock(&gpdev->lock);
++	return 0;
++}
++
++static void glink_pkt_rpdev_remove(struct rpmsg_device *rpdev)
+ {
+ 	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
+ 	unsigned long flags;
+-	struct sk_buff *skb;
+-
+-
+-	if (!gpdev) {
+-		GLINK_PKT_ERR("channel is in reset\n");
+-		return -ENETRESET;
+-	}
+-
+-	GLINK_PKT_INFO("Data received on:%s len:%d\n", gpdev->ch_name, len);
+-	skb = alloc_skb(len, GFP_ATOMIC);
+-	if (!skb) {
+-		GLINK_PKT_ERR("Failed to allocate skb\n");
+-		return -ENOMEM;
+-	}
+-
+-	skb_put_data(skb, buf, len);
+-
++
++	if (!gpdev)
++		return;
++	/* Detach waits for any atomic signal callback before clearing drvdata. */
++	if (strcmp(gpdev->edge, "slate"))
++		qcom_glink_register_signals_cb(rpdev->ept, NULL);
++	mutex_lock(&gpdev->lock);
+ 	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb_queue_tail(&gpdev->queue, skb);
++	gpdev->disconnecting = true;
+ 	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-	/* wake up any blocking processes, waiting for new data */
++	reinit_completion(&gpdev->ch_open);
++	mutex_unlock(&gpdev->lock);
+ 	wake_up_interruptible(&gpdev->readq);
+-
+-	GLINK_PKT_INFO("Data queued on:%s len:%d\n", gpdev->ch_name, len);
+-
+-	return 0;
+-}
+-
+-static int glink_pkt_rpdev_cb(struct rpmsg_device *rpdev, void *buf, int len,
+-			      void *priv, u32 addr)
+-{
+-	struct glink_pkt_device *gpdev = dev_get_drvdata(&rpdev->dev);
+-	rpmsg_rx_cb_t cb = (gpdev->rx_done) ? glink_pkt_rpdev_no_copy_cb : glink_pkt_rpdev_copy_cb;
+-
+-	return cb(rpdev, buf, len, priv, addr);
+-}
+-
+-static int glink_pkt_rpdev_sigs(struct rpmsg_device *rpdev, void *priv,
+-				u32 old, u32 new)
+-{
+-	struct device_driver *drv = rpdev->dev.driver;
+-	struct rpmsg_driver *rpdrv = drv_to_rpdrv(drv);
+-	struct glink_pkt_device *gpdev = rpdrv_to_gpdev(rpdrv);
+-	unsigned long flags;
+-
+-	GLINK_PKT_INFO("Received signal new:0x%x old:0x%x on channel:%s\n",
+-			new, old, gpdev->ch_name);
+-
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	gpdev->sig_change = true;
+-	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-	/* wake up any blocking processes, waiting for new data */
+-	wake_up_interruptible(&gpdev->readq);
+-
+-	return 0;
+-}
+-
+-static int glink_pkt_rpdev_probe(struct rpmsg_device *rpdev)
+-{
+-	struct device_driver *drv = rpdev->dev.driver;
+-	struct rpmsg_driver *rpdrv = drv_to_rpdrv(drv);
+-	struct glink_pkt_device *gpdev = rpdrv_to_gpdev(rpdrv);
+-
+-	mutex_lock(&gpdev->lock);
+-	gpdev->rpdev = rpdev;
+-
+-	if (!strcmp(gpdev->edge, "slate")) {
+-		gpdev->rx_done = false;
+-	} else {
+-		gpdev->rx_done = (qcom_glink_rx_done_supported(rpdev->ept) > 0) ? true : false;
+-		qcom_glink_register_signals_cb(rpdev->ept, glink_pkt_rpdev_sigs);
+-	}
+-
+-	mutex_unlock(&gpdev->lock);
+-
+-	dev_set_drvdata(&rpdev->dev, gpdev);
+-	complete_all(&gpdev->ch_open);
+-
+-	return 0;
+-}
+-
+-static void glink_pkt_rpdev_remove(struct rpmsg_device *rpdev)
+-{
+-	struct device_driver *drv = rpdev->dev.driver;
+-	struct rpmsg_driver *rpdrv = drv_to_rpdrv(drv);
+-	struct glink_pkt_device *gpdev = rpdrv_to_gpdev(rpdrv);
+-
+-	GLINK_PKT_INFO("for %s by %s:%d ref_cnt[%d]\n",
+-			gpdev->ch_name, current->comm,
+-			task_pid_nr(current), refcount_read(&gpdev->refcount));
++	/* MM lock must precede gpdev->lock, including VMA close callbacks. */
++	glink_pkt_revoke_pending(gpdev);
+ 	mutex_lock(&gpdev->lock);
+ 	glink_pkt_clear_queues(gpdev);
+ 	gpdev->rpdev = NULL;
++	dev_set_drvdata(&rpdev->dev, NULL);
+ 	mutex_unlock(&gpdev->lock);
+-
+-	dev_set_drvdata(&rpdev->dev, NULL);
+-
+-	/* wake up any blocked readers */
+-	reinit_completion(&gpdev->ch_open);
+-	wake_up_interruptible(&gpdev->readq);
+ }
+ 
+ static int glink_pkt_drv_try_register(struct glink_pkt_device *gpdev)
+ {
+ 	int ret = 0;
+ 
++retry:
+ 	mutex_lock(&gpdev->drv_lock);
++	if (gpdev->removing) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (gpdev->unregistering) {
++		mutex_unlock(&gpdev->drv_lock);
++		ret = wait_for_completion_interruptible(&gpdev->drv_idle);
++		if (ret)
++			return ret;
++		goto retry;
++	}
+ 	if (!gpdev->drv_registered) {
+ 		ret = register_rpmsg_driver(&gpdev->drv);
+ 		if (!ret)
+ 			gpdev->drv_registered = true;
+ 	}
++out:
+ 	mutex_unlock(&gpdev->drv_lock);
+-
+ 	return ret;
+ }
+ 
++static bool glink_pkt_begin_unregister(struct glink_pkt_device *gpdev)
++{
++	/* Caller holds drv_lock. Opens wait for drv_idle before re-registering. */
++	if (!gpdev->drv_registered || gpdev->unregistering)
++		return false;
++	gpdev->drv_registered = false;
++	gpdev->unregistering = true;
++	reinit_completion(&gpdev->drv_idle);
++	return true;
++}
++
++static void glink_pkt_finish_unregister(struct glink_pkt_device *gpdev)
++{
++	/* No drv_lock or MM lock: remove must revoke mappings in other tasks. */
++	unregister_rpmsg_driver(&gpdev->drv);
++	mutex_lock(&gpdev->drv_lock);
++	gpdev->unregistering = false;
++	complete_all(&gpdev->drv_idle);
++	mutex_unlock(&gpdev->drv_lock);
++}
++
+ static void glink_pkt_drv_try_unregister(struct glink_pkt_device *gpdev)
+ {
++	bool unregister;
++
+ 	mutex_lock(&gpdev->drv_lock);
+-	if (gpdev->drv_registered) {
+-		unregister_rpmsg_driver(&gpdev->drv);
+-		gpdev->drv_registered = false;
+-	}
++	unregister = glink_pkt_begin_unregister(gpdev);
+ 	mutex_unlock(&gpdev->drv_lock);
++	if (unregister)
++		glink_pkt_finish_unregister(gpdev);
++}
++
++static void glink_pkt_idle_work(struct work_struct *work)
++{
++	struct glink_pkt_device *gpdev = container_of(work, struct glink_pkt_device, idle_work);
++	bool unregister = false;
++	unsigned long flags;
++
++	mutex_lock(&gpdev->drv_lock);
++	if (!gpdev->removing && refcount_read(&gpdev->refcount) == 1) {
++		/* An admitted open cannot arrive between the idle check and transition. */
++		mutex_lock(&gpdev->lock);
++		if (gpdev->rpdev)
++			glink_pkt_clear_queues(gpdev);
++		spin_lock_irqsave(&gpdev->queue_lock, flags);
++		gpdev->sig_change = false;
++		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++		mutex_unlock(&gpdev->lock);
++		if (gpdev->enable_ch_close)
++			unregister = glink_pkt_begin_unregister(gpdev);
++	}
++	mutex_unlock(&gpdev->drv_lock);
++	if (unregister)
++		glink_pkt_finish_unregister(gpdev);
++	put_device(&gpdev->dev);
++}
++
++static void glink_pkt_queue_idle(struct glink_pkt_device *gpdev)
++{
++	/* Caller holds drv_lock, including open admission and platform removal. */
++	if (gpdev->removing || refcount_read(&gpdev->refcount) != 1)
++		return;
++	get_device(&gpdev->dev);
++	if (!schedule_work(&gpdev->idle_work))
++		put_device(&gpdev->dev);
++}
++
++static void glink_pkt_cancel_idle(struct glink_pkt_device *gpdev)
++{
++	/* A cancelled queued instance cannot release its own device reference. */
++	if (cancel_work_sync(&gpdev->idle_work))
++		put_device(&gpdev->dev);
+ }
+ 
+ /**
+@@ -385,38 +492,39 @@
+ static int glink_pkt_open(struct inode *inode, struct file *file)
+ {
+ 	struct glink_pkt_device *gpdev = cdev_to_gpdev(inode->i_cdev);
+-	int tout = msecs_to_jiffies(gpdev->open_tout * 1000);
+-	struct device *dev = &gpdev->dev;
++	unsigned long tout;
+ 	int ret;
+ 
++	mutex_lock(&gpdev->drv_lock);
++	if (gpdev->removing) {
++		mutex_unlock(&gpdev->drv_lock);
++		return -ENODEV;
++	}
++	get_device(&gpdev->dev);
+ 	refcount_inc(&gpdev->refcount);
+-	get_device(dev);
+-
+-	GLINK_PKT_INFO("begin for %s by %s:%d ref_cnt[%d]\n",
+-		       gpdev->ch_name, current->comm,
+-		       task_pid_nr(current), refcount_read(&gpdev->refcount));
+-
+-	if (gpdev->enable_ch_close)
+-		glink_pkt_drv_try_register(gpdev);
+-
++	mutex_unlock(&gpdev->drv_lock);
++	tout = msecs_to_jiffies((unsigned int)READ_ONCE(gpdev->open_tout) * 1000);
++	if (gpdev->enable_ch_close) {
++		ret = glink_pkt_drv_try_register(gpdev);
++		if (ret)
++			goto fail;
++	}
+ 	ret = wait_for_completion_interruptible_timeout(&gpdev->ch_open, tout);
+-	if (ret <= 0) {
+-		if (gpdev->enable_ch_close)
+-			glink_pkt_drv_try_unregister(gpdev);
+-
+-		refcount_dec(&gpdev->refcount);
+-		put_device(dev);
+-		GLINK_PKT_INFO("timeout for %s by %s:%d\n", gpdev->ch_name,
+-			       current->comm, task_pid_nr(current));
+-		return -ETIMEDOUT;
+-	}
++	if (READ_ONCE(gpdev->removing))
++		ret = -ENODEV;
++	else if (!ret)
++		ret = -ETIMEDOUT;
++	if (ret < 0)
++		goto fail;
+ 	file->private_data = gpdev;
+-
+-	GLINK_PKT_INFO("end for %s by %s:%d ref_cnt[%d]\n",
+-		       gpdev->ch_name, current->comm,
+-		       task_pid_nr(current), refcount_read(&gpdev->refcount));
+-
+ 	return 0;
++fail:
++	mutex_lock(&gpdev->drv_lock);
++	refcount_dec(&gpdev->refcount);
++	glink_pkt_queue_idle(gpdev);
++	mutex_unlock(&gpdev->drv_lock);
++	put_device(&gpdev->dev);
++	return ret;
+ }
+ 
+ /**
+@@ -430,31 +538,14 @@
+  */
+ static int glink_pkt_release(struct inode *inode, struct file *file)
+ {
+-	struct glink_pkt_device *gpdev = cdev_to_gpdev(inode->i_cdev);
+-	struct device *dev = &gpdev->dev;
+-	unsigned long flags;
+-
+-	GLINK_PKT_INFO("for %s by %s:%d ref_cnt[%d]\n",
+-		       gpdev->ch_name, current->comm,
+-		       task_pid_nr(current), refcount_read(&gpdev->refcount));
+-
++	struct glink_pkt_device *gpdev = file->private_data;
++
++	mutex_lock(&gpdev->drv_lock);
+ 	refcount_dec(&gpdev->refcount);
+-	if (refcount_read(&gpdev->refcount) == 1) {
+-		mutex_lock(&gpdev->lock);
+-		if (gpdev->rpdev != NULL)
+-			glink_pkt_clear_queues(gpdev);
+-		mutex_unlock(&gpdev->lock);
+-
+-		spin_lock_irqsave(&gpdev->queue_lock, flags);
+-		gpdev->sig_change = false;
+-		wake_up_interruptible(&gpdev->readq);
+-		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-		if (gpdev->enable_ch_close)
+-			glink_pkt_drv_try_unregister(gpdev);
+-	}
+-	put_device(dev);
+-
++	glink_pkt_queue_idle(gpdev);
++	mutex_unlock(&gpdev->drv_lock);
++	wake_up_interruptible(&gpdev->readq);
++	put_device(&gpdev->dev);
+ 	return 0;
+ }
+ 
+@@ -469,103 +560,83 @@
+  * userspace client do a read() system call. All input arguments are
+  * validated by the virtual file system before calling this function.
+  */
+-static ssize_t glink_pkt_read(struct file *file,
+-			char __user *buf, size_t count, loff_t *ppos)
++static ssize_t glink_pkt_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+ {
+ 	struct glink_pkt_device *gpdev = file->private_data;
+-	struct sk_buff *skb = NULL;
+-	int ret = 0;
+-	int use;
+-
+-	if (!gpdev || refcount_read(&gpdev->refcount) == 1) {
+-		GLINK_PKT_ERR("invalid device handle\n");
+-		return -EINVAL;
+-	}
+-
+-	if (mutex_lock_interruptible(&gpdev->lock))
++	struct sk_buff *skb;
++	unsigned char *copy;
++	u64 generation;
++	size_t used;
++	ssize_t ret;
++
++	if (!count)
++		return 0;
++	if (mutex_lock_interruptible(&gpdev->rskb_read_lock))
+ 		return -ERESTARTSYS;
+-
+-	if (!completion_done(&gpdev->ch_open)) {
+-		GLINK_PKT_INFO("%s channel in reset\n", gpdev->ch_name);
++retry:
++	if (mutex_lock_interruptible(&gpdev->lock)) {
++		ret = -ERESTARTSYS;
++		goto read_unlock;
++	}
++	if (!completion_done(&gpdev->ch_open) || gpdev->disconnecting || !gpdev->rpdev || gpdev->removing) {
++		ret = -ENETRESET;
++		goto unlock;
++	}
++	spin_lock_irq(&gpdev->queue_lock);
++	if (!gpdev->rskb)
++		gpdev->rskb = skb_dequeue(&gpdev->queue);
++	spin_unlock_irq(&gpdev->queue_lock);
++	if (!gpdev->rskb) {
+ 		mutex_unlock(&gpdev->lock);
+-		return -ENETRESET;
+-	}
+-
+-	GLINK_PKT_INFO("begin for %s by %s:%d ref_cnt[%d], remaining[%lu], count[%lu]\n",
+-		       gpdev->ch_name, current->comm,
+-		       task_pid_nr(current), refcount_read(&gpdev->refcount),
+-			   gpdev->rdata_len, count);
+-
++		if (file->f_flags & O_NONBLOCK) {
++			ret = -EAGAIN;
++			goto read_unlock;
++		}
++		spin_lock_irq(&gpdev->queue_lock);
++		ret = wait_event_interruptible_lock_irq(gpdev->readq,
++			!skb_queue_empty(&gpdev->queue) || !completion_done(&gpdev->ch_open) ||
++			READ_ONCE(gpdev->removing), gpdev->queue_lock);
++		spin_unlock_irq(&gpdev->queue_lock);
++		if (ret)
++			goto read_unlock;
++		goto retry;
++	}
++	skb = gpdev->rskb;
++	if (!gpdev->rdata) {
++		gpdev->rdata = glink_pkt_skb_data(skb);
++		gpdev->rdata_len = skb->len;
++	}
++	used = min_t(size_t, count, gpdev->rdata_len);
++	generation = gpdev->read_generation;
++	copy = kmemdup(gpdev->rdata, used, GFP_KERNEL);
++	if (!copy) {
++		ret = -ENOMEM;
++		goto unlock;
++	}
++	/* Faulting user access must not invert MM -> gpdev in VMA .close. */
+ 	mutex_unlock(&gpdev->lock);
+-
+-	/* Wait for data in the queue */
+-	spin_lock_irq(&gpdev->queue_lock);
+-	if (skb_queue_empty(&gpdev->queue) && !gpdev->rskb) {
+-		if (file->f_flags & O_NONBLOCK) {
+-			spin_unlock_irq(&gpdev->queue_lock);
+-			mutex_unlock(&gpdev->lock);
+-			return -EAGAIN;
+-		}
+-
+-		/* Wait until we get data or the endpoint goes away */
+-		ret = wait_event_interruptible_lock_irq(gpdev->readq,
+-							!skb_queue_empty(&gpdev->queue) ||
+-							!completion_done(&gpdev->ch_open),
+-							gpdev->queue_lock);
+-	}
+-	spin_unlock_irq(&gpdev->queue_lock);
+-
+-	if (ret)
+-		return -ERESTARTSYS;
+-
+-	if (!completion_done(&gpdev->ch_open))
+-		return -ENETRESET;
+-
+-	if (mutex_lock_interruptible(&gpdev->lock))
+-		return -ERESTARTSYS;
+-
+-	mutex_lock(&gpdev->rskb_read_lock);
+-	spin_lock_irq(&gpdev->queue_lock);
+-	if (!gpdev->rskb) {
+-		gpdev->rskb = skb_dequeue(&gpdev->queue);
+-		if (!gpdev->rskb) {
+-			spin_unlock_irq(&gpdev->queue_lock);
+-			mutex_unlock(&gpdev->rskb_read_lock);
+-			mutex_unlock(&gpdev->lock);
+-			return 0;
+-		}
+-		gpdev->rdata = gpdev->rskb->data;
+-		gpdev->rdata_len = gpdev->rskb->len;
+-	}
+-	spin_unlock_irq(&gpdev->queue_lock);
+-
+-	use = min_t(size_t, count, gpdev->rdata_len);
+-
+-	if (copy_to_user(buf, gpdev->rdata, use))
+-		ret = -EFAULT;
+-
+-	spin_lock_irq(&gpdev->queue_lock);
+-	gpdev->rdata += use;
+-	gpdev->rdata_len -= use;
+-
++	ret = copy_to_user(buf, copy, used) ? -EFAULT : used;
++	kfree(copy);
++	mutex_lock(&gpdev->lock);
++	if (gpdev->read_generation != generation || gpdev->rskb != skb) {
++		if (ret >= 0)
++			ret = -ENETRESET;
++		goto unlock;
++	}
++	if (ret < 0)
++		goto unlock;
++	gpdev->rdata += used;
++	gpdev->rdata_len -= used;
+ 	if (!gpdev->fragmented_read || !gpdev->rdata_len) {
+-		skb = gpdev->rskb;
+-
+ 		gpdev->rskb = NULL;
+ 		gpdev->rdata = NULL;
+ 		gpdev->rdata_len = 0;
+-	}
+-	spin_unlock_irq(&gpdev->queue_lock);
+-
+-	if (skb)
+ 		glink_pkt_kfree_skb(gpdev, skb);
++	}
++unlock:
++	mutex_unlock(&gpdev->lock);
++read_unlock:
+ 	mutex_unlock(&gpdev->rskb_read_lock);
+-
+-	ret = (ret < 0) ? ret : use;
+-	GLINK_PKT_INFO("end for %s by %s:%d ret[%d], remaining[%lu]\n", gpdev->ch_name,
+-		       current->comm, task_pid_nr(current), ret, gpdev->rdata_len);
+-
+-	mutex_unlock(&gpdev->lock);
+ 	return ret;
+ }
+ 
+@@ -593,6 +664,9 @@
+ 		return -EINVAL;
+ 	}
+ 
++	if (count > INT_MAX)
++		return -EMSGSIZE;
++
+ 	GLINK_PKT_INFO("begin to %s buffer_size %zu\n", gpdev->ch_name, count);
+ 	kbuf = vmemdup_user(buf, count);
+ 	if (IS_ERR(kbuf))
+@@ -602,7 +676,7 @@
+ 		ret = -ERESTARTSYS;
+ 		goto free_kbuf;
+ 	}
+-	if (!completion_done(&gpdev->ch_open) || !gpdev->rpdev) {
++	if (!completion_done(&gpdev->ch_open) || !gpdev->rpdev || gpdev->disconnecting || gpdev->removing) {
+ 		GLINK_PKT_INFO("%s channel in reset\n", gpdev->ch_name);
+ 		ret = -ENETRESET;
+ 		goto unlock_ch;
+@@ -652,7 +726,7 @@
+ 
+ 	mutex_lock(&gpdev->lock);
+ 
+-	if (!completion_done(&gpdev->ch_open) || !gpdev->rpdev) {
++	if (!completion_done(&gpdev->ch_open) || !gpdev->rpdev || gpdev->disconnecting || gpdev->removing) {
+ 		GLINK_PKT_INFO("%s channel reset after wait\n", gpdev->ch_name);
+ 		mutex_unlock(&gpdev->lock);
+ 		return POLLHUP;
+@@ -685,19 +759,12 @@
+  * when userspace client do a ioctl() system call with TIOCMBIS,
+  * TIOCMBIC and TICOMSET.
+  */
+-static int glink_pkt_tiocmset(struct glink_pkt_device *gpdev, unsigned int cmd,
+-			      int __user *arg)
+-{
+-	u32 set, clear, val;
+-	int ret;
++static int glink_pkt_tiocmset(struct glink_pkt_device *gpdev, unsigned int cmd, u32 val)
++{
++	u32 set = 0, clear = 0;
+ 
+ 	if (!strcmp(gpdev->edge, "slate"))
+ 		return -ENOIOCTLCMD;
+-
+-	ret = get_user(val, arg);
+-	if (ret)
+-		return ret;
+-	set = clear = 0;
+ 	switch (cmd) {
+ 	case TIOCMBIS:
+ 		set = val;
+@@ -710,281 +777,310 @@
+ 		clear = ~val;
+ 		break;
+ 	}
+-
+ 	set &= TIOCM_DTR | TIOCM_RTS | TIOCM_CD | TIOCM_RI;
+ 	clear &= TIOCM_DTR | TIOCM_RTS | TIOCM_CD | TIOCM_RI;
+-	GLINK_PKT_INFO("set[0x%x] clear[0x%x]\n", set, clear);
+-
+ 	return qcom_glink_set_signals(gpdev->rpdev->ept, set, clear);
+ }
+ 
++
++static bool glink_pkt_mapping_vma(struct glink_pkt_device *gpdev, struct vm_area_struct *vma)
++{
++	return vma && vma->vm_ops == &glink_pkt_vm_ops && vma->vm_private_data == gpdev;
++}
++
++/* Caller holds the MM lock. Partial unmaps/splits must never zap unrelated VMAs. */
++static void glink_pkt_zap_mapping(struct glink_pkt_device *gpdev,
++		struct sk_buff *skb)
++{
++	struct glink_pkt_zerocopy_cb *cb = (void *)skb->cb;
++	unsigned long address = cb->address, end = address + glink_pkt_mapped_length(skb);
++	struct vm_area_struct *vma;
++
++	while (address < end) {
++		vma = find_vma(cb->mm, address);
++		if (!vma || vma->vm_start >= end)
++			break;
++		address = max(address, vma->vm_start);
++		if (glink_pkt_mapping_vma(gpdev, vma))
++			zap_page_range_single(vma, address, min(end, vma->vm_end) - address, NULL);
++		address = vma->vm_end;
++	}
++}
++
++static void glink_pkt_revoke_pending(struct glink_pkt_device *gpdev)
++{
++	struct sk_buff *skb;
++	struct glink_pkt_zerocopy_cb *cb;
++
++	for (;;) {
++		mutex_lock(&gpdev->lock);
++		skb = skb_dequeue(&gpdev->pending);
++		mutex_unlock(&gpdev->lock);
++		if (!skb)
++			break;
++		cb = (void *)skb->cb;
++		mmap_write_lock(cb->mm);
++		glink_pkt_zap_mapping(gpdev, skb);
++		mmap_write_unlock(cb->mm);
++		mutex_lock(&gpdev->lock);
++		glink_pkt_kfree_skb(gpdev, skb);
++		mutex_unlock(&gpdev->lock);
++	}
++}
++
++static void glink_pkt_vma_close(struct vm_area_struct *vma)
++{
++	struct glink_pkt_device *gpdev = vma->vm_private_data;
++	struct sk_buff *skb, *next;
++	struct glink_pkt_zerocopy_cb *cb;
++
++	/* MM lock is already held; this ordering also covers file release at munmap. */
++	mutex_lock(&gpdev->lock);
++	skb_queue_walk_safe(&gpdev->pending, skb, next) {
++		cb = (void *)skb->cb;
++		if (cb->mm != vma->vm_mm || cb->address >= vma->vm_end ||
++		    cb->address + glink_pkt_mapped_length(skb) <= vma->vm_start)
++			continue;
++		skb_unlink(skb, &gpdev->pending);
++		glink_pkt_zap_mapping(gpdev, skb);
++		glink_pkt_kfree_skb(gpdev, skb);
++	}
++	mutex_unlock(&gpdev->lock);
++}
++
++static int glink_pkt_vma_mremap(struct vm_area_struct *vma)
++{
++	/* IOCTL addresses name fixed native mappings, never relocatable aliases. */
++	return -EINVAL;
++}
++
+ static const struct vm_operations_struct glink_pkt_vm_ops = {
++	.close = glink_pkt_vma_close,
++	.mremap = glink_pkt_vma_mremap,
+ };
+ 
+ static int glink_pkt_mmap(struct file *file, struct vm_area_struct *vma)
+ {
+ 	if (vma->vm_flags & (VM_WRITE | VM_EXEC))
+ 		return -EPERM;
+-
+ 	vm_flags_clear(vma, VM_MAYWRITE | VM_MAYEXEC);
+-
+-	/* Instruct vm_insert_page() to not mmap_read_lock(mm) */
+-	vm_flags_set(vma, VM_MIXEDMAP);
+-
++	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTCOPY | VM_DONTEXPAND | VM_DONTDUMP);
++	vma->vm_private_data = file->private_data;
+ 	vma->vm_ops = &glink_pkt_vm_ops;
+ 	return 0;
+ }
+ 
+-struct glink_pkt_zerocopy_cb {
+-	unsigned long leading_page;
+-	unsigned long trailing_page;
+-	unsigned long address;
+-	unsigned long length;
+-};
+-
+ static int glink_pkt_zerocopy_done(struct glink_pkt_device *gpdev,
+-				   struct glink_pkt_zerocopy_receive *zc)
+-{
+-	unsigned long address = (unsigned long)zc->address;
+-	struct glink_pkt_zerocopy_cb *cb = NULL;
++		struct glink_pkt_zerocopy_receive *zc)
++{
++	unsigned long address = zc->address;
++	struct sk_buff *skb, *selected = NULL;
++	struct glink_pkt_zerocopy_cb *cb;
++	int ret = -EINVAL;
++
++	if (!PAGE_ALIGNED(address) || address != zc->address)
++		return -EINVAL;
++	mmap_read_lock(current->mm);
++	mutex_lock(&gpdev->lock);
++	if (!gpdev->rpdev || gpdev->disconnecting || gpdev->removing) {
++		ret = -ENETRESET;
++		goto out;
++	}
++	if (!gpdev->rx_done)
++		goto out;
++	skb_queue_walk(&gpdev->pending, skb) {
++		cb = (void *)skb->cb;
++		if (cb->mm == current->mm && cb->address == address) {
++			selected = skb;
++			break;
++		}
++	}
++	if (!selected)
++		goto out;
++	skb_unlink(selected, &gpdev->pending);
++	glink_pkt_zap_mapping(gpdev, selected);
++	glink_pkt_kfree_skb(gpdev, selected);
++	ret = 0;
++out:
++	mutex_unlock(&gpdev->lock);
++	mmap_read_unlock(current->mm);
++	return ret;
++}
++
++static struct page *glink_pkt_vaddr_to_page(void *cpu_addr)
++{
++	return is_vmalloc_addr(cpu_addr) ? vmalloc_to_page(cpu_addr) : virt_to_page(cpu_addr);
++}
++
++/* Native packet extent, including byte offset in the first read-only page. */
++static int glink_pkt_mapping_extent(unsigned long data, u32 length,
++		unsigned long *offset, unsigned long *mapped)
++{
++	if (!length)
++		return -EINVAL;
++	*offset = offset_in_page(data);
++	if (length > ULONG_MAX - *offset - (PAGE_SIZE - 1))
++		return -EOVERFLOW;
++	*mapped = PAGE_ALIGN(*offset + length);
++	return 0;
++}
++
++static int glink_pkt_zerocopy_receive(struct glink_pkt_device *gpdev,
++		struct glink_pkt_zerocopy_receive *zc, u64 *cookie)
++{
++	unsigned long address = zc->address, offset, mapped, cursor;
++	unsigned long leading = 0, trailing = 0, consumed = 0;
++	struct glink_pkt_zerocopy_cb *cb;
+ 	struct vm_area_struct *vma;
+ 	struct sk_buff *skb;
+-	unsigned long flags;
++	unsigned char *data;
++	int ret = -EINVAL;
+ 
+ 	if (!PAGE_ALIGNED(address) || address != zc->address)
+ 		return -EINVAL;
+-
++	*cookie = 0;
++	zc->length = zc->offset = 0;
++	mmap_read_lock(current->mm);
++	mutex_lock(&gpdev->lock);
++	if (!gpdev->rpdev || gpdev->disconnecting || gpdev->removing) {
++		ret = -ENETRESET;
++		goto out;
++	}
+ 	if (!gpdev->rx_done)
+-		return -EINVAL;
+-
++		goto out;
++	vma = vma_lookup(current->mm, address);
++	if (!glink_pkt_mapping_vma(gpdev, vma))
++		goto out;
++	spin_lock_irq(&gpdev->queue_lock);
++	skb = skb_peek(&gpdev->queue);
++	spin_unlock_irq(&gpdev->queue_lock);
++	if (!skb) {
++		ret = -EAGAIN;
++		goto out;
++	}
++	data = glink_pkt_skb_data(skb);
++	ret = glink_pkt_mapping_extent((unsigned long)data, skb->len, &offset, &mapped);
++	if (ret)
++		goto out;
++	if (mapped > vma->vm_end - address) {
++		ret = -ENOSPC;
++		goto out;
++	}
++	skb_queue_walk(&gpdev->pending, skb) {
++		cb = (void *)skb->cb;
++		if (cb->mm == current->mm && address < cb->address + glink_pkt_mapped_length(skb) &&
++		    cb->address < address + mapped) {
++			ret = -EBUSY;
++			goto out;
++		}
++	}
++	if (gpdev->mapping_cookie == U64_MAX) {
++		ret = -EOVERFLOW;
++		goto out;
++	}
++	skb = skb_dequeue(&gpdev->queue);
++	data = glink_pkt_skb_data(skb);
++	zap_page_range_single(vma, address, mapped, NULL);
++	for (cursor = 0; cursor < mapped; cursor += PAGE_SIZE) {
++		unsigned long skip = cursor ? 0 : offset;
++		unsigned long used = min_t(unsigned long, skb->len - consumed, PAGE_SIZE - skip);
++		unsigned long boundary = 0;
++		struct page *page;
++
++		/* Copy only partial boundary pages; full native pages remain zero-copy. */
++		if (skip || used < PAGE_SIZE) {
++			boundary = get_zeroed_page(GFP_KERNEL);
++			if (!boundary) {
++				ret = -ENOMEM;
++				goto rollback;
++			}
++			memcpy((void *)(boundary + skip), data + consumed, used);
++			if (!cursor)
++				leading = boundary;
++			else
++				trailing = boundary;
++			page = virt_to_page(boundary);
++		} else {
++			page = glink_pkt_vaddr_to_page(data + consumed);
++		}
++		{
++			vm_fault_t fault = vmf_insert_pfn(vma, address + cursor, page_to_pfn(page));
++
++			if (fault & VM_FAULT_ERROR) {
++				ret = fault & VM_FAULT_OOM ? -ENOMEM : -EFAULT;
++				goto rollback;
++			}
++		}
++		consumed += used;
++	}
++	cb = (void *)skb->cb;
++	cb->mm = current->mm;
++	mmgrab(cb->mm);
++	cb->address = address;
++	cb->cookie = ++gpdev->mapping_cookie;
++	*cookie = cb->cookie;
++	cb->leading_page = leading;
++	cb->trailing_page = trailing;
++	skb_queue_tail(&gpdev->pending, skb);
++	zc->offset = offset;
++	zc->length = skb->len;
++	ret = 0;
++	goto out;
++rollback:
++	zap_page_range_single(vma, address, mapped, NULL);
++	if (leading)
++		free_page(leading);
++	if (trailing)
++		free_page(trailing);
++	skb_queue_head(&gpdev->queue, skb);
++	wake_up_interruptible(&gpdev->readq);
++out:
++	mutex_unlock(&gpdev->lock);
++	mmap_read_unlock(current->mm);
++	return ret;
++}
++
++
++static void glink_pkt_zerocopy_rollback(struct glink_pkt_device *gpdev,
++		struct glink_pkt_zerocopy_receive *zc, u64 cookie)
++{
++	struct sk_buff *skb, *selected = NULL;
++	struct glink_pkt_zerocopy_cb *cb;
++	unsigned long flags;
++	void *external;
++
++	if (!cookie)
++		return;
+ 	mmap_read_lock(current->mm);
+-	vma = vma_lookup(current->mm, address);
+-	if (!vma || vma->vm_ops != &glink_pkt_vm_ops) {
+-		mmap_read_unlock(current->mm);
+-		return -EINVAL;
+-	}
+-
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb = skb_peek(&gpdev->pending);
+-	if (skb) {
+-		do {
+-			cb = (struct glink_pkt_zerocopy_cb *)skb->cb;
+-			if (address == cb->address) {
+-				skb_unlink(skb, &gpdev->pending);
+-				break;
+-			}
+-		} while ((skb = skb_peek_next(skb, &gpdev->pending)));
+-	}
+-	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-	if (cb && cb->address == address)
+-		zap_vma_ptes(vma, address, cb->length);
+-	mmap_read_unlock(current->mm);
+-	if (!skb)
+-		return -EINVAL;
+-
++	mutex_lock(&gpdev->lock);
++	skb_queue_walk(&gpdev->pending, skb) {
++		cb = (void *)skb->cb;
++		if (cb->mm == current->mm && cb->address == zc->address && cb->cookie == cookie) {
++			selected = skb;
++			break;
++		}
++	}
++	if (!selected)
++		goto out;
++	cb = (void *)selected->cb;
++	skb_unlink(selected, &gpdev->pending);
++	glink_pkt_zap_mapping(gpdev, selected);
++	if (cb->leading_page)
++		free_page(cb->leading_page);
+ 	if (cb->trailing_page)
+ 		free_page(cb->trailing_page);
+-	if (cb->leading_page)
+-		free_page(cb->leading_page);
+-	glink_pkt_kfree_skb(gpdev, skb);
+-
+-	return 0;
+-}
+-
+-static struct page *glink_pkt_vaddr_to_page(void *cpu_addr)
+-{
+-	if (is_vmalloc_addr(cpu_addr))
+-		return vmalloc_to_page(cpu_addr);
+-	return virt_to_page(cpu_addr);
+-}
+-
+-static int glink_pkt_zerocopy_receive(struct glink_pkt_device *gpdev,
+-				      struct glink_pkt_zerocopy_receive *zc)
+-{
+-	unsigned long address = (unsigned long)zc->address;
+-	struct glink_pkt_zerocopy_cb *cb;
+-	unsigned long trailing_page = 0;
+-	unsigned long leading_page = 0;
+-	unsigned long data_address;
+-	struct vm_area_struct *vma;
+-	unsigned int pages_to_map;
+-	u32 total_bytes_to_map;
+-	struct sk_buff *skb;
+-	unsigned long flags;
+-	u32 data_len;
+-	u32 vma_len;
+-	int rc;
+-
+-	if (!PAGE_ALIGNED(address) || address != zc->address)
+-		return -EINVAL;
+-
+-	if (!gpdev->rx_done)
+-		return -EINVAL;
+-
+-	zc->offset = 0;
+-	zc->length = 0;
+-
+-	/* Check if address is being used in any of the pending mappings */
++	mmdrop(cb->mm);
++	external = cb->external;
++	memset(selected->cb, 0, sizeof(selected->cb));
++	((struct glink_pkt_zerocopy_cb *)selected->cb)->external = external;
++	/* Output faults do not consume or acknowledge a genuine firmware packet. */
+ 	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb = skb_peek(&gpdev->pending);
+-	if (skb) {
+-		do {
+-			cb = (struct glink_pkt_zerocopy_cb *)skb->cb;
+-
+-			if (address >= cb->address && address <= (cb->address + cb->length)) {
+-				spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-				return -EINVAL;
+-			}
+-		} while ((skb = skb_peek_next(skb, &gpdev->pending)));
+-	}
++	skb_queue_head(&gpdev->queue, selected);
+ 	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+-	mmap_read_lock(current->mm);
+-	vma = vma_lookup(current->mm, address);
+-	if (!vma || vma->vm_ops != &glink_pkt_vm_ops) {
+-		rc = -EINVAL;
+-		goto error_out;
+-	}
+-	vma_len = vma->vm_end - address;
+-
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb = skb_dequeue(&gpdev->queue);
+-	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-	if (!skb) {
+-		rc = -EIO;
+-		goto error_out;
+-	}
+-	data_address = (unsigned long)skb->data;
+-	data_len = skb->len;
+-
+-	/* Pass sanity checks, start actual mapping procedure */
+-	total_bytes_to_map = data_len;
+-
+-	/*
+-	 * If the skb data is not page aligned, then a blank page needs to be
+-	 * allocated, zeroed out and the data copied to prevent information
+-	 * leaks
+-	 */
+-	if (!PAGE_ALIGNED(data_address)) {
+-		u32 copy_size;
+-		u32 offset;
+-		void *buf;
+-
+-		leading_page = get_zeroed_page(GFP_KERNEL);
+-		if (!leading_page) {
+-			rc = -ENOMEM;
+-			goto skb_repush;
+-		}
+-
+-		offset = data_address - ALIGN_DOWN(data_address, PAGE_SIZE);
+-		copy_size = PAGE_SIZE - offset;
+-		buf = (void *)leading_page;
+-
+-		memcpy(buf + offset, (void *)data_address, copy_size);
+-		total_bytes_to_map = total_bytes_to_map - copy_size + PAGE_SIZE;
+-
+-		zc->offset = offset;
+-	}
+-
+-	/*
+-	 * If the data does not end of the page boundary, then we need to copy
+-	 * the trailing data into a zeroed out page, similar to the first page
+-	 */
+-	if (!PAGE_ALIGNED(data_address + data_len)) {
+-		u32 copy_size;
+-		void *dst;
+-		unsigned long end;
+-
+-		trailing_page = get_zeroed_page(GFP_KERNEL);
+-		if (!trailing_page) {
+-			rc = -ENOMEM;
+-			goto free_leading;
+-		}
+-
+-		end = data_address + data_len;
+-		copy_size = end - ALIGN_DOWN(end, PAGE_SIZE);
+-		dst = (void *)trailing_page;
+-
+-		memcpy(dst, (void *)ALIGN_DOWN(end, PAGE_SIZE), copy_size);
+-		total_bytes_to_map = total_bytes_to_map - copy_size + PAGE_SIZE;
+-	}
+-
+-	if (vma_len < total_bytes_to_map) {
+-		rc = -ENOSPC;
+-		goto free_trailing;
+-	}
+-	if (!PAGE_ALIGNED(total_bytes_to_map)) {
+-		rc = -EINVAL;
+-		goto free_trailing;
+-	}
+-	zap_vma_ptes(vma, address, total_bytes_to_map);
+-
+-	pages_to_map = total_bytes_to_map / PAGE_SIZE;
+-
+-	if (leading_page)
+-		pages_to_map--;
+-	if (trailing_page)
+-		pages_to_map--;
+-
+-	if (leading_page) {
+-		rc = vm_insert_page(vma, address, virt_to_page(leading_page));
+-		if (rc)
+-			goto zap_pages;
+-
+-		address += PAGE_SIZE;
+-	}
+-
+-	data_address = ALIGN(data_address, PAGE_SIZE);
+-	while (pages_to_map) {
+-		struct page *page;
+-
+-		page = glink_pkt_vaddr_to_page((void *)data_address);
+-		prefetchw(page);
+-		rc = vm_insert_page(vma, address, page);
+-		if (rc)
+-			goto zap_pages;
+-
+-		address += PAGE_SIZE;
+-		data_address += PAGE_SIZE;
+-		pages_to_map--;
+-	}
+-	if (trailing_page) {
+-		rc = vm_insert_page(vma, address, virt_to_page(trailing_page));
+-		if (rc)
+-			goto zap_pages;
+-
+-		address += PAGE_SIZE;
+-	}
+-	zc->length = data_len;
+-
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	cb = (struct glink_pkt_zerocopy_cb *)skb->cb;
+-	cb->leading_page = leading_page;
+-	cb->trailing_page = trailing_page;
+-	cb->address = zc->address;
+-	cb->length = total_bytes_to_map;
+-	skb_queue_tail(&gpdev->pending, skb);
+-	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
++	wake_up_interruptible(&gpdev->readq);
++out:
++	mutex_unlock(&gpdev->lock);
+ 	mmap_read_unlock(current->mm);
+-
+-	return 0;
+-
+-zap_pages:
+-	zap_vma_ptes(vma, zc->address, total_bytes_to_map);
+-free_trailing:
+-	if (trailing_page)
+-		free_page(trailing_page);
+-free_leading:
+-	if (leading_page)
+-		free_page(leading_page);
+-skb_repush:
+-	spin_lock_irqsave(&gpdev->queue_lock, flags);
+-	skb_queue_head(&gpdev->queue, skb);
+-	spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-error_out:
+-	mmap_read_unlock(current->mm);
+-	return rc;
+ }
+ 
+ /**
+@@ -997,77 +1093,66 @@
+  * userspace client do a ioctl() system call. All input arguments are
+  * validated by the virtual file system before calling this function.
+  */
+-static long glink_pkt_ioctl(struct file *file, unsigned int cmd,
+-			    unsigned long arg)
+-{
++static long glink_pkt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct glink_pkt_device *gpdev = file->private_data;
+ 	struct glink_pkt_zerocopy_receive zc;
+-	struct glink_pkt_device *gpdev;
++	u64 cookie = 0;
++	u32 val = 0;
+ 	unsigned long flags;
+ 	int ret;
+ 
+-	gpdev = file->private_data;
+-	if (!gpdev || refcount_read(&gpdev->refcount) == 1) {
+-		GLINK_PKT_ERR("invalid device handle\n");
++	if (!gpdev)
+ 		return -EINVAL;
++	if (cmd == GLINK_PKT_IOCTL_ZC_RECV || cmd == GLINK_PKT_IOCTL_ZC_DONE) {
++		if (copy_from_user(&zc, (void __user *)arg, sizeof(zc)))
++			return -EFAULT;
++		if (cmd == GLINK_PKT_IOCTL_ZC_DONE)
++			return glink_pkt_zerocopy_done(gpdev, &zc);
++		ret = glink_pkt_zerocopy_receive(gpdev, &zc, &cookie);
++		if (copy_to_user((void __user *)arg, &zc, sizeof(zc))) {
++			glink_pkt_zerocopy_rollback(gpdev, &zc, cookie);
++			return -EFAULT;
++		}
++		return ret;
++	}
++	if (cmd == TIOCMSET || cmd == TIOCMBIS || cmd == TIOCMBIC) {
++		if (get_user(val, (u32 __user *)arg))
++			return -EFAULT;
+ 	}
+ 	if (mutex_lock_interruptible(&gpdev->lock))
+ 		return -ERESTARTSYS;
+-
+-	if (!completion_done(&gpdev->ch_open)) {
+-		GLINK_PKT_INFO("%s channel in reset\n", gpdev->ch_name);
+-		mutex_unlock(&gpdev->lock);
+-		return -ENETRESET;
+-	}
+-
++	if (!completion_done(&gpdev->ch_open) || !gpdev->rpdev || gpdev->disconnecting || gpdev->removing) {
++		ret = -ENETRESET;
++		goto out;
++	}
+ 	switch (cmd) {
+ 	case TIOCMGET:
+ 		if (!strcmp(gpdev->edge, "slate")) {
+ 			ret = -ENOIOCTLCMD;
+ 			break;
+ 		}
+-
+ 		spin_lock_irqsave(&gpdev->queue_lock, flags);
+ 		gpdev->sig_change = false;
+ 		spin_unlock_irqrestore(&gpdev->queue_lock, flags);
+-
+ 		ret = qcom_glink_get_signals(gpdev->rpdev->ept);
+-		if (ret >= 0)
+-			ret = put_user(ret, (int __user *)arg);
+-
+ 		break;
+ 	case TIOCMSET:
+ 	case TIOCMBIS:
+ 	case TIOCMBIC:
+-		ret = glink_pkt_tiocmset(gpdev, cmd, (int __user *)arg);
++		ret = glink_pkt_tiocmset(gpdev, cmd, val);
+ 		break;
+ 	case GLINK_PKT_IOCTL_QUEUE_RX_INTENT:
+-		/* Return success to not break userspace client logic */
++		/* Native compatibility ABI; GLINK allocates/advertises intents itself. */
+ 		ret = 0;
+ 		break;
+-	case GLINK_PKT_IOCTL_ZC_RECV:
+-		if (copy_from_user(&zc, (void __user *)arg, sizeof(zc))) {
+-			ret = -EFAULT;
+-			break;
+-		}
+-		ret = glink_pkt_zerocopy_receive(gpdev, &zc);
+-
+-		if (copy_to_user((void __user *)arg, &zc, sizeof(zc)))
+-			ret = -EFAULT;
+-		break;
+-	case GLINK_PKT_IOCTL_ZC_DONE:
+-		if (copy_from_user(&zc, (void __user *)arg, sizeof(zc))) {
+-			ret = -EFAULT;
+-			break;
+-		}
+-		ret = glink_pkt_zerocopy_done(gpdev, &zc);
+-		break;
+ 	default:
+-		GLINK_PKT_ERR("unrecognized ioctl command 0x%x\n", cmd);
+ 		ret = -ENOIOCTLCMD;
+ 	}
+-
++out:
+ 	mutex_unlock(&gpdev->lock);
+-
++	if (cmd == TIOCMGET && ret >= 0)
++		return put_user(ret, (int __user *)arg);
+ 	return ret;
+ }
+ 
+@@ -1149,12 +1234,8 @@
+ {
+ 	struct glink_pkt_device *gpdev = dev_to_gpdev(dev);
+ 
+-	GLINK_PKT_INFO("for %s by %s:%d ref_cnt[%d]\n",
+-		       gpdev->ch_name, current->comm,
+-		       task_pid_nr(current), refcount_read(&gpdev->refcount));
+-
+-	ida_simple_remove(&glink_pkt_minor_ida, MINOR(gpdev->dev.devt));
+-	cdev_del(&gpdev->cdev);
++	of_node_put(dev->of_node);
++	ida_free(&glink_pkt_minor_ida, MINOR(dev->devt));
+ 	kfree(gpdev);
+ }
+ 
+@@ -1168,7 +1249,8 @@
+ 	match = devm_kzalloc(dev, sizeof(*match) * 2, GFP_KERNEL);
+ 	if (!match)
+ 		return -ENOMEM;
+-	strscpy(match->name, gpdev->ch_name, RPMSG_NAME_SIZE);
++	if (strscpy(match->name, gpdev->ch_name, RPMSG_NAME_SIZE) < 0)
++		return -ENAMETOOLONG;
+ 
+ 	drv_name = devm_kasprintf(dev, GFP_KERNEL,
+ 				   "%s_%s", "glink_pkt", gpdev->dev_name);
+@@ -1191,8 +1273,8 @@
+  *
+  * return:	0 for success, Standard Linux errors
+  */
+-static int glink_pkt_create_device(struct device *parent,
+-				   struct device_node *np)
++static int glink_pkt_create_device(struct device *parent, struct device_node *np,
++		struct glink_pkt_owner *owner)
+ {
+ 	struct glink_pkt_device *gpdev;
+ 	struct device *dev;
+@@ -1201,87 +1283,71 @@
+ 	gpdev = kzalloc(sizeof(*gpdev), GFP_KERNEL);
+ 	if (!gpdev)
+ 		return -ENOMEM;
+-
+-	minor = ida_simple_get(&glink_pkt_minor_ida, 0, num_glink_pkt_devs,
+-			     GFP_KERNEL);
++	minor = ida_alloc_range(&glink_pkt_minor_ida, 0, GLINK_PKT_MAX_DEVS - 1, GFP_KERNEL);
+ 	if (minor < 0) {
+ 		kfree(gpdev);
+ 		return minor;
+ 	}
+-
+ 	dev = &gpdev->dev;
+-
++	device_initialize(dev);
++	dev->devt = MKDEV(MAJOR(glink_pkt_major), minor);
++	dev->release = glink_pkt_release_device;
++	dev->of_node = of_node_get(np);
+ 	ret = glink_pkt_parse_devicetree(np, gpdev);
+-	if (ret < 0) {
+-		GLINK_PKT_ERR("failed to parse dt ret:%d\n", ret);
+-		ida_simple_remove(&glink_pkt_minor_ida, MINOR(dev->devt));
+-		kfree(gpdev);
+-		return ret;
+-	}
+-
++	if (ret)
++		goto put_dev;
++	if (!*gpdev->ch_name || strlen(gpdev->ch_name) >= RPMSG_NAME_SIZE ||
++	    !*gpdev->dev_name || strchr(gpdev->dev_name, '/') || !*gpdev->edge) {
++		ret = -EINVAL;
++		goto put_dev;
++	}
+ 	mutex_init(&gpdev->lock);
+ 	mutex_init(&gpdev->drv_lock);
+ 	mutex_init(&gpdev->rskb_read_lock);
+ 	refcount_set(&gpdev->refcount, 1);
+ 	init_completion(&gpdev->ch_open);
+-
+-	/* Default open timeout for open is 120 sec */
++	init_completion(&gpdev->drv_idle);
++	INIT_WORK(&gpdev->idle_work, glink_pkt_idle_work);
++	complete_all(&gpdev->drv_idle);
+ 	gpdev->open_tout = 120;
+-	gpdev->sig_change = false;
+-	gpdev->rx_done = false;
+-
++	gpdev->disconnecting = true;
+ 	spin_lock_init(&gpdev->queue_lock);
+-
+-	gpdev->rskb = NULL;
+-	gpdev->rdata = NULL;
+-	gpdev->rdata_len = 0;
+-
+ 	skb_queue_head_init(&gpdev->queue);
+ 	skb_queue_head_init(&gpdev->pending);
+ 	init_waitqueue_head(&gpdev->readq);
+-
+-	device_initialize(dev);
+ 	dev->class = glink_pkt_class;
+ 	dev->parent = parent;
+ 	dev->groups = glink_pkt_device_groups;
+ 	dev_set_drvdata(dev, gpdev);
+-
++	ret = dev_set_name(dev, "%s", gpdev->dev_name);
++	if (ret)
++		goto put_dev;
+ 	cdev_init(&gpdev->cdev, &glink_pkt_fops);
+ 	gpdev->cdev.owner = THIS_MODULE;
+-
+-	dev->devt = MKDEV(MAJOR(glink_pkt_major), minor);
+-	dev_set_name(dev, gpdev->dev_name, minor);
+-
+-	ret = cdev_add(&gpdev->cdev, dev->devt, 1);
+-	if (ret) {
+-		GLINK_PKT_ERR("cdev_add failed for %s ret:%d\n",
+-			      gpdev->dev_name, ret);
+-		ida_simple_remove(&glink_pkt_minor_ida, MINOR(dev->devt));
+-		kfree(gpdev);
+-		return ret;
+-	}
+-
+-	dev->release = glink_pkt_release_device;
+-	ret = device_add(dev);
+-	if (ret) {
+-		GLINK_PKT_ERR("device_create failed for %s ret:%d\n",
+-			      gpdev->dev_name, ret);
+-		goto free_dev;
+-	}
+-
+-	if (device_create_file(dev, &dev_attr_open_timeout))
+-		GLINK_PKT_ERR("device_create_file failed for %s\n",
+-			      gpdev->dev_name);
+-
+ 	ret = glink_pkt_init_rpmsg(gpdev);
+ 	if (ret)
+-		goto free_dev;
+-
++		goto put_dev;
++	ret = cdev_device_add(&gpdev->cdev, dev);
++	if (ret)
++		goto unregister;
++	ret = device_create_file(dev, &dev_attr_open_timeout);
++	if (ret) {
++		cdev_device_del(&gpdev->cdev, dev);
++		goto unregister;
++	}
++	list_add_tail(&gpdev->owner_node, &owner->devices);
+ 	return 0;
+-
+-free_dev:
++unregister:
++	mutex_lock(&gpdev->drv_lock);
++	WRITE_ONCE(gpdev->removing, true);
++	mutex_unlock(&gpdev->drv_lock);
++	glink_pkt_cancel_idle(gpdev);
++	glink_pkt_drv_try_unregister(gpdev);
++	wait_for_completion(&gpdev->drv_idle);
++	complete_all(&gpdev->ch_open);
++	wake_up_interruptible(&gpdev->readq);
++put_dev:
+ 	put_device(dev);
+-
+ 	return ret;
+ }
+ 
+@@ -1293,7 +1359,9 @@
+ static void glink_pkt_deinit(void)
+ {
+ 	class_destroy(glink_pkt_class);
+-	unregister_chrdev_region(MAJOR(glink_pkt_major), num_glink_pkt_devs);
++	unregister_chrdev_region(glink_pkt_major, GLINK_PKT_MAX_DEVS);
++	ida_destroy(&glink_pkt_minor_ida);
++	ipc_log_context_destroy(glink_pkt_ilctxt);
+ }
+ 
+ /**
+@@ -1306,36 +1374,46 @@
+  * This function is called when the underlying device tree driver registers
+  * a platform device, mapped to a G-Link packet device.
+  */
++static void glink_pkt_remove(struct platform_device *pdev)
++{
++	struct glink_pkt_owner *owner = platform_get_drvdata(pdev);
++	struct glink_pkt_device *gpdev, *next;
++
++	list_for_each_entry_safe(gpdev, next, &owner->devices, owner_node) {
++		list_del(&gpdev->owner_node);
++		mutex_lock(&gpdev->drv_lock);
++		WRITE_ONCE(gpdev->removing, true);
++		mutex_unlock(&gpdev->drv_lock);
++		cdev_device_del(&gpdev->cdev, &gpdev->dev);
++		glink_pkt_cancel_idle(gpdev);
++		glink_pkt_drv_try_unregister(gpdev);
++		wait_for_completion(&gpdev->drv_idle);
++		complete_all(&gpdev->ch_open);
++		wake_up_interruptible(&gpdev->readq);
++		put_device(&gpdev->dev);
++	}
++}
++
+ static int glink_pkt_probe(struct platform_device *pdev)
+ {
+-	struct device *dev = &pdev->dev;
+-	struct device_node *cn;
++	struct glink_pkt_owner *owner;
++	struct device_node *child;
+ 	int ret;
+ 
+-	num_glink_pkt_devs = of_get_child_count(dev->of_node);
+-	ret = alloc_chrdev_region(&glink_pkt_major, 0, num_glink_pkt_devs,
+-				  "glinkpkt");
+-	if (ret < 0) {
+-		GLINK_PKT_ERR("alloc_chrdev_region failed ret:%d\n", ret);
+-		return ret;
+-	}
+-	glink_pkt_class = class_create("glinkpkt");
+-	if (IS_ERR(glink_pkt_class)) {
+-		ret = PTR_ERR(glink_pkt_class);
+-		GLINK_PKT_ERR("class_create failed ret:%d\n", ret);
+-		goto error_deinit;
+-	}
+-
+-	for_each_child_of_node(dev->of_node, cn) {
+-		glink_pkt_create_device(dev, cn);
+-	}
+-
+-	GLINK_PKT_INFO("G-Link Packet Port Driver Initialized\n");
++	owner = devm_kzalloc(&pdev->dev, sizeof(*owner), GFP_KERNEL);
++	if (!owner)
++		return -ENOMEM;
++	INIT_LIST_HEAD(&owner->devices);
++	platform_set_drvdata(pdev, owner);
++	for_each_available_child_of_node(pdev->dev.of_node, child) {
++		ret = glink_pkt_create_device(&pdev->dev, child, owner);
++		if (ret) {
++			of_node_put(child);
++			glink_pkt_remove(pdev);
++			return ret;
++		}
++	}
+ 	return 0;
+-
+-error_deinit:
+-	glink_pkt_deinit();
+-	return ret;
+ }
+ 
+ static const struct of_device_id glink_pkt_match_table[] = {
+@@ -1345,9 +1423,11 @@
+ 
+ static struct platform_driver glink_pkt_driver = {
+ 	.probe = glink_pkt_probe,
++	.remove = glink_pkt_remove,
+ 	.driver = {
+ 		.name = MODULE_NAME,
+ 		.of_match_table = glink_pkt_match_table,
++		.suppress_bind_attrs = true,
+ 	 },
+ };
+ 
+@@ -1360,15 +1440,27 @@
+ {
+ 	int ret;
+ 
++	BUILD_BUG_ON(sizeof(struct glink_pkt_zerocopy_cb) > sizeof_field(struct sk_buff, cb));
++	glink_pkt_ilctxt = ipc_log_context_create(GLINK_PKT_IPC_LOG_PAGE_CNT, "glink_pkt", 0);
++	if (!glink_pkt_ilctxt)
++		return -ENOMEM;
++	ret = alloc_chrdev_region(&glink_pkt_major, 0, GLINK_PKT_MAX_DEVS, "glinkpkt");
++	if (ret)
++		goto destroy_log;
++	glink_pkt_class = class_create("glinkpkt");
++	if (IS_ERR(glink_pkt_class)) {
++		ret = PTR_ERR(glink_pkt_class);
++		goto release_region;
++	}
+ 	ret = platform_driver_register(&glink_pkt_driver);
+-	if (ret) {
+-		GLINK_PKT_ERR("%s: glink_pkt register failed %d\n",
+-			__func__, ret);
+-		return ret;
+-	}
+-	glink_pkt_ilctxt = ipc_log_context_create(GLINK_PKT_IPC_LOG_PAGE_CNT,
+-						  "glink_pkt", 0);
+-	return 0;
++	if (!ret)
++		return 0;
++	class_destroy(glink_pkt_class);
++release_region:
++	unregister_chrdev_region(glink_pkt_major, GLINK_PKT_MAX_DEVS);
++destroy_log:
++	ipc_log_context_destroy(glink_pkt_ilctxt);
++	return ret;
+ }
+ 
+ /**
+@@ -1378,12 +1470,13 @@
+  */
+ static void __exit glink_pkt_exit(void)
+ {
++	platform_driver_unregister(&glink_pkt_driver);
+ 	glink_pkt_deinit();
+-	platform_driver_unregister(&glink_pkt_driver);
+ }
+ 
+ module_init(glink_pkt_init);
+ module_exit(glink_pkt_exit);
+ 
++MODULE_DEVICE_TABLE(of, glink_pkt_match_table);
+ MODULE_DESCRIPTION("MSM G-Link Packet Port");
+ MODULE_LICENSE("GPL");
+--- a/drivers/rpmsg/qcom_glink_native.c
++++ b/drivers/rpmsg/qcom_glink_native.c
+@@ -1691,6 +1691,7 @@
+ {
+ 	struct glink_channel *channel;
+ 	u32 old;
++	unsigned long flags;
+ 
+ 	qcom_glink_rx_advance(glink, ALIGN(sizeof(struct glink_msg), 8));
+ 
+@@ -1699,8 +1700,6 @@
+ 		dev_err(glink->dev, "signal for non-existing channel\n");
+ 		return -EINVAL;
+ 	}
+-
+-	old = channel->remote_signals;
+ 
+ 	/* convert signals from NATIVE to TIOCM */
+ 	if (signals & NATIVE_DTR_SIG)
+@@ -1713,6 +1712,8 @@
+ 		signals |= TIOCM_RI;
+ 	signals &= 0x0fff;
+ 
++	spin_lock_irqsave(&channel->recv_lock, flags);
++	old = channel->remote_signals;
+ 	channel->remote_signals = signals;
+ 
+ 	CH_INFO(channel, "old:%d new:%d\n", old, channel->remote_signals);
+@@ -1720,6 +1721,7 @@
+ 		channel->signals_cb(channel->ept.rpdev, channel->ept.priv,
+ 				    old, channel->remote_signals);
+ 
++	spin_unlock_irqrestore(&channel->recv_lock, flags);
+ 	qcom_glink_channel_ref_put(channel);
+ 	return 0;
+ }
+@@ -2300,12 +2302,16 @@
+ 				   int (*cb)(struct rpmsg_device *, void *, u32, u32))
+ {
+ 	struct glink_channel *channel;
+-
+-	if (!ept || !cb)
++	unsigned long flags;
++
++	if (!ept)
+ 		return -EINVAL;
+ 
+ 	channel = to_glink_channel(ept);
++	/* NULL detaches synchronously from the atomic callback dispatcher. */
++	spin_lock_irqsave(&channel->recv_lock, flags);
+ 	channel->signals_cb = cb;
++	spin_unlock_irqrestore(&channel->recv_lock, flags);
+ 
+ 	return 0;
+ }

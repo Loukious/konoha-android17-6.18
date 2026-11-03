@@ -1482,3 +1482,7 @@ config CORESIGHT_DUMMY
 config CORESIGHT_REMOTE_ETM
 	tristate "Onyx remote processor ETM control"
 	depends on CORESIGHT && CORESIGHT_QMI
+
+config QCOM_GLINK_PKT
+	tristate "Onyx native GLINK packet devices"
+	depends on RPMSG_QCOM_GLINK_SMEM

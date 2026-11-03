@@ -17,3 +17,5 @@
   devm_release_action
   coresight_enable_sysfs
   coresight_disable_sysfs
+  zap_page_range_single
+  vmf_insert_pfn_prot

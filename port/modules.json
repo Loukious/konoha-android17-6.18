@@ -1479,5 +1479,9 @@
   {
     "target": "coresight_remote_etm",
     "output": "coresight-remote-etm.ko"
+  },
+  {
+    "target": "glink_pkt",
+    "output": "glink_pkt.ko"
   }
 ]

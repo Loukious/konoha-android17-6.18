@@ -4400,6 +4400,7 @@ kernel_module_group(
         ":smp2p",
         ":smp2p_sleepstate",
         ":qcom_glink",
+        ":glink_pkt",
         ":qcom_glink_smem",
         ":qcom_smd",
         ":rproc_qcom_common",
@@ -5215,4 +5216,15 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":coresight_qmi", ":coresight_csr"],
+)
+
+
+ddk_module(
+    name = "glink_pkt",
+    srcs = ["drivers/rpmsg/glink_pkt.c"],
+    out = "glink_pkt.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":remote_headers", ":platform_headers", ":qcom_glink", ":qcom_ipc_logging"],
 )

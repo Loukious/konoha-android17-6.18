@@ -1,6 +1,8 @@
 # Remaining Onyx modules
 
-The installed baseline is artifact `20261103T023508668153Z`: 352 platform
+Latest validated candidate: **371 platform modules**, artifact `20261103T125226341911Z`. Native GLINK packet devices are ported and built; all 22,623 imported-symbol CRC checks, 5,002 source hashes, 2,262 artifact hashes and matched packaging checks pass. The dry-run bundle packages 451 modules and checks 480; 100 distinct retained load-list names remain unavailable. See [GLINK provider](glink-pkt.md) and [371 validation](../validation/remaining_371_modules/build-validation.json). The matching 371-module images are now installed on phone 5493f3c6. All six partition readbacks and the kernel/module identities pass; the native `bt_cp_ctrl` RPMSG driver is bound and `/dev/bt_cp_ctrl` has the expected Bluetooth ownership and SELinux label. Playback testing is pending. See [installation receipt](../validation/remaining_371_modules/live-install-validation.json).
+
+The previous installed baseline was artifact `20261103T023508668153Z`: 352 platform
 modules, 432 packaged modules including GKI. Its retained stock load lists request
 119 unique names that are unavailable. That count includes recovery/debug
 software, alternate Sun/Kera hardware and disabled or unfitted peripherals.
@@ -174,3 +176,17 @@ The 352-module installation lacks native `glink_pkt`. Firmware already exposes t
 Source: `baseline/kernel/xiaomi/sm8735/drivers/rpmsg/glink_pkt.c`; draft/source review in `/home/loukious/Android/konoha-remaining-diagnostics/glink-pkt-draft` and `port/GLINK-PKT-PORT-REVIEW.md` in that worktree. Patch 0210 reserved. Native removal, registration-error propagation, nonblocking read locking, obsolete IDA calls and zero-copy mapping ownership need repair before validation/installation. The provider has no native OF aliases despite matching an active `qcom,glinkpkt` node, so the prior inventory's absence of DT matches is incomplete.
 
 Hotspot reboot remains unresolved after two captures, including offload disabled. See `validation/hotspot_bt_20261103/findings.md`; no error suppression or speculative protocol change is justified by the current traces.
+
+
+The GLINK port retains native packet/signals/intent semantics and full-page zero
+copy, with zeroed partial boundaries, exact mapping ownership and teardown.
+Kernel and sanitizer checks pass; native empty-packet writes are explicitly
+tested. Bluetooth needs a live retest after installing matched images. The
+hotspot reset site is still unproven. ROM findings remain notes only.
+
+The CPUSS v4 sleep-statistics draft is preserved in
+`/home/loukious/Android/konoha-remaining-scmi-stats/cpuss-v4-draft`, commit
+`45ac441d2`. All 371 complete-driver ASan/UBSan checks and zero-fuzz forward/reverse
+patch replay pass. It is not part of this kernel build; integration, kernel
+compilation and packaging remain. The existing older Onyx CPUSS node stays
+unchanged. Continue all remaining native module ports.

@@ -1,6 +1,6 @@
 # Hotspot and Bluetooth investigation — 2026-11-03
 
-Phone 5493f3c6 still runs the installed 352-module 6.18.38 build. Neither the validated 356 batch nor the 370 candidate has been flashed.
+Phone 5493f3c6 now runs the matched 371-module artifact `20261103T125226341911Z`. The captured hotspot failures below occurred on the previous installed 352-module 6.18.38 build.
 
 Hotspot fully rebooted twice, including once with tethering hardware offload disabled. Boot IDs changed from f4391c4c-2c8e-4ac0-96d5-2233af1e246a to 69c5f967-1fd3-4be8-bc7e-603eea40b8c6 and then d69ef739-977c-4ee7-9747-4131bd0b73dd. The temporary tether_offload_disabled setting was restored to its original 0 and independently rechecked.
 
@@ -14,6 +14,12 @@ Static vendor binary evidence: android.hardware.bluetooth@1.0-impl-qti.so SHA256
 
 REA evidence retained: CP bytes ev_ce979efc8b3305857e97aa81b42ddcd9c9702e39c463dcdb61ad7fbb7072036c; CP default ev_c4d7c1ee946880b3cf474a876095e4c991ad0dad14175b743871d1c55379482c; KernelProxyTransport references ev_5c64846d774a690caba4d47852e1631ca9566c1ff0a4e8512a5d038fb776c086. Hopper's containing-function metadata misidentifies several anonymous neighboring procedures; instruction addresses and ELF dynamic symbols are used for those ranges. Static observations are not execution traces.
 
-Next: port native glink_pkt, validate its lifetime/error/packet behavior and build a matched artifact. Continue hotspot investigation separately; no proven hotspot fix yet. Record any ROM findings separately, without implementing speculative ROM changes.
+Native glink_pkt has now been ported, validated, built and installed as described below. Continue hotspot investigation separately; no proven hotspot fix yet. Record any ROM findings separately, without implementing speculative ROM changes.
 
 Capture root: /home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-hotspot-bt-20261103T110918Z
+
+Follow-up capture 2026-11-03 12:17 UTC: device connected, same d69ef739-977c-4ee7-9747-4131bd0b73dd boot ID, uptime about 2744 seconds, installed kernel unchanged. This check does not establish a third reboot. Pstore remains empty; both boot properties say only reboot. PMIC PON and qcom reboot-reason platform drivers are bound; no exposed reset-reason file or PMIC IPC-log debugfs directory was found. Full current dmesg, logcat, bootstat, command outcomes and hashes retained at /home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-hotspot-bt-20261103T110918Z/reboot-followup-20261103T121759Z. No hotspot trigger, settings change or flash was performed.
+
+Native glink_pkt is now integrated in validated artifact 20261103T125226341911Z (371 platform modules). Full matched symbol CRCs, source/artifact hashes, DT variants and packaging dry runs pass. Host tests preserve native empty writes and exercise all page offsets with strict sanitizer failures. The candidate was flashed at 13:05 UTC and booted with SELinux enforcing. All six partition hashes and the new kernel identity match. `/dev/bt_cp_ctrl` exists as bluetooth:system 0660, label `hci_attach_dev`, and the ADSP firmware channel is bound to `glink_pkt_bt_cp_ctrl`. Playback remains a user device check. No hotspot crash fix is claimed.
+
+Installation evidence: /home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z

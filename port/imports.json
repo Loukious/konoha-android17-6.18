@@ -30065,5 +30065,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/hwtracing/coresight/coresight-remote-etm.c",
     "blob": "26fa5f881c73aad9187ac6cb9e53a338ae7598f7"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/rpmsg/glink_pkt.c",
+    "blob": "63b29a4b55aeb80ab1c81717860b04ac416289c5"
   }
 ]
