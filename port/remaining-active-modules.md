@@ -70,7 +70,7 @@ propagated. Driver teardown drains sysfs, CPU callbacks and association lists
 synchronously, retaining the common device release callback. Common-core CTI
 association callbacks additionally require root's SRCU lifetime patch.
 
-`verify_coresight_cti.py` runs 26,408 actual-C ASan/UBSan cases covering all DEVID
+`verify_coresight_cti.py` runs 26,414 actual-C ASan/UBSan cases covering all DEVID
 trigger/channel combinations, every trigger/channel boundary, both MMIO layouts,
 128-bit bitmap boundaries, malformed DT filters, route/cache changes, reference
 votes, GPIO/claim/clock failures, system sleep and registration rollback.

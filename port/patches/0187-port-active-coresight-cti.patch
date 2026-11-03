@@ -1,5 +1,5 @@
 diff --git a/drivers/hwtracing/coresight/coresight-cti-core.c b/drivers/hwtracing/coresight/coresight-cti-core.c
-index 4f09859..4106ade 100644
+index 4f09859..5e35b56 100644
 --- a/drivers/hwtracing/coresight/coresight-cti-core.c
 +++ b/drivers/hwtracing/coresight/coresight-cti-core.c
 @@ -14,6 +14,7 @@
@@ -490,15 +490,20 @@ index 4f09859..4106ade 100644
  		}
  	}
  	mutex_unlock(&ect_mutex);
-@@ -788,6 +800,7 @@ static void cti_update_conn_xrefs(struct cti_drvdata *drvdata)
- 			else
+@@ -785,9 +797,11 @@ static void cti_update_conn_xrefs(struct cti_drvdata *drvdata)
+ 				/* set the CTI/csdev association */
+ 				coresight_add_helper(tc->con_dev,
+ 						     drvdata->csdev);
+-			else
++			else {
  				/* otherwise remove reference from CTI */
  				tc->con_dev = NULL;
 +				tc->con_dev_name = tc->con_node_name;
++			}
  		}
  	}
  }
-@@ -809,34 +822,40 @@ static void cti_remove_conn_xrefs(struct cti_drvdata *drvdata)
+@@ -809,34 +823,40 @@ static void cti_remove_conn_xrefs(struct cti_drvdata *drvdata)
  static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
  			     void *v)
  {
@@ -546,7 +551,7 @@ index 4f09859..4106ade 100644
  				drvdata->config.hw_enabled = false;
  		}
  		break;
-@@ -849,7 +868,7 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
+@@ -849,7 +869,7 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
  		/* check enable reference count to enable HW */
  		if (drvdata->config.enable_req_count) {
  			/* check we can claim the device as we re-power */
@@ -555,7 +560,7 @@ index 4f09859..4106ade 100644
  				goto cti_notify_exit;
  
  			drvdata->config.hw_enabled = true;
-@@ -863,7 +882,8 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
+@@ -863,7 +883,8 @@ static int cti_cpu_pm_notify(struct notifier_block *nb, unsigned long cmd,
  	}
  
  cti_notify_exit:
@@ -565,7 +570,7 @@ index 4f09859..4106ade 100644
  	return notify_res;
  }
  
-@@ -874,75 +894,96 @@ static struct notifier_block cti_cpu_pm_nb = {
+@@ -874,75 +895,96 @@ static struct notifier_block cti_cpu_pm_nb = {
  /* CPU HP handlers */
  static int cti_starting_cpu(unsigned int cpu)
  {
@@ -704,7 +709,7 @@ index 4f09859..4106ade 100644
  }
  
  /** cti ect operations **/
-@@ -969,39 +1010,37 @@ static const struct coresight_ops cti_ops = {
+@@ -969,39 +1011,37 @@ static const struct coresight_ops cti_ops = {
  	.helper_ops = &cti_ops_ect,
  };
  
@@ -767,7 +772,7 @@ index 4f09859..4106ade 100644
  }
  
  static bool is_extended_cti(struct device *dev)
-@@ -1022,9 +1061,11 @@ static int cti_parse_gpio(struct cti_drvdata *drvdata, struct amba_device *adev)
+@@ -1022,9 +1062,11 @@ static int cti_parse_gpio(struct cti_drvdata *drvdata, struct amba_device *adev)
  	drvdata->gpio_trigin->trig = -1;
  	ret = of_property_read_u32(adev->dev.of_node,
  			"qcom,cti-gpio-trigin", &trig);
@@ -781,7 +786,7 @@ index 4f09859..4106ade 100644
  		return ret;
  
  	drvdata->gpio_trigout = devm_kzalloc(&adev->dev,
-@@ -1036,21 +1077,33 @@ static int cti_parse_gpio(struct cti_drvdata *drvdata, struct amba_device *adev)
+@@ -1036,21 +1078,33 @@ static int cti_parse_gpio(struct cti_drvdata *drvdata, struct amba_device *adev)
  	ret = of_property_read_u32(adev->dev.of_node,
  			"qcom,cti-gpio-trigout", &trig);
  
@@ -818,7 +823,7 @@ index 4f09859..4106ade 100644
  	struct coresight_platform_data *pdata = NULL;
  	struct resource *res = &adev->res;
  
-@@ -1059,19 +1112,31 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1059,19 +1113,31 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  	if (!drvdata)
  		return -ENOMEM;
  
@@ -851,7 +856,7 @@ index 4f09859..4106ade 100644
  	cti_desc.access = CSDEV_ACCESS_IOMEM(base);
  
  	dev_set_drvdata(dev, drvdata);
-@@ -1082,10 +1147,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1082,10 +1148,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  	drvdata->ctidev.ctm_id = 0;
  	INIT_LIST_HEAD(&drvdata->ctidev.trig_cons);
  
@@ -866,7 +871,7 @@ index 4f09859..4106ade 100644
  
  	pdata = coresight_cti_get_platform_data(dev);
  	if (IS_ERR(pdata)) {
-@@ -1096,7 +1163,11 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1096,7 +1164,11 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  	drvdata->config.hw_powered = true;
  
  	/* set up device name - will depend if cpu bound or otherwise */
@@ -879,7 +884,7 @@ index 4f09859..4106ade 100644
  		cti_desc.name = devm_kasprintf(dev, GFP_KERNEL, "cti_cpu%d",
  					       drvdata->ctidev.cpu);
  	else
-@@ -1105,10 +1176,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1105,10 +1177,6 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  		return -ENOMEM;
  
  	ret = cti_parse_gpio(drvdata, adev);
@@ -890,7 +895,7 @@ index 4f09859..4106ade 100644
  	if (ret)
  		return ret;
  
-@@ -1133,6 +1200,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1133,6 +1201,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  		goto pm_release;
  	}
  
@@ -903,7 +908,7 @@ index 4f09859..4106ade 100644
  	/* add to list of CTI devices */
  	mutex_lock(&ect_mutex);
  	list_add(&drvdata->node, &ect_net);
-@@ -1140,13 +1213,8 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
+@@ -1140,13 +1214,8 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
  	cti_update_conn_xrefs(drvdata);
  	mutex_unlock(&ect_mutex);
  
@@ -918,7 +923,7 @@ index 4f09859..4106ade 100644
  	dev_info(&drvdata->csdev->dev, "CTI initialized\n");
  	return 0;
  
-@@ -1155,139 +1223,67 @@ pm_release:
+@@ -1155,139 +1224,67 @@ pm_release:
  	return ret;
  }
  
@@ -968,15 +973,15 @@ index 4f09859..4106ade 100644
 -#else
 -static int cti_suspend(struct device *dev)
 -{
--	return 0;
--}
--
--static int cti_resume(struct device *dev)
--{
 +	if (drvdata)
 +		cti_disable_atclk(drvdata);
  	return 0;
  }
+ 
+-static int cti_resume(struct device *dev)
+-{
+-	return 0;
+-}
 -#endif
 -
 -#ifdef CONFIG_HIBERNATION
@@ -999,7 +1004,7 @@ index 4f09859..4106ade 100644
 -
 -	return rc;
 -}
- 
+-
 -static int cti_restore(struct device *dev)
 +static int cti_runtime_resume(struct device *dev)
  {
@@ -1094,7 +1099,7 @@ index 4f09859..4106ade 100644
  	SET_RUNTIME_PM_OPS(cti_runtime_suspend, cti_runtime_resume, NULL)
  };
  
-@@ -1328,10 +1324,10 @@ static int __init cti_init(void)
+@@ -1328,10 +1325,10 @@ static int __init cti_init(void)
  {
  	int ret;
  

@@ -32,11 +32,19 @@ struct device { struct device *parent; struct cti_drvdata *data; };
 struct coresight_device { struct device dev; };
 struct device_attribute { int unused; };
 struct cti_pctrl { void *pctrl; int trig; };
+struct cti_trig_con {
+    struct coresight_device *con_dev;
+    const char *con_dev_name, *con_node_name;
+    struct cti_trig_con *next;
+};
+struct cti_device { struct cti_trig_con *trig_cons; };
+#define list_for_each_entry(item, head, node) for ((item) = *(head); (item); (item) = (item)->next)
 struct cti_drvdata {
     void *base;
     struct coresight_device *csdev;
     int spinlock, gpio_mutex;
     struct cti_config config;
+    struct cti_device ctidev;
     bool removing, extended_cti, atclk_enabled;
     resource_size_t regs_size;
     struct cti_pctrl *gpio_trigin, *gpio_trigout;
@@ -51,6 +59,9 @@ enum cti_chan_set_op { CTI_CHAN_SET, CTI_CHAN_CLR, CTI_CHAN_PULSE };
 static u32 mmio[1024];
 static int claims, disclaims, claim_error, clock_error, clock_enables, clock_disables;
 static int gpio_error, gpio_enables, gpio_disables, register_error, assoc_published, force_error;
+static bool link_success;
+static int helpers, link_removes;
+static const char *linked_name;
 static unsigned int cases;
 #define CHECK(x) do { assert(x); cases++; } while (0)
 static void *dev_get_drvdata(struct device *dev) { return dev->data; }
@@ -108,6 +119,13 @@ static int cti_driver, cti_assoc_ops;
 static void coresight_set_cti_ops(void *ops) { assoc_published = 1; }
 static void coresight_remove_cti_ops(void) { assoc_published = 0; }
 static int amba_driver_register(void *driver) { return register_error; }
+static bool cti_add_sysfs_link(struct cti_drvdata *drv, struct cti_trig_con *con) {
+    linked_name = con->con_dev_name; return link_success;
+}
+static void coresight_add_helper(struct coresight_device *dev, struct coresight_device *helper) { helpers++; }
+static void cti_remove_sysfs_link(struct cti_drvdata *drv, struct cti_trig_con *con) {
+    assert(!strcmp(linked_name, con->con_dev_name)); link_removes++;
+}
 /* INSERT_FUNCTIONS */
 
 static struct cti_drvdata d;
@@ -242,6 +260,18 @@ int main(void) {
     force_error = -EIO; CHECK(cti_suspend(&parent) == -EIO && d.config.hw_enabled && d.config.enable_req_count == 1);
     register_error = -EIO; CHECK(cti_init() == -EIO && !assoc_published);
     register_error = 0; CHECK(cti_init() == 0 && assoc_published);
+    struct cti_trig_con connection = { .con_dev = &cs, .con_dev_name = "linked-device", .con_node_name = "firmware/node" };
+    d.ctidev.trig_cons = &connection;
+    link_success = true; cti_update_conn_xrefs(&d);
+    CHECK(helpers == 1 && connection.con_dev == &cs);
+    CHECK(!strcmp(connection.con_dev_name, "linked-device"));
+    cti_remove_conn_xrefs(&d);
+    CHECK(link_removes == 1 && !connection.con_dev);
+    connection.con_dev = &cs; connection.con_dev_name = "linked-device";
+    link_success = false; cti_update_conn_xrefs(&d);
+    CHECK(helpers == 1 && !connection.con_dev);
+    CHECK(!strcmp(connection.con_dev_name, connection.con_node_name));
+    cti_remove_conn_xrefs(&d); CHECK(link_removes == 1);
     printf("%u\n", cases);
     return 0;
 }
