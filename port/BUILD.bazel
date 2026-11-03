@@ -4311,6 +4311,7 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":qcom_cpuss_sleep_stats_v4",
         ":coresight_dummy",
         ":coresight_remote_etm",
 
@@ -5227,4 +5228,14 @@ ddk_module(
     defconfig = "platform_defconfig",
     kernel_build = "//common:kernel_aarch64",
     deps = [":remote_headers", ":platform_headers", ":qcom_glink", ":qcom_ipc_logging"],
+)
+
+
+ddk_module(
+    name = "qcom_cpuss_sleep_stats_v4",
+    srcs = ["drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c"],
+    out = "qcom_cpuss_sleep_stats_v4.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
 )

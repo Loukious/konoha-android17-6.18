@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "source_blob": "b0ab4ee8ed16072f2bcf6a2f22ec8590092d5393",
+  "source_revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+  "forward_reverse": "Exact bytes, --fuzz=0",
+  "patch_sha256": "f5721ca399f2b95dd64b3ec48b2d1b60de8046345738c67b847b4ca89e5a7429"
+}

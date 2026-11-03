@@ -1486,3 +1486,7 @@ config CORESIGHT_REMOTE_ETM
 config QCOM_GLINK_PKT
 	tristate "Onyx native GLINK packet devices"
 	depends on RPMSG_QCOM_GLINK_SMEM
+
+config QCOM_CPUSS_SLEEP_STATS_V4
+	tristate "Onyx native CPUSS v4 sleep statistics"
+	depends on OF && DEBUG_FS

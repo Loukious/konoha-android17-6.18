@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "cases": 371,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c": "c96ef431fc1c58298b87d631c99cacc5ffe13ea005e3a0d1e1e4751ea155b8f4"
+  },
+  "limits": [
+    "MMIO and debugfs/devres are bounded host stubs; native counter timing and actual debugfs proxy lifetime remain kernel/device checks."
+  ]
+}

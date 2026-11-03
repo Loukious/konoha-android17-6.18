@@ -1,6 +1,6 @@
 # Hotspot and Bluetooth investigation — 2026-11-03
 
-Phone 5493f3c6 now runs matched artifact `20261103T135741329740Z` with kernel compatibility patch 0212. The actual hotspot crash was a NULL wiphy mutex in HDD channel notifications. Both secured AP startup cases now pass for 45 seconds without reboot: connected STA at 5260 MHz and Wi-Fi off at 2462 MHz. The saved hotspot configuration is unchanged and Wi-Fi has reconnected. Normal Settings toggle and internet forwarding are pending a user test. Early captures below used 352 modules; later captures used the 371-module build.
+Phone 5493f3c6 now runs matched artifact `20261103T135741329740Z` with kernel compatibility patch 0212. The actual hotspot crash was a NULL wiphy mutex in HDD channel notifications. Both secured AP startup cases now pass for 45 seconds without reboot: connected STA at 5260 MHz and Wi-Fi off at 2462 MHz. The saved hotspot configuration is unchanged and Wi-Fi has reconnected. User confirms the normal Settings toggle stays on. Connected-client internet forwarding is still untested. Early captures below used 352 modules; later captures used the 371-module build.
 
 Hotspot fully rebooted twice, including once with tethering hardware offload disabled. Boot IDs changed from f4391c4c-2c8e-4ac0-96d5-2233af1e246a to 69c5f967-1fd3-4be8-bc7e-603eea40b8c6 and then d69ef739-977c-4ee7-9747-4131bd0b73dd. The temporary tether_offload_disabled setting was restored to its original 0 and independently rechecked.
 
@@ -43,3 +43,5 @@ At 13:53 UTC, v10 captured the actual kernel fault: NULL-pointer dereference at 
 
 
 WLAN fix installed at 14:03 UTC: all six partition hashes and kernel plus nine module identities match. WLAN build ID 6156508deb8c7a7c2ca5a780a8494dc936933d56. Boot f2e3caf9-2423-4d93-801e-1f0927f1b27e remained unchanged through both AP tests. Active SoftApManager StartedState is verified independently of history/graveyard. Wi-Fi-off AP reports non-DFS 2462 MHz; connected-STA AP reports 5260 MHz. No kernel NULL/oops/panic in the retained log. The shell AP command does not establish internet forwarding; user Settings test pending. See wlan-wiphy-lock-install-validation.json and wlan-wiphy-lock-ap-runtime-validation.json.
+
+User confirms hotspot stays on through the normal Settings toggle. Follow-up logs retain the same boot ID with SELinux enforcing, and no NULL fault or panic. The captured hotspot-startup reboot is resolved; attached-client internet forwarding and longer endurance are separate checks.

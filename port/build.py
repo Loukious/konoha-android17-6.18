@@ -79,6 +79,7 @@ def main():
         "coresight_sources": "verify_coresight_sources",
         "glink_pkt": "verify_glink_pkt",
         "wlan_wiphy_lock": "verify_wlan_wiphy_lock",
+        "cpuss_v4": "verify_cpuss_v4",
     }
     provider_validations = {}
     for name, verifier in provider_verifiers.items():

@@ -244,8 +244,10 @@
   "wifi_restored_enabled": true,
   "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/hotspot-wiphy-lock-20261103T135827Z/hotspot-validation-20261103T140531Z",
   "limits": [
-    "Temporary shell SoftAP does not start internet tethering. Settings toggle and client data forwarding still require user validation.",
+    "User Settings hotspot toggle passes; connected-client internet forwarding has not yet been tested.",
     "No attached-client throughput or endurance claim."
   ],
-  "wifi_restored_connected": true
+  "wifi_restored_connected": true,
+  "user_settings_toggle": "User reports it stays on",
+  "user_settings_toggle_utc": "2026-11-03T14:10:12.526735+00:00"
 }

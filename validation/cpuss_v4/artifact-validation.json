@@ -1,0 +1,31 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T141132910330Z",
+  "platform_modules": 372,
+  "imported_crcs": 22644,
+  "artifact_hashes": 2274,
+  "staged_source_hashes": 5003,
+  "host_cases": {
+    "mi_thermal_host_validation": 50,
+    "device_services_host_validation": null,
+    "platform_providers_host_validation": 1120,
+    "vbat_ovp_host_validation": 834,
+    "cti_assoc_host_validation": 3,
+    "qcom_sysfs_host_validation": 744,
+    "coresight_cti_host_validation": 26417,
+    "memlat_host_validation": 89,
+    "boot_diagnostics_host_validation": 16,
+    "business_misc_host_validation": 119,
+    "ibat_ocp_host_validation": 157,
+    "scmi_stats_host_validation": 42,
+    "coresight_qmi_host_validation": 774,
+    "coresight_tgu_host_validation": 2016,
+    "cpucp_log_host_validation": 41,
+    "scmi_controls_host_validation": 63,
+    "cpucp_fast_host_validation": 19,
+    "coresight_sources_host_validation": 341,
+    "glink_pkt_host_validation": null,
+    "wlan_wiphy_lock_host_validation": 12,
+    "cpuss_v4_host_validation": 371
+  }
+}

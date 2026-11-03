@@ -30071,5 +30071,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/rpmsg/glink_pkt.c",
     "blob": "63b29a4b55aeb80ab1c81717860b04ac416289c5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c",
+    "blob": "b0ab4ee8ed16072f2bcf6a2f22ec8590092d5393"
   }
 ]

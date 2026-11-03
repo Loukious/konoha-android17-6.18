@@ -194,3 +194,7 @@ unchanged. Continue all remaining native module ports.
 Hotspot v10 now proves a NULL wiphy mutex in HDD channel-change notifications. Kernel compatibility patch 0212 and host regression checks are integrated; production build and runtime retest pending. Bluetooth playback and native GLINK DMA acknowledgements were verified after the 371-module install. See validation/hotspot_bt_20261103.
 
 Hotspot patch 0212 is built and installed in artifact 20261103T135741329740Z. Both connected-STA and Wi-Fi-off secured AP tests remain active for 45 seconds without reboot; all partition readbacks and nine loaded module identities match. Settings/tether data forwarding pending user test. There are still 100 distinct unavailable retained load-list names.
+
+CPUSS v4 saved draft is integrated as native patch 0213 with pinned import/build/config/catalog and 371 strict ASan/UBSan checks. Forward/reverse zero-fuzz replay passes. The older active CPUSS node is unchanged; no v4 node is enabled. Kernel compilation/packaging remain in progress.
+
+CPUSS v4 artifact 20261103T141132910330Z builds 372 platform / 452 packaged modules with 22,644 import CRC checks, 5,003 source hashes and 2,274 artifact hashes. All packaging hashes pass; 99 retained names remain unavailable. The matching v4 module loads on the phone without a native v4 node; persistent DLKM install is pending a batch. Older native CPUSS draft passes 2,550 strict host checks, zero-fuzz replay and kernel compilation outside the production catalog.
