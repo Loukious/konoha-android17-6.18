@@ -1156,6 +1156,16 @@ ddk_module(
     deps = [":dcvs_headers", ":pmu_headers", ":scmi_vendor_headers", ":cache_irq_headers", ":qcom_dcvs", ":qcom_pmu_lib", ":qcom_scmi_client", ":cpu_phys_log_map"],
 )
 
+ddk_module(
+    name = "cpufreq_stats_scmi_v2",
+    srcs = ["drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v2.c", "drivers/soc/qcom/dcvs/cpufreq_stats_common.h"],
+    out = "cpufreq_stats_scmi_v2.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":scmi_vendor_headers", ":qcom_scmi_client"],
+)
+
 ddk_headers(
     name = "cpufreq_headers",
     hdrs = ["include/linux/qcom-cpufreq-hw.h", "include/trace/events/dcvsh.h"],
@@ -4420,6 +4430,7 @@ kernel_module_group(
         ":bwmon",
         ":qcom_pmu_lib",
         ":memlat",
+        ":cpufreq_stats_scmi_v2",
         ":qfprom_sys",
         ":debug_symbol",
         ":qcom_logbuf_boot_log",

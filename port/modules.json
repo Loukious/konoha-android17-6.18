@@ -1439,5 +1439,9 @@
   {
     "target": "mca_ibat_ocp_monitor",
     "output": "mca_ibat_ocp_monitor.ko"
+  },
+  {
+    "target": "cpufreq_stats_scmi_v2",
+    "output": "cpufreq_stats_scmi_v2.ko"
   }
 ]

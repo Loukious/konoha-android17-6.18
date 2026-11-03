@@ -29987,5 +29987,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h",
     "blob": "d08126c696bef0f3f7e6d0129dd869427fc6ba99"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v2.c",
+    "blob": "793ca69581cabd7351fdd26be8870d2f048d7bb6"
   }
 ]

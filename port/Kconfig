@@ -1442,3 +1442,7 @@ config MSM_BOOT_STATS
 config SHOW_SUSPEND_EPOCH
 	tristate "Qualcomm suspend epoch logging"
 	depends on ANDROID_VENDOR_HOOKS
+
+config QTI_CPUFREQ_STATS_SCMI_V2
+	tristate "Onyx cpufreq_stats_scmi_v2 native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
