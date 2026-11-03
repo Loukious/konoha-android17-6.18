@@ -1,0 +1,22 @@
+{
+  "status": "CONFIRMED: hotspot fully reboots the installed 371-module Bluetooth build; crash site unresolved",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-concurrency-20261103T131623Z",
+  "boot_ids": [
+    "80a8833e-0b5e-4a25-b841-b38758779a94",
+    "7a2cddfe-24af-4a16-a85e-0fb8c09d9ca6"
+  ],
+  "last_kernel_line": "[  667.788619] [schedu][0x30240b297][13:17:03.331884] wcn7750: [5202:E:CMN_MLME] target_if_stop_rso_stop_timer: vdev response timer is null VDEV_0 PSOC_0",
+  "requested_frequency_mhz": 2412,
+  "firmware_start_frequency_mhz": 5260,
+  "pretest_station_frequency_mhz": 5260,
+  "wifi_off_test_proven": false,
+  "earliest_pstore_tar_bytes": 1536,
+  "pstore_entries": [],
+  "user_description": "turning on stalls for seconds, freezes, then reboots",
+  "limits": [
+    "No panic or lockup stack was captured.",
+    "STA-to-SAP SCC channel override is implemented by native sap_validate_chan; differing frequencies do not by themselves prove a defect.",
+    "The capture still showed a connected 5260 MHz station; this is not proof of a Wi-Fi-off test.",
+    "MTD is not enabled; ramoops has record_size=0, console_size=2MiB and pmsg_size=2MiB."
+  ]
+}

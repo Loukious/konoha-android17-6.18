@@ -2699,7 +2699,7 @@
   "qcacld-3.0/core/hdd/inc/wlan_hdd_includes.h": "cc47302463fe9c7377e5f330214ce007e54cde0d1a6ed141a51adcd59cd71bd1",
   "qcacld-3.0/core/hdd/inc/wlan_hdd_ipa.h": "0357c2dbc0fe229bb97cc5a654e66291ba7c447c5f8b0f694ea86f226a08e522",
   "qcacld-3.0/core/hdd/inc/wlan_hdd_ll_lt_sap.h": "b48ece21dd2cd7669f13b3d03dab964948e2beecd403c5eb8e90ed1aacc82eee",
-  "qcacld-3.0/core/hdd/inc/wlan_hdd_main.h": "2104de7d7fd8652f77cdc936b1452564aba5b88ff446f40dcc4c7e5d7d687b7b",
+  "qcacld-3.0/core/hdd/inc/wlan_hdd_main.h": "354d4e5b32678e338dc4db01e0095b955f036fdfb3754065896ad4263123154c",
   "qcacld-3.0/core/hdd/inc/wlan_hdd_mdns_offload.h": "7f7e869002406554586c9da6597b85a2bc6c81b178b4c7f52d77c0da96cc5c63",
   "qcacld-3.0/core/hdd/inc/wlan_hdd_misc.h": "0b2a1aa8d56da4e899ede6c9112eaa1818a6311e2291d71a408bca505c9efd14",
   "qcacld-3.0/core/hdd/inc/wlan_hdd_mlo.h": "532af887ab573d85b366fde9bdcce79ece36ccfb0441ddeed0c79244e73b4f33",

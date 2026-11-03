@@ -78,6 +78,7 @@ def main():
         "cpucp_fast": "verify_cpucp_fast",
         "coresight_sources": "verify_coresight_sources",
         "glink_pkt": "verify_glink_pkt",
+        "wlan_wiphy_lock": "verify_wlan_wiphy_lock",
     }
     provider_validations = {}
     for name, verifier in provider_verifiers.items():

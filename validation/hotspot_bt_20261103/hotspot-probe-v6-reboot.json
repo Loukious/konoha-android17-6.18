@@ -1,0 +1,32 @@
+{
+  "utc": "2026-11-03T13:34:43.067981+00:00",
+  "original_boot": "97f8a970-5612-4842-88f4-eaa16333f91b",
+  "new_boot": "f36513ae-9898-42f1-9039-3a6d847d8034",
+  "cleanup_operations": [],
+  "status": "REPRODUCED; exact freeze site unresolved",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-runtime-probes-v6/capture-20261103T133320Z",
+  "buffer_percent": 0,
+  "timeout_handling": "Poll timeout124 recorded; streams preserved until new boot complete",
+  "last_trace_lines": [
+    " scheduler_threa-5224    [004] d....   139.680584: fn9_enter: (wlan_vdev_mlme_sm_deliver_evt+0x0/0xa4 [qca_cld3_wcn7750]) arg1=18446743568625758208 arg2=0",
+    " scheduler_threa-5224    [004] d....   139.680759: fn13_enter: (qdf_runtime_pm_prevent_suspend+0x0/0x24 [qca_cld3_wcn7750]) arg1=18446743562875058520 arg2=0",
+    " scheduler_threa-5224    [004] d..1.   139.680763: fn13_return: (target_if_acquire_vdev_cmd_rt_lock+0x44/0x64 [qca_cld3_wcn7750] <- qdf_runtime_pm_prevent_suspend) retval=0",
+    " scheduler_threa-5224    [004] d....   139.680785: fn13_enter: (qdf_runtime_pm_prevent_suspend+0x0/0x24 [qca_cld3_wcn7750]) arg1=18446743562875059464 arg2=1",
+    " scheduler_threa-5224    [004] d..1.   139.680786: fn13_return: (target_if_vdev_start_link_handler+0x284/0x2ac [qca_cld3_wcn7750] <- qdf_runtime_pm_prevent_suspend) retval=0",
+    " scheduler_threa-5224    [004] d..1.   139.680820: fn9_return: (__lim_process_sme_start_bss_req+0x91c/0xa10 [qca_cld3_wcn7750] <- wlan_vdev_mlme_sm_deliver_evt) retval=0"
+  ],
+  "hashes": {
+    "DONE.json": "446a06915a31939ecae1321858f0b51943a7b540904604a82569a331761298a4",
+    "dmesg-final.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pstore-final.tar": "5eeb3e0bfb3ab4c8096cf83a30dd1b527d707f656eb8addc733971ca7be46fa8",
+    "dmesg-final.txt": "449a93bc95f8487c0bf280d2ec2c3d6f9cf2e1774b7c95e313b45861165c769b",
+    "states.jsonl": "4f480f24a5a841e7d011c15920b0a196335450d563bc393ac8a71c03188497a4",
+    "logcat-live.txt": "808c94a261eb2e11070dbff51e58982b07fcecfa0584b1f968c4b74b8216c1e2",
+    "dmesg-live.txt": "4614d4471829c8698e10f0b5667743bbe5c0a056e022ead1f63087cb1602ed6f",
+    "LIVE.json": "864d554c56c68c181911a9a49718f7eae33d1e6c1e662134664c846b10dadb7c",
+    "pstore-final.tar.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trace-final.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trace-live.txt": "445e53f9d8e4cac69e4d870ca5c0ce38a7d9e019d8446bdaa96698b7269bc8e3",
+    "trace-final.txt.stderr": "2ad7752f8dc5a1c500db6a53e59050af5f46bb1fb37c0d567bce30481678790e"
+  }
+}

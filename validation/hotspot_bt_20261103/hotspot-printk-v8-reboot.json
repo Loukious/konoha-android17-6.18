@@ -1,0 +1,26 @@
+{
+  "utc": "2026-11-03T13:45:06.539372+00:00",
+  "original_boot": "62792ea6-a5f4-4241-b74f-5bb2666a08a5",
+  "new_boot": "295cec69-93ef-4072-bda2-14330600c0b9",
+  "cleanup_operations": [],
+  "status": "REPRODUCED; live log delivery again ends before FW start response",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-printk-probes-v8/capture-20261103T134337Z",
+  "markers": [
+    "[  183.007532] ONYX_HOTSPOT armed 29 return probes and 9 steps",
+    "[  221.246153] ONYX_HOTSPOT enter qca_cld3_wcn7750:wlan_hdd_cfg80211_start_ap pid=21942",
+    "[  221.246916] ONYX_HOTSPOT enter qca_cld3_wcn7750:wlan_hdd_cfg80211_start_bss pid=21942",
+    "[  221.247892] ONYX_HOTSPOT enter qca_cld3_wcn7750:qdf_wait_single_event pid=21942",
+    "[  221.248317] ONYX_HOTSPOT return qca_cld3_wcn7750:qdf_wait_single_event pid=21942 raw_x0=0",
+    "[  221.249217] ONYX_HOTSPOT enter qca_cld3_wcn7750:qdf_wait_single_event pid=21942",
+    "[  221.249958] ONYX_HOTSPOT enter qca_cld3_wcn7750:wlan_vdev_mlme_sm_deliver_evt pid=5244",
+    "[  221.250224] ONYX_HOTSPOT enter qca_cld3_wcn7750:qdf_runtime_pm_prevent_suspend pid=5244",
+    "[  221.250235] ONYX_HOTSPOT return qca_cld3_wcn7750:qdf_runtime_pm_prevent_suspend pid=5244 raw_x0=0",
+    "[  221.250272] ONYX_HOTSPOT enter qca_cld3_wcn7750:qdf_runtime_pm_prevent_suspend pid=5244",
+    "[  221.250275] ONYX_HOTSPOT return qca_cld3_wcn7750:qdf_runtime_pm_prevent_suspend pid=5244 raw_x0=0",
+    "[  221.250321] ONYX_HOTSPOT return qca_cld3_wcn7750:wlan_vdev_mlme_sm_deliver_evt pid=5244 raw_x0=0"
+  ],
+  "limits": [
+    "Earlier v7 complete response/callback return evidence remains valid; v8 live tail cannot prove an earlier stall.",
+    "All captures have connected5260MHz STA and channel override to AP5260MHz. AP-onlyWi-Fi disabledv9 is now armed."
+  ]
+}

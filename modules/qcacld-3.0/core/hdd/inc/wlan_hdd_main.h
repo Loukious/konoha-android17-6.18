@@ -6071,13 +6071,18 @@ static inline void hdd_wiphy_unlock(struct wiphy *wiphy, struct wireless_dev *de
 		mutex_unlock(&dev_ptr->mtx);
 }
 #else
+/* Callers supply either a wiphy or a wireless device owning that wiphy. */
 static inline void hdd_wiphy_lock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
 {
+	if (!wiphy)
+		wiphy = dev_ptr->wiphy;
 	wiphy_lock(wiphy);
 }
 
 static inline void hdd_wiphy_unlock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
 {
+	if (!wiphy)
+		wiphy = dev_ptr->wiphy;
 	wiphy_unlock(wiphy);
 }
 #endif

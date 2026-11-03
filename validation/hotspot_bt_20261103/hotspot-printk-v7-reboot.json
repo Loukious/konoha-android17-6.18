@@ -1,0 +1,41 @@
+{
+  "utc": "2026-11-03T13:40:57.114051+00:00",
+  "original_boot": "f36513ae-9898-42f1-9039-3a6d847d8034",
+  "new_boot": "62792ea6-a5f4-4241-b74f-5bb2666a08a5",
+  "cleanup_operations": [],
+  "status": "REPRODUCED; instrumented AP startup paths all returned",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-printk-probes-v7/capture-20261103T133931Z",
+  "marker_count": 51,
+  "observed_successful_status_returns": [
+    "wma_vdev_start_resp_handler",
+    "wlan_vdev_get_bss_peer_mac",
+    "wlan_vdev_mlme_sm_deliver_evt",
+    "qdf_runtime_pm_prevent_suspend",
+    "qdf_wake_lock_acquire",
+    "hdd_hostapd_sap_event_cb"
+  ],
+  "observed_void_returns": [
+    "wma_set_and_update_mac_id",
+    "wlan_mlme_set_vdev_mac_id",
+    "wma_vdev_start_rsp",
+    "hdd_hostapd_channel_prevent_suspend",
+    "hdd_hostapd_set_sap_key"
+  ],
+  "limits": [
+    "Void function return registers are unspecified and are not errors.",
+    "hdd_start_tsf_sync returns int -22; optional TSF sync is not enabled.",
+    "No proof of freeze site yet; next capture covers post-wait startup finalization and beacon/AP traffic."
+  ],
+  "hashes": {
+    "DONE.json": "a10389c7dd1d32b7209f5bc4dfa2e2634cda6f0783f7e2a8ec34a5a67de5e346",
+    "dmesg-final.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pstore-final.tar": "21995a352b97f47650e6c925c48d473dfba5e27c20e9132d6b0d3ed4d831735f",
+    "execution-markers.txt": "fd697802ff1d2749969bfafcefbd96b01c8d8ce88c9679cc008ddb90d634501f",
+    "dmesg-final.txt": "67cfc24c4c1922a437b7f675e9ae4b9e55bfc98b7490af4353aefeb7914e4729",
+    "states.jsonl": "0e74b9efbf2c93aad70fda5bae17f66dae1b3538842ff3bd258ac2988767a6f1",
+    "logcat-live.txt": "c85bf3804ded6e8cecc78d6cef4f0e7eca85e05b384497d4afa677d8086eed2d",
+    "dmesg-live.txt": "eb25e54d78c2371ab98f731a3d18948b0faae90bf0f0314bb58f160ab7b18ee0",
+    "LIVE.json": "b59572ba0214a983ee557bd41f0c42d55c3fce00ac90f329ca6e98e9ca2ae7df",
+    "pstore-final.tar.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
