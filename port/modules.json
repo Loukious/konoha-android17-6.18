@@ -1459,5 +1459,13 @@
   {
     "target": "cpucp_log",
     "output": "cpucp_log.ko"
+  },
+  {
+    "target": "c1dcvs_scmi_v2",
+    "output": "c1dcvs_scmi_v2.ko"
+  },
+  {
+    "target": "dynpf_scmi",
+    "output": "dynpf_scmi.ko"
   }
 ]

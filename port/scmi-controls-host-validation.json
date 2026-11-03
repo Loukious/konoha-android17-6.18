@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "cases": 63,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/soc/qcom/dcvs/c1dcvs_scmi_v2.c": "1e030565f94c1c790088c7e28722b8668277705106ca13287d745c951939af83",
+    "drivers/soc/qcom/dcvs/dynpf_scmi.c": "3cc905c1f9da744018067374a8c12796e7a615be069013c040d47b56fcbdd450"
+  },
+  "limits": [
+    "Real firmware gating/control requests need device verification; host stubs test native commands and lifetime."
+  ]
+}

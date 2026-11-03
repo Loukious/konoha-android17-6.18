@@ -1462,3 +1462,11 @@ config CORESIGHT_TGU
 config QTI_CPUCP_LOG
 	tristate "Onyx cpucp_log native provider"
 	depends on MAILBOX && QCOM_CPUCP && QTI_QCOM_SCMI_CLIENT
+
+config QTI_C1DCVS_SCMI_V2
+	tristate "Onyx c1dcvs_scmi_v2 native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QTI_DYNPF_SCMI
+	tristate "Onyx dynpf_scmi native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT

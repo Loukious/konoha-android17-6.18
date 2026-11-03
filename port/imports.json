@@ -30029,5 +30029,23 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/trace_cpucp.h",
     "blob": "501abbebab333d3a7ac5ad59fe8bda8db323967b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/dcvs/c1dcvs_scmi_v2.c",
+    "blob": "06ff163396fd72754c5e1a2a8bfa461691d4b2b6"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/scmi_c1dcvs.h",
+    "blob": "a3f2ce7eee96e011631f6e6017470f279b13d55c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/dcvs/dynpf_scmi.c",
+    "blob": "d33e7cc200802704815cbde11956141fe4747fe2"
   }
 ]
