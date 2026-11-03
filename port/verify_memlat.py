@@ -35,7 +35,8 @@ def verify(staged):
         'memlat_sched_tick_cb', 'get_mask_and_mpidr_from_pdev',
         'init_cpufreq_memfreq_map', 'store_min_freq', 'store_max_freq',
         'update_cpucp_sample_ms', 'store_sample_ms', 'memlat_sampling_init',
-        'memlat_stop', 'memlat_voter_cleanup'))
+        'memlat_stop', 'memlat_voter_cleanup',
+        'configure_cpucp_common_events', 'configure_cpucp_grp'))
     tunables = source[source.index('#define store_attr('):source.index('#define show_grp_attr')]
     tunables += source[source.index('#define store_grp_attr('):source.index('static ssize_t store_min_freq')]
     harness = (HERE / 'tests/memlat_harness.c').read_text()

@@ -27,7 +27,7 @@ struct workqueue_struct { int live; };
 struct hrtimer { bool initialized; };
 struct rq { int unused; };
 struct scmi_protocol_handle { int unused; };
-struct device_node { u32 *cells; int len, cpu, physical, refs; struct device_node *cpus[8]; int cpu_count; };
+struct device_node { const char *name; u32 *cells; int len, cpu, physical, refs; struct device_node *cpus[8]; int cpu_count; };
 struct device { struct device_node *of_node; const char *name; };
 struct platform_device { struct device dev; };
 typedef unsigned int cpumask_t;
@@ -36,6 +36,7 @@ enum dcvs_hw_type { DCVS_DDR, DCVS_LLCC, DCVS_DDRQOS };
 enum dcvs_path_type { DCVS_SLOW_PATH, DCVS_FAST_PATH, DCVS_PERCPU_PATH, NUM_DCVS_PATHS };
 struct dcvs_freq { u32 ib, ab; enum dcvs_hw_type hw_type; };
 #define QCOM_PMU_MAX_EVS 8
+#define MAX_CPUCP_EVT 9
 struct qcom_pmu_data { u32 event_ids[8]; u64 ev_data[8]; u32 num_evs; };
 struct qcom_pmu_notif_node { void (*idle_cb)(struct qcom_pmu_data *, int, int); };
 struct scmi_device;
@@ -90,7 +91,8 @@ static int cpumask_first(const cpumask_t *m) { return *m ? __builtin_ctz(*m) : N
 #define spin_lock_irqsave(p,f) ((f)=0,(void)(p))
 #define spin_unlock_irqrestore(p,f) ((void)(p),(void)(f))
 #define spin_lock_init(p) (*(p)=0)
-#define pr_err(...) ((void)0)
+static void fake_log(const char *fmt,...) { (void)fmt; }
+#define pr_err(...) fake_log(__VA_ARGS__)
 #define pr_debug(...) ((void)0)
 #define dev_err(...) ((void)0)
 #define trace_memlat_dev_meas(...) ((void)0)
@@ -116,6 +118,11 @@ static void memlat_jiffies_update_cb(void *u,void *e) { (void)u;(void)e; }
 enum hrtimer_restart { HRTIMER_NORESTART };
 static int cases, allocation_fail, queue_live, hook_fail, scheduler_live, jiffies_live, idle_live;
 static int trace_sync, timer_cancel, work_cancel, scmi_put, device_put, stop_calls;
+static int fw_calls, mapping_result, mapping_event;
+static unsigned long possible_mask=15;
+#define cpu_possible_mask (&possible_mask)
+#define cpumask_bits(p) (p)
+static int qcom_get_cpucp_id(u32 event,int cpu) { (void)cpu;return event==(u32)mapping_event ? mapping_result : 2; }
 static int fw_result, vote_result, vote_calls, voter_unregister, pmu_result, logical_cpu, physical_cpu;
 static struct dcvs_freq last_votes[MAX_MEMLAT_GRPS];
 static u32 last_mask, last_fw_value;
@@ -139,7 +146,7 @@ static int qcom_pmu_idle_register(struct qcom_pmu_notif_node *n) { (void)n;if(ho
 static int qcom_pmu_idle_unregister(struct qcom_pmu_notif_node *n) { (void)n;assert(idle_live==1);idle_live--;return 0; }
 static void protocol_put(struct scmi_device *s,unsigned int id) { (void)s;assert(id==QCOM_SCMI_VENDOR_PROTOCOL);scmi_put++; }
 static void put_device(struct device *d) { (void)d;device_put++; }
-static int scmi_set(struct scmi_protocol_handle *p,void *msg,u64 algo,u32 id,size_t bytes) { (void)p;assert(algo==MEMLAT_ALGO_STR); if(bytes==sizeof(struct scalar_param_msg)) last_fw_value=((struct scalar_param_msg *)msg)->val; else { assert(id==MEMLAT_SAMPLE_MS);last_fw_value=*(u32 *)msg; }return fw_result; }
+static int scmi_set(struct scmi_protocol_handle *p,void *msg,u64 algo,u32 id,size_t bytes) { (void)p;assert(algo==MEMLAT_ALGO_STR);fw_calls++;if(id==MEMLAT_SET_COMMON_EV_MAP || id==MEMLAT_SET_GRP_EV_MAP || id==MEMLAT_SET_MEM_GROUP) return fw_result; if(bytes==sizeof(struct scalar_param_msg)) last_fw_value=((struct scalar_param_msg *)msg)->val; else { assert(id==MEMLAT_SAMPLE_MS);last_fw_value=*(u32 *)msg; }return fw_result; }
 static int scmi_stop(struct scmi_protocol_handle *p,void *msg,u64 algo,u32 id,size_t bytes) { (void)p;assert(!msg && !bytes && algo==MEMLAT_ALGO_STR && id==MEMLAT_STOP_TIMER);stop_calls++;return fw_result; }
 static const struct qcom_scmi_vendor_ops ops={scmi_set,scmi_stop};
 static int qcom_dcvs_update_votes(const char *name,struct dcvs_freq *v,u32 mask,enum dcvs_path_type path) { assert(name);vote_calls++;last_mask=mask;last_path=path;memset(last_votes,0,sizeof(last_votes));for(int i=0;i<MAX_MEMLAT_GRPS;i++)if(mask&BIT(i))last_votes[i]=v[i];return vote_result; }
@@ -213,6 +220,17 @@ static void voting(void) {
  vote_result=-EIO;memlat_update_work(&root.work);CHECK(grp.sampling_cur_freq==400 && last_path==DCVS_SLOW_PATH && last_votes[0].hw_type==1);
  vote_result=0;memlat_update_work(&root.work);CHECK(!grp.sampling_cur_freq);
 }
+static void cpucp_mapping(void) {
+ reset();root.ops=&ops;root.common_ev_ids[INST_IDX]=1;root.common_ev_ids[CYC_IDX]=2;
+ mapping_event=1;mapping_result=-EPROTO;fw_calls=0;CHECK(configure_cpucp_common_events()==-EPROTO && !fw_calls);
+ mapping_result=MAX_CPUCP_EVT;CHECK(configure_cpucp_common_events()==-EOPNOTSUPP && !fw_calls);
+ mapping_result=0;CHECK(!configure_cpucp_common_events() && fw_calls==1);
+ root.common_ev_ids[FE_STALL_IDX]=4;mapping_event=4;mapping_result=-ENODEV;CHECK(configure_cpucp_common_events()==-ENODEV && fw_calls==1);
+ struct device_node n={.name="grp"};struct device dev={.of_node=&n};struct memlat_group grp={.dev=&dev,.grp_ev_ids={3,0,0}};
+ mapping_event=3;mapping_result=-EPROTO;fw_calls=0;CHECK(configure_cpucp_grp(&grp)==-EPROTO && fw_calls==1);
+ mapping_result=MAX_CPUCP_EVT;fw_calls=0;CHECK(configure_cpucp_grp(&grp)==-EOPNOTSUPP && fw_calls==1);
+ mapping_result=2;fw_calls=0;CHECK(!configure_cpucp_grp(&grp) && fw_calls==2);
+}
 static void lifecycle(void) {
  for(int failure=1;failure<=4;failure++) {reset();hook_fail=failure;CHECK(memlat_sampling_init()<0);CHECK(!root.scheduler_hook && !root.jiffies_hook && !root.idle_notifier && !root.memlat_wq && !queue_live && !scheduler_live && !jiffies_live && !idle_live);}
  reset();allocation_fail=1;CHECK(memlat_sampling_init()==-ENOMEM && !queue_live);allocation_fail=0;
@@ -231,4 +249,4 @@ static void lifecycle(void) {
  struct device dev={.name="grp"};struct memlat_group grp={.dev=&dev};root.groups[0]=&grp;grp.grp_ev_ids[0]=3;sampling_stats[0]->curr.common_ctrs[0]=UINT64_MAX;sampling_stats[0]->curr.grp_ctrs[0][0]=2;calculate_sampling_stats();CHECK(sampling_stats[0]->ipm[0]==U32_MAX);
  root.groups[0]=NULL;memlat_stop();CHECK(!queue_live);
 }
-int main(void) {numeric();transactions();voting();lifecycle();reset();printf("%d\n",cases);}
+int main(void) {numeric();transactions();voting();cpucp_mapping();lifecycle();reset();printf("%d\n",cases);}

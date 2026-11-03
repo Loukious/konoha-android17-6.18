@@ -36,9 +36,9 @@ Recovery after removing a child requires removing and reprobeing the root;
 partial child rebind is not supported.
 
 `verify_memlat.py` compiles functions and declarations extracted verbatim from
-the staged driver against host provider stubs. Its 70 ASan/UBSan cases cover
+the staged driver against host provider stubs. Its 77 ASan/UBSan cases cover
 maps/CPU masks, wide arithmetic, firmware transactions, vote failure/retry,
 raw event bounds, sample publication, callback-registration rollback and
-idempotent teardown. See `memlat-host-validation.json`. These tests verify the C
+idempotent teardown, and rejecting unavailable CPUCP event mappings. See `memlat-host-validation.json`. These tests verify the C
 control flow; the combined DDK build and real device frequency/timing checks
 remain separate validation steps.
