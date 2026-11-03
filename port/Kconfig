@@ -1470,3 +1470,7 @@ config QTI_C1DCVS_SCMI_V2
 config QTI_DYNPF_SCMI
 	tristate "Onyx dynpf_scmi native provider"
 	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QCOM_CPUCP_FAST
+	tristate "Onyx cpucp_fast native provider"
+	depends on MAILBOX && QCOM_CPUCP && SCHED_WALT

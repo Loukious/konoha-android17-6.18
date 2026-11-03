@@ -1,0 +1,194 @@
+--- a/drivers/soc/qcom/cpucp_fast.c
++++ b/drivers/soc/qcom/cpucp_fast.c
+@@ -1,8 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+-/*
+- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+- */
+-
++/* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved. */
+ #include <linux/cpumask.h>
+ #include <linux/cpufreq.h>
+ #include <linux/mailbox_client.h>
+@@ -11,114 +8,108 @@
+ #include <linux/platform_device.h>
+ #include <linux/sched/walt.h>
+ 
++#define FAST_MBOX_CPUMASK 0xFF
+ struct qcom_cpucp_fast {
+-	uint8_t last_cpu;
++	u8 last_cpu;
+ 	cpumask_t fast_cpus;
+ 	struct mbox_client cl;
+ 	struct mbox_chan *ch;
++	bool ready;
+ };
+ 
+-#define FAST_MBOX_CPUMASK 0xFF
++static void qcom_cpucp_fast_rx(struct mbox_client *client, void *message)
++{
++	struct qcom_cpucp_fast *data = container_of(client, struct qcom_cpucp_fast, cl);
++	u64 payload;
++	u32 cpu;
+ 
+-static struct qcom_cpucp_fast qcom_cpucp_fast;
+-
+-static inline
+-struct qcom_cpucp_fast *to_qcom_cpucp_fast_info(struct mbox_client *cl)
+-{
+-	return container_of(cl, struct qcom_cpucp_fast, cl);
++	if (!READ_ONCE(data->ready) || !message)
++		return;
++	memcpy(&payload, message, sizeof(payload));
++	cpu = payload & FAST_MBOX_CPUMASK;
++	/* Native 0xff is a stop hint; never use it as a cpumask index. */
++	if (cpu == FAST_MBOX_CPUMASK) {
++		if (data->last_cpu < nr_cpu_ids) {
++			data->last_cpu = FAST_MBOX_CPUMASK;
++			sched_walt_oscillate(FAST_MBOX_CPUMASK);
++		}
++		return;
++	}
++	if (cpu >= nr_cpu_ids || !cpu_possible(cpu) ||
++	    !cpumask_test_cpu(cpu, &data->fast_cpus))
++		return;
++	data->last_cpu = cpu;
++	sched_walt_oscillate(cpu);
+ }
+ 
+-static void qcom_cpucp_fast_rx(struct mbox_client *cl, void *msg)
++static void qcom_cpucp_fast_stop(void *arg)
+ {
+-	struct qcom_cpucp_fast *data = &qcom_cpucp_fast;
+-	uint64_t mbox_rx_data = *((uint64_t *)msg);
+-	uint32_t cpu = mbox_rx_data & FAST_MBOX_CPUMASK;
+-
+-	if (!cpumask_weight(&data->fast_cpus)) {
+-		dev_dbg(cl->dev, "No CPUS are enabled for FAST\n");
+-		return;
+-	}
+-
+-	if (cpumask_test_cpu(cpu, &data->fast_cpus) ||
+-			((cpu == FAST_MBOX_CPUMASK) && (data->last_cpu < nr_cpu_ids))) {
+-		data->last_cpu = cpu;
+-		sched_walt_oscillate(cpu);
+-	}
++	struct qcom_cpucp_fast *data = arg;
++	WRITE_ONCE(data->ready, false);
++	if (!IS_ERR_OR_NULL(data->ch))
++		mbox_free_channel(data->ch);
++	data->ch = NULL;
+ }
+ 
+ static int qcom_cpucp_fast_probe(struct platform_device *pdev)
+ {
+-	struct qcom_cpucp_fast *data = &qcom_cpucp_fast;
+ 	struct device *dev = &pdev->dev;
+-	struct cpufreq_policy *policy = NULL;
+-	int ret, cpu;
++	struct qcom_cpucp_fast *data;
++	struct cpufreq_policy *policy;
++	u32 cpu;
++	int ret, related;
+ 
++	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++	ret = of_property_read_u32(dev->of_node, "qcom,policy-cpus", &cpu);
++	if (ret)
++		return ret;
++	if (cpu >= nr_cpu_ids || !cpu_present(cpu) || cpu >= FAST_MBOX_CPUMASK)
++		return -EINVAL;
++	policy = cpufreq_cpu_get(cpu);
++	if (!policy)
++		return -EPROBE_DEFER;
++	cpumask_copy(&data->fast_cpus, policy->related_cpus);
++	cpufreq_cpu_put(policy);
++	if (cpumask_empty(&data->fast_cpus) || !cpumask_test_cpu(cpu, &data->fast_cpus) ||
++	    !cpumask_subset(&data->fast_cpus, cpu_possible_mask))
++		return -EINVAL;
++	for_each_cpu(related, &data->fast_cpus)
++		if (related >= FAST_MBOX_CPUMASK)
++			return -ERANGE;
++	data->last_cpu = FAST_MBOX_CPUMASK;
+ 	data->cl.dev = dev;
+ 	data->cl.rx_callback = qcom_cpucp_fast_rx;
+-
++	dev_set_drvdata(dev, data);
++	/* The mailbox controller can deliver RX during channel request. */
++	WRITE_ONCE(data->ready, true);
+ 	data->ch = mbox_request_channel(&data->cl, 0);
+ 	if (IS_ERR(data->ch)) {
+-		ret = PTR_ERR(data->ch);
+-		if (ret != -EPROBE_DEFER) {
+-			dev_err(dev, "Error getting mailbox %d\n", ret);
+-			goto err_ch;
+-		}
++		WRITE_ONCE(data->ready, false);
++		return dev_err_probe(dev, PTR_ERR(data->ch), "FAST mailbox unavailable\n");
+ 	}
+-
+-	ret = of_property_read_u32(dev->of_node, "qcom,policy-cpus", &cpu);
+-	if (ret) {
+-		dev_err(dev, "Error getting policy%d CPU: %d\n", cpu, ret);
+-		goto err;
+-	}
+-
+-	if (cpu >= nr_cpu_ids || !cpu_present(cpu)) {
+-		dev_err(dev, "Invalid CPU%d\n", cpu);
+-		goto err;
+-	}
+-
+-	policy = cpufreq_cpu_get(cpu);
+-	if (!policy) {
+-		dev_err(dev, "No policy for CPU:%d. Defer.\n", cpu);
+-		ret = -EPROBE_DEFER;
+-		goto err;
+-	}
+-
+-	cpumask_copy(&data->fast_cpus, policy->related_cpus);
+-	cpufreq_cpu_put(policy);
+-
+-	dev_info(dev, "Probe successful, FAST cpus=0x%lx\n", cpumask_bits(&data->fast_cpus)[0]);
+-	return 0;
+-
+-err:
+-	mbox_free_channel(data->ch);
+-err_ch:
+-	return ret;
++	return devm_add_action_or_reset(dev, qcom_cpucp_fast_stop, data);
+ }
+ 
+-static int qcom_cpucp_fast_remove(struct platform_device *pdev)
++static void qcom_cpucp_fast_shutdown(struct platform_device *pdev)
+ {
+-	struct qcom_cpucp_fast *data = &qcom_cpucp_fast;
+-
+-	mbox_free_channel(data->ch);
+-
+-	return 0;
+-};
+-
++	qcom_cpucp_fast_stop(dev_get_drvdata(&pdev->dev));
++}
+ static const struct of_device_id qcom_cpucp_fast_match[] = {
+ 	{ .compatible = "qcom,cpucp_fast" },
+-	{}
++	{ }
+ };
+ MODULE_DEVICE_TABLE(of, qcom_cpucp_fast_match);
+-
+ static struct platform_driver qcom_cpucp_fast_driver = {
+ 	.probe = qcom_cpucp_fast_probe,
+-	.remove = qcom_cpucp_fast_remove,
++	.shutdown = qcom_cpucp_fast_shutdown,
+ 	.driver = {
+ 		.name = "qcom-cpucp-fast",
+ 		.of_match_table = qcom_cpucp_fast_match,
+ 	},
+ };
+ module_platform_driver(qcom_cpucp_fast_driver);
+-
++MODULE_SOFTDEP("pre: qcom_cpucp sched-walt");
+ MODULE_DESCRIPTION("QCOM CPUCP FAST Driver");
+ MODULE_LICENSE("GPL");

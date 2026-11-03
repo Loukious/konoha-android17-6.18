@@ -30047,5 +30047,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/dcvs/dynpf_scmi.c",
     "blob": "d33e7cc200802704815cbde11956141fe4747fe2"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/cpucp_fast.c",
+    "blob": "68fbd500df63371c36171e754bdd3ce19ddb3b77"
   }
 ]

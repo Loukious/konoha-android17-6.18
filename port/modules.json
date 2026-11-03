@@ -1467,5 +1467,9 @@
   {
     "target": "dynpf_scmi",
     "output": "dynpf_scmi.ko"
+  },
+  {
+    "target": "cpucp_fast",
+    "output": "cpucp_fast.ko"
   }
 ]
