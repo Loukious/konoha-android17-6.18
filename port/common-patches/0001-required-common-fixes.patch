@@ -254,11 +254,13 @@ diff --git a/include/linux/thermal.h b/include/linux/thermal.h
 diff --git a/include/linux/coresight.h b/include/linux/coresight.h
 --- a/include/linux/coresight.h
 +++ b/include/linux/coresight.h
-@@ -74,6 +74,7 @@
+@@ -74,6 +74,9 @@
  	CORESIGHT_DEV_SUBTYPE_HELPER_CATU,
  	CORESIGHT_DEV_SUBTYPE_HELPER_ECT_CTI,
  	CORESIGHT_DEV_SUBTYPE_HELPER_CTCU,
 +	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_QMI,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_TGU,
  };
  
  /**
