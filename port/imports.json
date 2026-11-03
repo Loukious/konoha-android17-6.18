@@ -29909,5 +29909,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h",
     "blob": "6b52e4a25d0339b6de43fe4d4eccb74a1213f6bb"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_qcom_sysfs/mca_qcom_sysfs.c",
+    "blob": "74fb066534f5721834787cf43172ae3e3e09d47b"
   }
 ]

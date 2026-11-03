@@ -4233,6 +4233,7 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mca_qcom_sysfs",
         ":mca_vbat_ovp_monitor",
         ":mpam",
         ":cpu_mpam",
@@ -4996,4 +4997,15 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":platform_mca_headers", ":mca_headers", ":mca_sysfs", ":mca_log", ":mca_hwid", ":mca_parse_dts", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_wireless_class", ":mca_event"],
+)
+
+
+ddk_module(
+    name = "mca_qcom_sysfs",
+    srcs = ["drivers/power/supply/mca/mca_qcom_sysfs/mca_qcom_sysfs.c"],
+    out = "mca_qcom_sysfs.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_mca_headers", ":mca_headers", ":mca_log", ":mca_protocol_class", ":mca_protocol_pd_class", ":mca_strategy_class", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_cp_class", ":mca_platform_fg_ic_ops"],
 )

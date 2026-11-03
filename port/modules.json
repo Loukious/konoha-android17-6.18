@@ -1411,5 +1411,9 @@
   {
     "target": "mca_vbat_ovp_monitor",
     "output": "mca_vbat_ovp_monitor.ko"
+  },
+  {
+    "target": "mca_qcom_sysfs",
+    "output": "mca_qcom_sysfs.ko"
   }
 ]
