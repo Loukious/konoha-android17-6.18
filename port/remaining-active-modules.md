@@ -89,3 +89,18 @@ votes, GPIO/claim/clock failures, system sleep and registration rollback.
 Provider stubs establish control flow and memory bounds; they do not establish
 physical trigger delivery or CPU power timing. The CTI module has not yet been
 installed or bound on the phone.
+
+The completed three-provider artifact `20261103T064702805743Z` builds all 356
+platform modules and passes 22,124 imported-symbol CRC checks. Memlat has 89
+ASan/UBSan cases, CTI 26,417, qcom sysfs 744, and common CTI callback draining
+three; all existing host suites and both DT variants pass. All 4,980 staged
+source hashes and 2,156 artifact hashes match. The complete source snapshot now
+includes the previously omitted VBAT source and build metadata.
+
+The matched first-stage tree contains 99 modules; the complete dry-run bundle
+packages 436 and checks 465. All four retained load lists and partition-local
+depmod/modprobe checks pass. The retained lists still name 115 unavailable
+modules, including inactive variants and recovery/debug providers. The user
+requested continued ports while away; the phone is disconnected. No module in
+this batch has been installed or hardware-validated. See
+[validation summary](validation/active_provider_batch/summary.json).
