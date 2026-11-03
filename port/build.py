@@ -65,6 +65,22 @@ def main():
     memlat_validation = verify_memlat(workspace / "onyx")
     (artifacts / "memlat-host-validation.json").write_text(
         json.dumps(memlat_validation, indent=2) + "\n")
+    from importlib import import_module
+    provider_verifiers = {
+        "boot_diagnostics": "verify_boot_diagnostics",
+        "business_misc": "verify_business_misc",
+        "ibat_ocp": "verify_ibat_ocp",
+        "scmi_stats": "verify_scmi_stats",
+        "coresight_qmi": "verify_coresight_qmi",
+        "coresight_tgu": "verify_coresight_tgu",
+        "cpucp_log": "verify_cpucp_log",
+    }
+    provider_validations = {}
+    for name, verifier in provider_verifiers.items():
+        result = import_module(verifier).verify(workspace / "onyx")
+        provider_validations[name + "_host_validation"] = result
+        (artifacts / (name.replace("_", "-") + "-host-validation.json")).write_text(
+            json.dumps(result, indent=2) + "\n")
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -137,6 +153,8 @@ def main():
     shutil.copyfile(HERE / "tests/mi_thermal_harness.c", inputs / "mi_thermal_harness.c")
     shutil.copytree(HERE / "tests", inputs / "tests",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for verifier in provider_verifiers.values():
+        shutil.copyfile(HERE / (verifier + ".py"), inputs / (verifier + ".py"))
     ksu_inputs = inputs / "kernelsu-next"
     ksu_inputs.mkdir()
     for name in ["source.json", "source.tar"]:
@@ -171,6 +189,7 @@ def main():
         "qcom_sysfs_host_validation": qcom_sysfs_validation,
         "coresight_cti_host_validation": cti_validation,
         "memlat_host_validation": memlat_validation,
+        **provider_validations,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],

@@ -1434,3 +1434,31 @@ config QCOM_QTI_PMIC_GLINK_DEBUG
 
 config QCOM_GH_TLMM_VM_MEM_ACCESS
     tristate "Onyx TLMM VM sharing"
+
+config MSM_BOOT_STATS
+	tristate "Qualcomm bootloader statistics"
+	depends on OF && HAS_IOMEM
+
+config SHOW_SUSPEND_EPOCH
+	tristate "Qualcomm suspend epoch logging"
+	depends on ANDROID_VENDOR_HOOKS
+
+config QTI_CPUFREQ_STATS_SCMI_V2
+	tristate "Onyx cpufreq_stats_scmi_v2 native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QTI_CPUFREQ_STATS_SCMI_V3
+	tristate "Onyx cpufreq_stats_scmi_v3 native provider"
+	depends on ARM_SCMI_PROTOCOL
+
+config CORESIGHT_QMI
+	tristate "Onyx CoreSight QMI firmware control"
+	depends on CORESIGHT
+
+config CORESIGHT_TGU
+	tristate "Onyx CoreSight trigger generation unit"
+	depends on CORESIGHT
+
+config QTI_CPUCP_LOG
+	tristate "Onyx cpucp_log native provider"
+	depends on MAILBOX && QCOM_CPUCP && QTI_QCOM_SCMI_CLIENT

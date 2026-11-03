@@ -4276,13 +4276,9 @@ kernel_module_group(
     name = "platform_modules",
     srcs = [
         ":coresight_tgu",
-
         ":coresight_qmi",
-
         ":mca_ibat_ocp_monitor",
-
         ":mca_business_misc_comp",
-
         ":boot_stats",
         ":msm_show_epoch",
         ":mca_qcom_sysfs",
@@ -4311,7 +4307,6 @@ kernel_module_group(
         ":coresight_cti",
         ":mca_ut_test",
         ":hl7603",
-
         ":snd_usb_audio_qmi",
         ":ir_spi",
         ":adsp_sleepmon",
