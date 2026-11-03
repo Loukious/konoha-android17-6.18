@@ -4233,6 +4233,28 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mpam",
+        ":cpu_mpam",
+        ":platform_mpam",
+        ":mpam_msc",
+        ":mpam_msc_slc",
+        ":slc_mpam",
+        ":llcc_heuristics",
+        ":gpio_mi_t1",
+        ":gh_tlmm_vm_mem_access",
+        ":qcom_stats",
+        ":msm_show_resume_irq",
+        ":pmic_glink_debug",
+        ":spmi_pmic_arb_debug",
+        ":qcom_pbs",
+        ":leds_qcom_lpg",
+        ":bam_dma",
+        ":coresight_tpdm",
+        ":coresight_tpda",
+        ":coresight_tmc",
+        ":mca_ut_test",
+        ":hl7603",
+
         ":snd_usb_audio_qmi",
         ":ir_spi",
         ":adsp_sleepmon",
@@ -4694,4 +4716,248 @@ ddk_module(
     defconfig = "platform_defconfig",
     kernel_build = "//common:kernel_aarch64",
     deps = [":remote_headers", ":qmi_helpers", ":platform_headers", ":qcom_ipc_logging"],
+)
+
+ddk_headers(
+    name = "pbs_headers",
+    hdrs = ["include/linux/soc/qcom/qcom-pbs.h"],
+    includes = [],
+    linux_includes = ["include"],
+)
+
+ddk_headers(
+    name = "bam_headers",
+    hdrs = ["drivers/dma/dmaengine.h", "drivers/dma/virt-dma.h", "drivers/dma/qcom/bam_dma_trace.h", "include/linux/dma/qcom_bam_dma.h"],
+    includes = ["drivers/dma/qcom"],
+    linux_includes = ["include"],
+)
+
+ddk_headers(
+    name = "coresight_provider_headers",
+    hdrs = ["drivers/hwtracing/coresight/coresight-priv.h", "drivers/hwtracing/coresight/coresight-tpda.h", "drivers/hwtracing/coresight/coresight-tpdm.h", "drivers/hwtracing/coresight/coresight-trace-id.h"],
+    includes = ["drivers/hwtracing/coresight"],
+    linux_includes = [],
+)
+
+ddk_module(
+    name = "mpam",
+    srcs = ["drivers/soc/qcom/mpam/mpam.c"],
+    out = "mpam.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scm_headers", ":scmi_vendor_headers", ":qcom_scmi_client", ":qcom_scmi_vendor"],
+)
+
+ddk_module(
+    name = "cpu_mpam",
+    srcs = ["drivers/soc/qcom/mpam/cpu_mpam.c"],
+    out = "cpu_mpam.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mpam", ":walt_headers", ":sched_walt", ":scm_headers"],
+)
+
+ddk_module(
+    name = "platform_mpam",
+    srcs = ["drivers/soc/qcom/mpam/platform_mpam.c"],
+    out = "platform_mpam.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mpam", ":scm_headers"],
+)
+
+ddk_module(
+    name = "mpam_msc",
+    srcs = ["drivers/soc/qcom/mpam/mpam_msc.c"],
+    out = "mpam_msc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scmi_vendor_headers", ":mpam", ":scm_headers"],
+)
+
+ddk_module(
+    name = "mpam_msc_slc",
+    srcs = ["drivers/soc/qcom/mpam/mpam_msc_slc.c"],
+    out = "mpam_msc_slc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scm_headers", ":scmi_vendor_headers", ":qcom_scmi_client", ":qcom_scmi_vendor", ":mpam_msc"],
+)
+
+ddk_module(
+    name = "slc_mpam",
+    srcs = ["drivers/soc/qcom/mpam/slc_mpam.c"],
+    out = "slc_mpam.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mpam_msc", ":mpam_msc_slc", ":platform_mpam", ":scm_headers", ":scmi_vendor_headers"],
+)
+
+ddk_module(
+    name = "llcc_heuristics",
+    srcs = ["drivers/soc/qcom/llcc_heuristics.c"],
+    out = "llcc_heuristics.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scm_headers", ":scmi_vendor_headers", ":qcom_scmi_client", ":qcom_scmi_vendor", ":llcc_qcom"],
+)
+
+ddk_module(
+    name = "gpio_mi_t1",
+    srcs = ["drivers/gpio/gpio-mi-t1.c"],
+    out = "gpio-mi-t1.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":rproc_qcom_common", ":remote_headers"],
+)
+
+ddk_module(
+    name = "gh_tlmm_vm_mem_access",
+    srcs = ["drivers/soc/qcom/gh_tlmm_vm_mem_access.c"],
+    out = "gh_tlmm_vm_mem_access.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scm_headers", ":platform_headers", ":gunyah_headers", ":gh_rm_drv", ":gh_mem_notifier", ":pinctrl_headers", ":pinctrl_msm"],
+)
+
+ddk_module(
+    name = "qcom_stats",
+    srcs = ["drivers/soc/qcom/qcom_stats.c"],
+    out = "qcom_stats.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":qcom_aoss", ":smem", ":scm_headers", ":soc_headers", ":mailbox_headers"],
+)
+
+ddk_module(
+    name = "msm_show_resume_irq",
+    srcs = ["drivers/irqchip/msm_show_resume_irq.c"],
+    out = "msm_show_resume_irq.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [],
+)
+
+ddk_module(
+    name = "pmic_glink_debug",
+    srcs = ["drivers/soc/qcom/pmic-glink-debug.c"],
+    out = "pmic-glink-debug.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":qti_pmic_glink", ":pmic_glink_headers"],
+)
+
+ddk_module(
+    name = "spmi_pmic_arb_debug",
+    srcs = ["drivers/spmi/spmi-pmic-arb-debug.c"],
+    out = "spmi-pmic-arb-debug.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [],
+)
+
+ddk_module(
+    name = "qcom_pbs",
+    srcs = ["drivers/soc/qcom/qcom-pbs.c"],
+    out = "qcom-pbs.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":pbs_headers"],
+)
+
+ddk_module(
+    name = "leds_qcom_lpg",
+    srcs = ["drivers/leds/rgb/leds-qcom-lpg.c"],
+    out = "leds-qcom-lpg.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":qcom_pbs", ":pbs_headers"],
+)
+
+ddk_module(
+    name = "bam_dma",
+    srcs = ["drivers/dma/qcom/bam_dma.c"],
+    out = "bam_dma.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_headers", ":qcom_ipc_logging", ":bam_headers"],
+)
+
+ddk_module(
+    name = "coresight_tpdm",
+    srcs = ["drivers/hwtracing/coresight/coresight-tpdm.c"],
+    out = "coresight-tpdm.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
+)
+
+ddk_headers(
+    name = "platform_mca_headers",
+    hdrs = glob(["drivers/power/supply/mca/include/mca/strategy/*.h", "drivers/power/supply/mca/include/mca/platform/*.h", "drivers/power/supply/mca/include/mca/protocol/*.h"]),
+    includes = ["drivers/power/supply/mca/include"],
+)
+
+ddk_module(
+    name = "mca_ut_test",
+    srcs = ["drivers/power/supply/mca/mca_ut_test/mca_ut_test.c"],
+    out = "mca_ut_test.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_mca_headers", ":mca_headers", ":mca_log", ":mca_common", ":mca_hwid", ":mca_strategy_class", ":mca_strategy_fg_class", ":mca_platform_fg_ic_ops", ":mca_platform_wireless_class"],
+)
+
+ddk_module(
+    name = "hl7603",
+    srcs = ["drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/hl7603.c", "drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/inc/hl7603.h"],
+    out = "hl7603.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mca_headers", ":mca_log", ":mca_sysfs", ":mca_event", ":mca_parse_dts"],
+)
+
+ddk_module(
+    name = "coresight_tpda",
+    srcs = ["drivers/hwtracing/coresight/coresight-tpda.c"],
+    out = "coresight-tpda.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
+)
+
+ddk_module(
+    name = "coresight_tmc",
+    srcs = [
+        "drivers/hwtracing/coresight/coresight-tmc-core.c",
+        "drivers/hwtracing/coresight/coresight-tmc-etf.c",
+        "drivers/hwtracing/coresight/coresight-tmc-etr.c",
+        "drivers/hwtracing/coresight/coresight-tmc.h",
+        "drivers/hwtracing/coresight/coresight-etm-perf.h",
+        "drivers/hwtracing/coresight/coresight-catu.h",
+    ],
+    out = "coresight-tmc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
 )

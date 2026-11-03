@@ -29645,5 +29645,233 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "sound/usb/usb_audio_qmi_v01.h",
     "blob": "47c91ad789c218ae34e7a521beff05f282f2812b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/mpam.c",
+    "blob": "e8899e16e64b03b8a8444887abeb8ef943d4d1a2"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/cpu_mpam.c",
+    "blob": "dc395deaa1ba1921a3be3edfa54aabb2ce74b2c5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/platform_mpam.c",
+    "blob": "349003f20b79fd5b931fecfbf3b46f69d3626260"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/mpam_msc.c",
+    "blob": "f1d5a1b0159e32dd3ed8b4328fb191ca5709984a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/mpam_msc_slc.c",
+    "blob": "a2940e078932fed33ab28673da56aebfad353149"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mpam/slc_mpam.c",
+    "blob": "dc3650bfe90f4c31886899089bb4d7f9780c686b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/soc/qcom/mpam.h",
+    "blob": "b7757df22d68ca04ef26a6c1ad37e3b39a3cef6a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/soc/qcom/mpam_msc.h",
+    "blob": "3a6cd8e13ac4c7657cf239830ba0a4c126df59a4"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/soc/qcom/mpam_slc.h",
+    "blob": "49f01f727502d6fcb37c8c03af4ac10e06d74158"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/soc/qcom/llcc_heuristics.h",
+    "blob": "5f1636db2a44eb152b07d70ac77e5f6692f9ba72"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/soc/qcom/qcom_stats.h",
+    "blob": "d3b76a2aab6973f97936d4a9cac1e9f74657df7a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/llcc_heuristics.c",
+    "blob": "b415979355153566cc676eeb2baed46c16c3c9ea"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/gpio/gpio-mi-t1.c",
+    "blob": "c8dac2019c5e111fee106eaa03dd10678c516555"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/gh_tlmm_vm_mem_access.c",
+    "blob": "ff3401d2f543ee1f4ac1722887ae73f8cac627c9"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/qcom_stats.c",
+    "blob": "5708063c5e25b1aeed8606d03f65837306227f28"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/irqchip/msm_show_resume_irq.c",
+    "blob": "b116c31cb92dc607222dbec4f8996335d9d1f5ea"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/pmic-glink-debug.c",
+    "blob": "60a997edbb023462ff8cd9df3e3889f804bcd778"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/spmi/spmi-pmic-arb-debug.c",
+    "blob": "c83299c5d86f57ecbd0d23fd5316b2b813ee7006"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/leds/rgb/leds-qcom-lpg.c",
+    "blob": "57e8acf463afd2f7f6ed37b323228ebb0f94cf80"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/dma/qcom/bam_dma.c",
+    "blob": "580d4371d172641769b236a71285f5689a4903e8"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/dma/qcom/bam_dma_trace.h",
+    "blob": "20f8e07a5195f6c3ed32c86ea0810c3918a6dd00"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/dma/qcom_bam_dma.h",
+    "blob": "68fc0e643b1b97fe4520d5878daa322b81f4f559"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tpdm.c",
+    "blob": "7214e65097ec9ac69f6c7c9278bcd28d25945c9e"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tpdm.h",
+    "blob": "b117543897344b689f666f6890cabb59c8ee4869"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/hl7603.c",
+    "blob": "7c658796543eb1699bd372c67fbf5347c645b2f8"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/inc/hl7603.h",
+    "blob": "7f768c40d38da36baadc88ed8ac131bc15230eca"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_ut_test/mca_ut_test.c",
+    "blob": "a0dbd2daaf6232d68a75b15d0cae6454f703bcf9"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/qcom-pbs.c",
+    "blob": "b49d14bb7d08d85f0b6ca90169fa16c3fdb7ab79"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/qcom-pbs.h",
+    "blob": "8a46209ccf135f87861faf015009347586f802bc"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tpda.h",
+    "blob": "c6af3d2da3efeaeef64ba9023f1c280583b542e6"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tpda.c",
+    "blob": "333b3cb236859f0feb1498f4ab81037c772143fd"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-trace-id.h",
+    "blob": "db68e1ec56b607900a01732fb5161b2feaaac419"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-core.c",
+    "blob": "36599c431be6203e871fdcb8de569cc6701c52bb"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-etf.c",
+    "blob": "0f45ab5e5249933ce7059dfee7fe7376ab33ed2d"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc-etr.c",
+    "blob": "9144b273d415f0952aa17359775d7ceb473c7544"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-tmc.h",
+    "blob": "cbb4ba43915855a8acbb9205167e87185c9a8c6c"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-etm-perf.h",
+    "blob": "5febbcdb8696b0c0b937e681ff007cfff6814f6a"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/hwtracing/coresight/coresight-catu.h",
+    "blob": "6e6b7aac206dcae9ff062355e50179637b4d1703"
   }
 ]

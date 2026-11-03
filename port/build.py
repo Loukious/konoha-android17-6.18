@@ -45,6 +45,10 @@ def main():
     services_validation = verify_device_services(workspace / "onyx")
     (artifacts / "device-services-host-validation.json").write_text(
         json.dumps(services_validation, indent=2) + "\n")
+    from verify_platform_providers import verify as verify_platform_providers
+    platform_validation = verify_platform_providers(workspace / "onyx")
+    (artifacts / "platform-providers-host-validation.json").write_text(
+        json.dumps(platform_validation, indent=2) + "\n")
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -103,7 +107,7 @@ def main():
     for name in ["sources.json", "imports.json", "onyx-port.xml", "dependency-lock.xml",
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
-                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "boot-parameters.txt",
+                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
                  "qdss_diagnostic.py", "common_fixes.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
         shutil.copyfile(HERE / name, inputs / name)
@@ -117,6 +121,8 @@ def main():
     ksu_inputs.mkdir()
     for name in ["source.json", "source.tar"]:
         shutil.copyfile(workspace / ".kernelsu-next" / name, ksu_inputs / name)
+    shutil.copytree(HERE.parent / "validation/platform_providers", inputs / "platform-providers-tests",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "LOCAL*"))
     if (HERE / "validation").is_dir():
         shutil.copytree(HERE / "validation", inputs / "validation",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -139,6 +145,7 @@ def main():
         "module_verification": verification,
         "mi_thermal_host_validation": thermal_validation,
         "device_services_host_validation": services_validation,
+        "platform_providers_host_validation": platform_validation,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],
