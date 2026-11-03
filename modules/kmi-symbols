@@ -4,3 +4,5 @@
   thermal_device_register
   configfs_remove_default_groups
   read_sanitised_ftr_reg
+  coresight_add_out_conn
+  coresight_get_sink

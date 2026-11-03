@@ -250,3 +250,15 @@ diff --git a/include/linux/thermal.h b/include/linux/thermal.h
  int thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp);
  int thermal_zone_get_slope(struct thermal_zone_device *tz);
  int thermal_zone_get_offset(struct thermal_zone_device *tz);
+
+diff --git a/include/linux/coresight.h b/include/linux/coresight.h
+--- a/include/linux/coresight.h
++++ b/include/linux/coresight.h
+@@ -74,6 +74,7 @@
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_CATU,
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_ECT_CTI,
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_CTCU,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR,
+ };
+ 
+ /**

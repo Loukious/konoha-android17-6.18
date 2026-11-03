@@ -275,6 +275,12 @@ static void tpdm_reset_datasets(struct tpdm_drvdata *drvdata)
 
 	if (drvdata->cmb)
 		memset(drvdata->cmb, 0, sizeof(struct cmb_dataset));
+	if (drvdata->bc)
+		memset(drvdata->bc, 0, sizeof(*drvdata->bc));
+	if (drvdata->tc)
+		memset(drvdata->tc, 0, sizeof(*drvdata->tc));
+	if (drvdata->gpr)
+		memset(drvdata->gpr, 0, sizeof(*drvdata->gpr));
 }
 
 static void set_dsb_mode(struct tpdm_drvdata *drvdata, u32 *val)
@@ -475,10 +481,13 @@ static void tpdm_enable_cmb(struct tpdm_drvdata *drvdata)
  * Bit(DSB). This function will initialize the configuration according
  * to the dataset type supported by the TPDM.
  */
+#include "coresight-tpdm-legacy.c"
+
 static void __tpdm_enable(struct tpdm_drvdata *drvdata)
 {
 	CS_UNLOCK(drvdata->base);
 
+	tpdm_enable_legacy(drvdata);
 	tpdm_enable_dsb(drvdata);
 	tpdm_enable_cmb(drvdata);
 
@@ -541,6 +550,7 @@ static void __tpdm_disable(struct tpdm_drvdata *drvdata)
 {
 	CS_UNLOCK(drvdata->base);
 
+	tpdm_disable_legacy(drvdata);
 	tpdm_disable_dsb(drvdata);
 	tpdm_disable_cmb(drvdata);
 
@@ -582,21 +592,44 @@ static int tpdm_datasets_setup(struct tpdm_drvdata *drvdata)
 	/*  Get the datasets present on the TPDM. */
 	pidr = readl_relaxed(drvdata->base + CORESIGHT_PERIPHIDR0);
 	drvdata->datasets |= pidr & GENMASK(TPDM_DATASETS - 1, 0);
-	/* This provider implements DSB/CMB/MCMB, not legacy BC/TC/GPR. */
-	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB |
-				  TPDM_PIDR0_DS_MCMB)))
+	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB | TPDM_PIDR0_DS_MCMB)) &&
+	    !(drvdata->legacy &&
+	      (drvdata->datasets & (TPDM_PIDR0_DS_BC | TPDM_PIDR0_DS_TC | TPDM_PIDR0_DS_GPR))))
 		return -EOPNOTSUPP;
+	if (drvdata->legacy) {
+		u32 devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
+		drvdata->bc_counters_avail = FIELD_GET(GENMASK(10, 6), devid) + 1;
+		drvdata->tc_counters_avail = FIELD_GET(GENMASK(5, 4), devid) + 1;
+		drvdata->bc_trig_type = FIELD_GET(GENMASK(26, 25), devid);
+		drvdata->tc_trig_type = FIELD_GET(GENMASK(28, 27), devid);
+		drvdata->bc_gang_type = FIELD_GET(GENMASK(24, 23), devid);
+		if (((drvdata->datasets & TPDM_PIDR0_DS_BC) &&
+		     (drvdata->bc_trig_type > TPDM_SUPPORT_TYPE_NO ||
+		      drvdata->bc_gang_type > TPDM_SUPPORT_TYPE_NO)) ||
+		    ((drvdata->datasets & TPDM_PIDR0_DS_TC) &&
+		     drvdata->tc_trig_type > TPDM_SUPPORT_TYPE_NO))
+			return -EINVAL;
+		drvdata->msr_support = device_property_present(drvdata->dev, "qcom,msr-support");
+#define ALLOC_LEGACY(member, bit)                                                                  \
+	if (drvdata->datasets & bit) {                                                             \
+		drvdata->member =                                                                  \
+		    devm_kzalloc(drvdata->dev, sizeof(*drvdata->member), GFP_KERNEL);              \
+		if (!drvdata->member)                                                              \
+			return -ENOMEM;                                                            \
+	}
+		ALLOC_LEGACY(bc, TPDM_PIDR0_DS_BC);
+		ALLOC_LEGACY(tc, TPDM_PIDR0_DS_TC);
+		ALLOC_LEGACY(gpr, TPDM_PIDR0_DS_GPR);
+#undef ALLOC_LEGACY
+	}
 
 	if (tpdm_has_dsb_dataset(drvdata) && (!drvdata->dsb)) {
-		drvdata->dsb = devm_kzalloc(drvdata->dev,
-						sizeof(*drvdata->dsb), GFP_KERNEL);
+		drvdata->dsb = devm_kzalloc(drvdata->dev, sizeof(*drvdata->dsb), GFP_KERNEL);
 		if (!drvdata->dsb)
 			return -ENOMEM;
 	}
-	if ((tpdm_has_cmb_dataset(drvdata) || tpdm_has_mcmb_dataset(drvdata))
-			&& (!drvdata->cmb)) {
-		drvdata->cmb = devm_kzalloc(drvdata->dev,
-						sizeof(*drvdata->cmb), GFP_KERNEL);
+	if ((tpdm_has_cmb_dataset(drvdata) || tpdm_has_mcmb_dataset(drvdata)) && (!drvdata->cmb)) {
+		drvdata->cmb = devm_kzalloc(drvdata->dev, sizeof(*drvdata->cmb), GFP_KERNEL);
 		if (!drvdata->cmb)
 			return -ENOMEM;
 	}
@@ -620,6 +653,10 @@ static ssize_t reset_dataset_store(struct device *dev,
 		return -EINVAL;
 
 	spin_lock(&drvdata->spinlock);
+	if (drvdata->enable) {
+		spin_unlock(&drvdata->spinlock);
+		return -EBUSY;
+	}
 	tpdm_reset_datasets(drvdata);
 	spin_unlock(&drvdata->spinlock);
 
@@ -647,6 +684,7 @@ static ssize_t integration_test_store(struct device *dev,
 	if (val != 1 && val != 2)
 		return -EINVAL;
 
+	guard(spinlock)(&drvdata->spinlock);
 	if (!drvdata->enable)
 		return -EINVAL;
 
@@ -1356,6 +1394,7 @@ static const struct attribute_group *tpdm_attr_grps[] = {
 	&tpdm_cmb_patt_grp,
 	&tpdm_cmb_msr_grp,
 	&tpdm_mcmb_attr_grp,
+	&tpdm_legacy_grp,
 	NULL,
 };
 

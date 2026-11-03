@@ -38,6 +38,7 @@ typedef uint64_t u64;
 #define __iomem
 #define PAGE_SIZE 4096
 #define GFP_KERNEL 0
+#define EPROBE_DEFER 517
 #define pr_err(...) ((void)0)
 #define mca_log_err(...) ((void)0)
 #define mca_log_info(...) ((void)0)
@@ -209,7 +210,9 @@ int main(void) {
  assert(qcom_stats_device_ioctl_active(&file,12345,0)==-EINVAL);assert(!ddr_reads);tests++;
  assert(!qcom_stats_device_ioctl_active(&file,DDR_STATS_IOCTL,0));assert(ddr_reads==1);tests++;
  copy_error=-EFAULT;assert(qcom_stats_device_ioctl_active(&file,MODEM_IOCTL,0)==-EFAULT);tests++;
- copy_error=0;smem_error=-EINVAL;assert(qcom_stats_device_ioctl_active(&file,MODEM_IOCTL,0)<0);tests++;
+ copy_error=0;smem_error=-EINVAL;assert(qcom_stats_device_ioctl_active(&file,MODEM_IOCTL,0)==-EINVAL);tests++;
+ smem_error=-ENOENT;assert(qcom_stats_device_ioctl_active(&file,MODEM_IOCTL,0)==-ENOENT);tests++;
+ smem_error=-EPROBE_DEFER;assert(qcom_stats_device_ioctl_active(&file,MODEM_IOCTL,0)==-EPROBE_DEFER);tests++;
  printf("%u\n",tests);
 }
 '''
@@ -420,13 +423,13 @@ int main(void){
 
 fixtures['wired-reverse-eligibility'] = BASE + r"""
 #define TYPEC_PORT_0 0
-struct strategy_buckchg_dev {int thermal_board_temp,source_boost_status,support_reverse_quick_charge,cp_revert_auth;bool reverse_qc_gate0,reverse_qc_gate1,reverse_auth;};
+struct strategy_buckchg_dev {int thermal_board_temp,source_boost_status,src_gear_last,support_reverse_quick_charge,cp_revert_auth;bool reverse_qc_gate0,reverse_qc_gate1,reverse_auth;};
 static int temp=250,soc=80,temp_error,otg_error,gear_error,gear_calls,last_gear;static bool otg=true;
 static int strategy_class_fg_ops_get_temperature(int *p){*p=temp;return temp_error;}
 static int strategy_class_fg_ops_get_soc(void){return soc;}
 static int protocol_class_pd_get_otg_plugin_status(int port,bool *p){*p=otg;return otg_error;}
 static int protocol_class_pd_set_gear_shift(int port,int gear){gear_calls++;last_gear=gear;return gear_error;}
-""" + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_check_reverse_quick_charge') + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_request_reverse') + r"""
+""" + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_check_reverse_quick_charge') + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_set_reverse_gear') + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_request_reverse') + r"""
 int main(void){
  struct strategy_buckchg_dev d={.thermal_board_temp=300,.support_reverse_quick_charge=1,.cp_revert_auth=1,.reverse_auth=true};int out=99;unsigned tests=0;
  assert(!strategy_buckchg_request_reverse(&d,1)&&last_gear==1&&d.source_boost_status==1);tests++;
@@ -445,6 +448,51 @@ int main(void){
  gear_error=-EREMOTEIO;d.reverse_qc_gate0=true;assert(strategy_buckchg_request_reverse(&d,1)==-EREMOTEIO&&d.reverse_qc_gate0);tests++;
  gear_error=0;d.support_reverse_quick_charge=0;assert(strategy_buckchg_request_reverse(&d,1)==-EOPNOTSUPP);tests++;
  assert(strategy_buckchg_request_reverse(&d,2)==-EINVAL);tests++;
+ printf("%u\n",tests);
+}
+"""
+
+fixtures['wired-reverse-monitor-failures'] = BASE + r"""
+#define TYPEC_PORT_0 0
+#define CP_ROLE_MASTER 0
+#define container_of(p,t,m) ((t *)((char *)(p)-offsetof(t,m)))
+#define msecs_to_jiffies(x) (x)
+#define udelay(x) ((void)0)
+struct work_struct { int unused; };
+struct delayed_work { struct work_struct work; };
+struct strategy_buckchg_dev {
+ struct delayed_work source_status_monitor_work; void *wq;
+ int source_boost_status,src_gear_last,src_monitor_cnt,src_monitor_cur,src_monitor_byte;
+ bool support_revchg_screenon,src_monitor_flag;
+};
+struct mca_event_notify_data {int event_len;char *event;};
+static int eligible_value,eligibility_error,gear_error,gear_calls,last_gear;
+static int current_error,current_value,adc_error,bus_error,bus_value,event_calls,queued;
+static int strategy_buckchg_check_reverse_quick_charge(struct strategy_buckchg_dev *d,int *p){*p=eligible_value;return eligibility_error;}
+static int protocol_class_pd_set_gear_shift(int port,int gear){gear_calls++;last_gear=gear;return gear_error;}
+static int strategy_class_fg_ops_get_current(int *p){*p=current_value;return current_error;}
+static int platform_class_cp_enable_adc(int role,bool value){return adc_error;}
+static int platform_class_cp_get_bus_current(int role,int *p){*p=bus_value;return bus_error;}
+static void mca_event_report_uevent(struct mca_event_notify_data *n){assert(n->event_len>0);event_calls++;}
+static void queue_delayed_work(void *wq,struct delayed_work *work,int delay){queued++;}
+""" + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_buckchg_set_reverse_gear') + function('drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','strategy_source_status_monitor_workfunc_locked') + r"""
+static void run(struct strategy_buckchg_dev *d){queued=0;strategy_source_status_monitor_workfunc_locked(&d->source_status_monitor_work.work);assert(queued==1);}
+int main(void){
+ struct strategy_buckchg_dev d={0};unsigned tests=0;
+ eligible_value=1;gear_error=-EREMOTEIO;run(&d);
+ assert(d.source_boost_status==0&&d.src_gear_last==0&&last_gear==1);tests++;
+ gear_error=0;run(&d);assert(d.source_boost_status==1&&d.src_gear_last==1);tests++;
+ eligibility_error=-EIO;gear_error=-EREMOTEIO;run(&d);
+ assert(last_gear==0&&d.source_boost_status==1&&d.src_gear_last==1);tests++;
+ gear_error=0;run(&d);assert(d.source_boost_status==0&&d.src_gear_last==0);tests++;
+ eligibility_error=0;d.support_revchg_screenon=true;d.source_boost_status=d.src_gear_last=1;
+ current_error=-EIO;run(&d);assert(last_gear==0&&d.source_boost_status==0&&d.src_gear_last==0);tests++;
+ current_error=0;d.src_monitor_flag=true;d.source_boost_status=d.src_gear_last=1;
+ gear_error=-EREMOTEIO;run(&d);assert(d.source_boost_status==1&&d.src_gear_last==1&&!event_calls);tests++;
+ gear_error=0;adc_error=-EIO;run(&d);assert(d.source_boost_status==1&&d.src_gear_last==2&&!event_calls);tests++;
+ adc_error=0;bus_error=-EIO;run(&d);assert(d.source_boost_status==1&&!event_calls);tests++;
+ bus_error=0;bus_value=1501;run(&d);assert(d.source_boost_status==1&&!event_calls);tests++;
+ bus_value=0;run(&d);assert(d.source_boost_status==2&&d.src_gear_last==2&&event_calls==1);tests++;
  printf("%u\n",tests);
 }
 """
@@ -501,10 +549,113 @@ int main(void){
 }
 """
 
+fixtures['csr-path-transactions'] = BASE + r"""
+#define CSR_ATIDS 128
+#define CSR_BANKS 2
+#define CSR_ATID0 0xf8
+#define CSR_ATID1 0x108
+#define IS_VALID_CS_TRACE_ID(id) ((id)>0 && (id)<128)
+#define BIT(n) (1U<<(n))
+#define CS_UNLOCK(p) ((void)0)
+#define CS_LOCK(p) ((void)0)
+#define raw_spin_lock_irqsave(p,f) ((void)0)
+#define raw_spin_unlock_irqrestore(p,f) ((void)0)
+struct csr_drvdata {void *base;size_t size;void *csdev;int lock;unsigned int refs[2][128];bool original[2][128];unsigned int users;};
+static int claims,disclaims,claim_error,writes;
+static int coresight_claim_device(void *p){claims++;return claim_error;}
+static void coresight_disclaim_device(void *p){disclaims++;}
+static u32 readl_relaxed(void *p){return *(u32 *)p;}
+static void writel_relaxed(u32 v,void *p){*(u32 *)p=v;writes++;}
+""" + function('drivers/hwtracing/coresight/coresight-csr.c','csr_bank') + function('drivers/hwtracing/coresight/coresight-csr.c','csr_route') + r"""
+int main(void){
+ u32 regs[1024]={0};struct csr_drvdata d={.base=regs,.size=sizeof(regs)};unsigned tests=0;
+ for(unsigned id=1;id<128;id++){
+  u32 *r=&regs[(CSR_ATID0+(id/32)*4)/4],mask=BIT(id%32);*r=0;
+  assert(!csr_route(&d,CSR_ATID0,id,true)&&(*r&mask));tests++;
+  assert(!csr_route(&d,CSR_ATID0,id,true)&&d.refs[0][id]==2);tests++;
+  assert(!csr_route(&d,CSR_ATID0,id,false)&&(*r&mask));tests++;
+  assert(!csr_route(&d,CSR_ATID0,id,false)&&!(*r&mask));tests++;
+  *r=mask;assert(!csr_route(&d,CSR_ATID0,id,true));assert(!csr_route(&d,CSR_ATID0,id,false)&&(*r&mask));tests++;
+ }
+ int n=writes;assert(csr_route(&d,CSR_ATID0,0,true)==-EINVAL&&writes==n);tests++;
+ assert(csr_route(&d,CSR_ATID0,128,true)==-EINVAL&&writes==n);tests++;
+ assert(csr_route(&d,0x109,1,true)==-EINVAL&&writes==n);tests++;
+ assert(csr_bank(CSR_ATID1,CSR_ATID1+15)==-EINVAL);tests++;
+ claim_error=-EBUSY;assert(csr_route(&d,CSR_ATID1,3,true)==-EBUSY&&!d.users&&writes==n);tests++;claim_error=0;
+ d.users=UINT_MAX;assert(csr_route(&d,CSR_ATID1,3,true)==-EOVERFLOW);tests++;d.users=0;
+ assert(!csr_route(&d,CSR_ATID0,3,true));assert(!csr_route(&d,CSR_ATID1,3,true)&&d.users==2);tests++;
+ assert(!csr_route(&d,CSR_ATID0,3,false)&&d.users==1);tests++;
+ assert(!csr_route(&d,CSR_ATID1,3,false)&&!d.users);tests++;
+ n=writes;assert(!csr_route(&d,CSR_ATID1,3,false)&&writes==n);tests++;
+ printf("%u\n",tests);
+}
+"""
+fixtures['etr-stream-overrun'] = BASE + r"""
+#define TMC_STREAM_BLOCK PAGE_SIZE
+""" + function('drivers/hwtracing/coresight/coresight-byte-cntr.c','tmc_stream_overrun') + r"""
+int main(void){
+ unsigned tests=0;
+ for(unsigned size=4*PAGE_SIZE;size<=1024*1024;size*=2){
+  assert(!tmc_stream_overrun(0,0,size));tests++;
+  assert(!tmc_stream_overrun(size-PAGE_SIZE,0,size));tests++;
+  assert(tmc_stream_overrun(size-PAGE_SIZE+1,0,size));tests++;
+  assert(tmc_stream_overrun(size,0,size));tests++;
+  assert(!tmc_stream_overrun(UINT64_MAX-1,UINT64_MAX-2,size));tests++;
+  assert(tmc_stream_overrun(0,UINT64_MAX,size));tests++;
+ }
+ assert(tmc_stream_overrun(0,0,0));tests++;
+ assert(tmc_stream_overrun(0,0,PAGE_SIZE));tests++;
+ printf("%u\n",tests);
+}
+"""
+legacy_header=(M/'drivers/hwtracing/coresight/coresight-tpdm.h').read_text()
+legacy_defs=legacy_header[legacy_header.index('#define TPDM_PIDR0_DS_TC'):legacy_header.index('/* CMB/MCMB')]
+legacy_c=(M/'drivers/hwtracing/coresight/coresight-tpdm-legacy.c').read_text()
+legacy_enum=legacy_c[legacy_c.index('enum legacy_setting'):legacy_c.index('struct tpdm_legacy_attribute')]
+fixtures['tpdm-legacy-bounds'] = BASE + r"""
+#define BIT(n) (1U<<(n))
+#define U32_MAX UINT32_MAX
+""" + legacy_defs + legacy_enum + r"""
+struct tpdm_drvdata {bool legacy,msr_support;struct bc_dataset *bc;struct tc_dataset *tc;struct gpr_dataset *gpr;u32 bc_counters_avail,tc_counters_avail,bc_trig_type,tc_trig_type,bc_gang_type;};
+""" + function('drivers/hwtracing/coresight/coresight-tpdm-legacy.c','tpdm_legacy_slot') + r"""
+int main(void){
+ struct bc_dataset bc={0};struct tc_dataset tc={0};struct gpr_dataset gpr={0};struct tpdm_drvdata d={.legacy=true,.msr_support=true,.bc=&bc,.tc=&tc,.gpr=&gpr,.bc_counters_avail=32,.tc_counters_avail=4};u32 mask;unsigned tests=0;
+ assert(tpdm_legacy_slot(&d,BC_ENABLE,0,&mask)==&bc.enable_counters&&mask==UINT32_MAX);tests++;
+ d.bc_counters_avail=1;assert(tpdm_legacy_slot(&d,BC_ENABLE,0,&mask)&&mask==1);tests++;d.bc_counters_avail=32;
+ assert(tpdm_legacy_slot(&d,TC_ENABLE,0,&mask)==&tc.enable_counters&&mask==15);tests++;
+ assert(tpdm_legacy_slot(&d,TC_SAT,0,&mask)==&tc.sat_mode&&mask==1);tests++;
+ assert(tpdm_legacy_slot(&d,TC_TRIGGER_SEL,0,&mask)==&tc.trig_sel[0]&&mask==UINT32_MAX);tests++;
+ for(unsigned i=0;i<160;i++){assert(tpdm_legacy_slot(&d,GPR_REG,i,&mask)==&gpr.gp_regs[i]);tests++;}
+ assert(!tpdm_legacy_slot(&d,GPR_REG,160,&mask));tests++;
+ assert(tpdm_legacy_slot(&d,BC_TRIGGER_LO,31,&mask)==&bc.trig_val_lo[31]);tests++;
+ assert(!tpdm_legacy_slot(&d,BC_TRIGGER_LO,32,&mask));tests++;
+ d.bc_trig_type=TPDM_SUPPORT_TYPE_PARTIAL;assert(!tpdm_legacy_slot(&d,BC_TRIGGER_LO,1,&mask));tests++;
+ d.bc_trig_type=TPDM_SUPPORT_TYPE_NO;assert(!tpdm_legacy_slot(&d,BC_TRIGGER_LO,0,&mask));tests++;
+ d.tc_trig_type=TPDM_SUPPORT_TYPE_NO;assert(!tpdm_legacy_slot(&d,TC_TRIGGER_SEL,0,&mask));tests++;
+ d.msr_support=false;assert(!tpdm_legacy_slot(&d,BC_MSR,0,&mask)&&!tpdm_legacy_slot(&d,TC_MSR,0,&mask));tests++;
+ d.legacy=false;for(unsigned k=0;k<=GPR_REG;k++){assert(!tpdm_legacy_slot(&d,k,0,&mask));tests++;}
+ printf("%u\n",tests);
+}
+"""
+fixtures['camera-vfe-slot-validation'] = BASE + r"""
+struct cam_isp_hw_intf_data {void *hw_intf;};
+static struct cam_isp_hw_intf_data cam_vfe_hw_list[4];
+""" + function('qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c','cam_vfe_hw_init') + r"""
+int main(void){
+ struct cam_isp_hw_intf_data *out=(void *)1;unsigned tests=0;
+ assert(cam_vfe_hw_init(NULL,0)==-EINVAL);tests++;
+ assert(cam_vfe_hw_init(&out,4)==-EINVAL&&out==(void *)1);tests++;
+ assert(cam_vfe_hw_init(&out,UINT32_MAX)==-EINVAL);tests++;
+ assert(cam_vfe_hw_init(&out,0)==-ENODEV&&!out);tests++;
+ cam_vfe_hw_list[3].hw_intf=(void *)1;assert(!cam_vfe_hw_init(&out,3)&&out==&cam_vfe_hw_list[3]);tests++;
+ printf("%u\n",tests);
+}
+"""
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--report',type=Path);args=p.parse_args()
     report={'status':'PASS','fixtures':[],'source_sha256':{}}
-    paths=['include/soc/qcom/mpam.h',hl+'hl7603.c','drivers/dma/qcom/bam_dma.c','drivers/soc/qcom/qcom_stats.c','drivers/soc/qcom/mpam/cpu_mpam.c','drivers/soc/qcom/pmic-glink-debug.c','drivers/firmware/arm_scmi/qcom_scmi_vendor.c','drivers/hwtracing/coresight/coresight-tpda.c','drivers/hwtracing/coresight/coresight-tpdm.c','drivers/power/supply/mca/include/mca/common/mca_voter.h','drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c','drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c']
+    paths=['drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c','drivers/hwtracing/coresight/coresight-tmc-etr.c','drivers/hwtracing/coresight/coresight-trace-noc.c','drivers/hwtracing/coresight/coresight-csr.c','drivers/hwtracing/coresight/coresight-byte-cntr.c','drivers/hwtracing/coresight/coresight-tpdm-legacy.c','qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c','include/soc/qcom/mpam.h',hl+'hl7603.c','drivers/dma/qcom/bam_dma.c','drivers/soc/qcom/qcom_stats.c','drivers/soc/qcom/mpam/cpu_mpam.c','drivers/soc/qcom/pmic-glink-debug.c','drivers/firmware/arm_scmi/qcom_scmi_vendor.c','drivers/hwtracing/coresight/coresight-tpda.c','drivers/hwtracing/coresight/coresight-tpdm.c','drivers/power/supply/mca/include/mca/common/mca_voter.h','drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c','drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c']
     report['source_sha256']={x:hashlib.sha256((M/x).read_bytes()).hexdigest() for x in paths}
     with tempfile.TemporaryDirectory(prefix='konoha-platform-host-') as temp:
         for name,source in fixtures.items():

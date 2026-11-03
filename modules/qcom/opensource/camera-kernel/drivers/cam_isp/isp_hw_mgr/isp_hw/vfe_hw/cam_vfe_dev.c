@@ -276,15 +276,15 @@ void cam_vfe_remove(struct platform_device *pdev)
 int cam_vfe_hw_init(struct cam_isp_hw_intf_data **vfe_hw_intf,
 	uint32_t hw_idx)
 {
-	int rc = 0;
+	if (!vfe_hw_intf || hw_idx >= ARRAY_SIZE(cam_vfe_hw_list))
+		return -EINVAL;
 
+	/* The manager enumerates all possible slots, including unfitted VFEs. */
 	if (cam_vfe_hw_list[hw_idx].hw_intf) {
 		*vfe_hw_intf = &cam_vfe_hw_list[hw_idx];
-		rc = 0;
+		return 0;
 	} else {
-		CAM_ERR(CAM_ISP, "inval param");
 		*vfe_hw_intf = NULL;
-		rc = -ENODEV;
+		return -ENODEV;
 	}
-	return rc;
 }

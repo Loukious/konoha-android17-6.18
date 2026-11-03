@@ -14,6 +14,12 @@ startup checks, front/rear photos and short 1080p recordings. Camera synchroniza
 recovery itself is unchanged; separate SOF-skip diagnostics remain. New
 LTS/KernelSU builds require device validation.
 
+The platform-provider candidate uses Linux **6.18.38** with **352 modules**.
+It adds native CSR/ETR byte-counter streaming, trace-NoC and TPDM BC/TC/GPR
+controls, fixes reverse-charging gear error handling, and addresses kernel
+camera startup/statistics findings. See [kernel follow-up notes](port/kernel-followup.md)
+for validation limits and the ROM-side findings recorded without ROM changes.
+
 ## Branch layout
 
 - [`ci`](https://github.com/Loukious/konoha-android17-6.18/tree/ci) is the default
@@ -31,7 +37,7 @@ On the source branch:
 - `common/` contains the complete pinned upstream GKI with the required common
   fixes applied. CI independently recreates and verifies every source file,
   executable bit and symlink before building.
-- `modules/` contains all 4,862 materialized, modified source/build files used
+- `modules/` contains all 4,972 materialized, modified source/build files used
   by the module port, including WLAN, IPA, Bluetooth, graphics, audio, camera,
   charging, PMIC/SPMI, clocks, USB and the remaining device driver groups.
 - `port/imports.json` records the exact original repositories, commits and Git
@@ -76,7 +82,7 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
-Every build includes GKI, all 318 modules, both supported device-tree variants,
+Every build includes GKI, all 352 modules, both supported device-tree variants,
 KernelSU dev's exact source archive, classic/extended symbol CRC verification,
 input hashes and logs. Download `konoha-gki-and-modules.tar.gz`, `kernel-abi/`
 and `SHA256SUMS` from the build's artifacts. These are build outputs, not a

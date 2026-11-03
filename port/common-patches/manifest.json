@@ -1,6 +1,6 @@
 {
   "patch": "0001-required-common-fixes.patch",
-  "patch_sha256": "d7cc40d0ef28983319c3e36a8115b23b6f65fa8ef191c56e9f784d0fd04a52a3",
+  "patch_sha256": "85345473a7c9086f2914464907dbc489d3da56314a201fbd72ac7a7c260ad1d0",
   "upstream": "https://lists.openwall.net/linux-kernel/2026/07/10/62",
   "files": {
     "drivers/hwtracing/coresight/coresight-catu.c": {
@@ -46,12 +46,17 @@
     "include/linux/thermal.h": {
       "before_sha256": "2ddf3a9d865ebc02fe54db4aec6fc8d402474a3a06a04177bd6c701ac1594bbf",
       "candidate_sha256": "95b1f3e7c5831f4c9c8a96944613498e719afc58594cf5fd6fc9403c0a95951d"
+    },
+    "include/linux/coresight.h": {
+      "before_sha256": "06082e886070890b4e57f538bc1f71873a9ebbd5fdc2dde039c95a43e0bb4b00",
+      "candidate_sha256": "9253d54b2e6a274d21684203b356a40156cd9476b1f6d5aa3993af0185fe76f4"
     }
   },
   "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",
   "replay_patch": "required-common-fixes.patch",
   "local_changes": [
-    "Typed thermal device registration for Xiaomi thermal policy ABI"
+    "Typed thermal device registration for Xiaomi thermal policy ABI",
+    "Qualcomm CSR helper subtype for native ETR ATID routing"
   ],
   "integrated_upstream": []
 }
