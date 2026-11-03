@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "module": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T143610269701Z/platform/qcom_cpuss_sleep_stats.ko",
+  "source_sha256": "f1b5378b99f40caa6010e398daab8d51773980451cc2da5f632be4c598e753a7",
+  "module_verification": [
+    {
+      "module": "qcom_cpuss_sleep_stats.ko",
+      "sha256": "79dd229e4b7740b6af2c71a43a5420f5974e511173b6e8d8b10d789fe152193a",
+      "vermagic": "6.18.38-android17-5-maybe-dirty-4k SMP preempt mod_unload modversions aarch64",
+      "imports_checked": 40,
+      "depends": "qcom-scm",
+      "aliases": [
+        "of:N*T*Cqcom,cpuss-sleep-stats",
+        "of:N*T*Cqcom,cpuss-sleep-statsC*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2C*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3C*"
+      ]
+    }
+  ],
+  "kernel_built": true,
+  "production_integrated": true,
+  "runtime_module_artifact": "Standalone module in runtime-load-validation.json; production DLKM images not installed"
+}

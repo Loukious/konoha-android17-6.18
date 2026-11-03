@@ -1487,5 +1487,9 @@
   {
     "target": "qcom_cpuss_sleep_stats_v4",
     "output": "qcom_cpuss_sleep_stats_v4.ko"
+  },
+  {
+    "target": "qcom_cpuss_sleep_stats",
+    "output": "qcom_cpuss_sleep_stats.ko"
   }
 ]

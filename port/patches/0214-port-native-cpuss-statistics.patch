@@ -1,0 +1,606 @@
+--- a/drivers/soc/qcom/qcom_cpuss_sleep_stats.c
++++ b/drivers/soc/qcom/qcom_cpuss_sleep_stats.c
+@@ -5,6 +5,9 @@
+  */
+ 
+ #include <asm/cputype.h>
++#include <asm/smp.h>
++#include <linux/uaccess.h>
++#include <linux/limits.h>
+ #include <linux/debugfs.h>
+ #include <linux/device.h>
+ #include <linux/init.h>
+@@ -17,7 +20,7 @@
+ 
+ #define MAX_POSSIBLE_CPUS	8
+ #define MIN_POSSIBLE_CPUS	1
+-#define SEQ_LPM_STR_SZ		22
++#define SEQ_LPM_STR_SZ		24
+ #define CPUNAME_SZ		6
+ #define STATS_NAME_SZ		25
+ #define OFFSET_8BYTES		0x08
+@@ -40,7 +43,7 @@
+ 	APSS_LPM_RESIDENCY_C4_D4_CNTR_n,
+ };
+ 
+-static u32 qcom_cpuss_cntr_v1_offsets[] = {
++static const u32 qcom_cpuss_cntr_v1_offsets[] = {
+ 	[APSS_LPM_COUNTER_CPUx_C1_LO_VAL]	=	0x8000,
+ 	[APSS_LPM_COUNTER_CPUx_C2D_LO_VAL]	=	0x8048,
+ 	[APSS_LPM_COUNTER_CPUx_C3_LO_VAL]	=	0x8090,
+@@ -52,7 +55,7 @@
+ 	[APSS_LPM_RESIDENCY_C4_D4_CNTR_n]	=	0xC0D0,
+ };
+ 
+-static u32 qcom_cpuss_cntr_v2_offsets[] = {
++static const u32 qcom_cpuss_cntr_v2_offsets[] = {
+ 	[APSS_LPM_COUNTER_CPUx_C1_LO_VAL]	=	0x8000,
+ 	[APSS_LPM_COUNTER_CPUx_C2D_LO_VAL]	=	0x8028,
+ 	[APSS_LPM_COUNTER_CPUx_C3_LO_VAL]	=	0x8050,
+@@ -65,7 +68,7 @@
+ };
+ 
+ 
+-static u32 qcom_cpuss_cntr_v3_offsets[] = {
++static const u32 qcom_cpuss_cntr_v3_offsets[] = {
+ 	[APSS_LPM_COUNTER_CPUx_C1_LO_VAL]	=	0x8000,
+ 	[APSS_LPM_COUNTER_CPUx_C2D_LO_VAL]	=	0x8038,
+ 	[APSS_LPM_COUNTER_CPUx_C3_LO_VAL]	=	0x8070,
+@@ -138,10 +141,11 @@
+ 	phys_addr_t per_cpu_lpm_cfg[MAX_POSSIBLE_CPUS];
+ 	u32 per_cpu_lpm_cfg_size[MAX_POSSIBLE_CPUS];
+ 	phys_addr_t apss_seq_mem_base;
+-	u32 apss_seq_mem_size;
++	resource_size_t apss_seq_mem_size;
++	void __iomem *apss_base;
+ 	phys_addr_t l3_seq_lpm_cfg;
+ 	u32 l3_seq_lpm_size;
+-	u32 *offsets;
++	const u32 *offsets;
+ 	u8 cpu_pcpu_map[MAX_POSSIBLE_CPUS];
+ 	struct qcom_cpuss_stats complete_stats;
+ 
+@@ -150,6 +154,73 @@
+ 	struct dentry *cl_rootdir;
+ 	struct mutex stats_reset_lock;
+ };
++
++static int qcom_cpuss_create_file(const char *name, umode_t mode,
++                                  struct dentry *parent, void *data,
++                                  const struct file_operations *fops)
++{
++	struct dentry *file = debugfs_create_file(name, mode, parent, data, fops);
++
++	if (IS_ERR_OR_NULL(file))
++		return file ? PTR_ERR(file) : -ENOMEM;
++	return 0;
++}
++
++static bool qcom_cpuss_offset_valid(struct qcom_target_info *info,
++                                  u64 offset, size_t width)
++{
++	return width <= info->apss_seq_mem_size &&
++		offset <= info->apss_seq_mem_size - width;
++}
++
++static int qcom_cpuss_validate_offsets(struct qcom_target_info *info)
++{
++	int cpu, bit;
++	u64 offset;
++
++	for (cpu = 0; cpu < info->ncpu; cpu++) {
++		if (!qcom_cpuss_offset_valid(info,
++		    (u64)info->offsets[APSS_CPU_LPM_RESIDENCY_CNTR_CFG_n] + 4 * cpu, 4))
++			return -EINVAL;
++		for (bit = 0; bit < MAX_CPU_LPM_BITS; bit++) {
++			offset = (u64)info->offsets[APSS_LPM_COUNTER_CPUx_C1_LO_VAL + bit] + 8 * cpu;
++			if (!qcom_cpuss_offset_valid(info, offset, 8))
++				return -EINVAL;
++		}
++		for (bit = 0; bit < 3; bit++) {
++			offset = (u64)info->offsets[APSS_LPM_RESIDENCY_C2_D2_CNTR_n + bit] + 8 * cpu;
++			if (!qcom_cpuss_offset_valid(info, offset, 8))
++				return -EINVAL;
++		}
++	}
++	if (!qcom_cpuss_offset_valid(info, info->offsets[APSS_CL_LPM_RESIDENCY_CNTR_CFG], 4))
++		return -EINVAL;
++	for (bit = 0; bit < MAX_CL_LPM_BITS; bit++) {
++		offset = (u64)info->offsets[APSS_LPM_COUNTER_CPUx_C1_LO_VAL + bit] + 8 * info->ncpu;
++		if (!qcom_cpuss_offset_valid(info, offset, 8))
++			return -EINVAL;
++	}
++	for (bit = 0; bit < 3; bit += 2) {
++		offset = (u64)info->offsets[APSS_LPM_RESIDENCY_C2_D2_CNTR_n + bit] + 8 * info->ncpu;
++		if (!qcom_cpuss_offset_valid(info, offset, 8))
++			return -EINVAL;
++	}
++	return 0;
++}
++
++static bool qcom_cpuss_cfg_resource_valid(const struct resource *res)
++{
++	return res->end >= res->start && !(res->start & 3) &&
++		resource_size(res) >= sizeof(u32);
++}
++
++static void qcom_cpuss_cleanup(void *data)
++{
++	struct qcom_target_info *info = data;
++
++	debugfs_remove_recursive(info->stats_rootdir);
++	info->stats_rootdir = NULL;
++}
+ 
+ static char *get_str_cpu_lpm_state(u8 state)
+ {
+@@ -210,7 +281,7 @@
+ 
+ }
+ 
+-static int get_cpu_lpm_read_offset(u8 cpu, u8 cpu_mode, u32 *regs)
++static int get_cpu_lpm_read_offset(u8 cpu, u8 cpu_mode, const u32 *regs)
+ {
+ 	int offset;
+ 
+@@ -235,7 +306,7 @@
+ 	return offset;
+ }
+ 
+-static int get_cpu_residency_read_offset(u8 cpu, u8 cpu_res_cfg, u32 *regs)
++static int get_cpu_residency_read_offset(u8 cpu, u8 cpu_res_cfg, const u32 *regs)
+ {
+ 	int offset;
+ 
+@@ -257,7 +328,7 @@
+ 	return offset;
+ }
+ 
+-static int get_cl_residency_read_offset(int ncpu, u8 cl_res_cfg, u32 *regs)
++static int get_cl_residency_read_offset(int ncpu, u8 cl_res_cfg, const u32 *regs)
+ {
+ 	int offset;
+ 
+@@ -276,7 +347,7 @@
+ 	return offset;
+ }
+ 
+-static int get_cl_lpm_read_offset(int ncpu, u8 cl_mode, u32 *regs)
++static int get_cl_lpm_read_offset(int ncpu, u8 cl_mode, const u32 *regs)
+ {
+ 	int offset;
+ 
+@@ -353,27 +424,20 @@
+ 	return 0;
+ error:
+ 	pr_err("Cannot reset lpm hw count and residency\n");
+-	return -EINVAL;
+-}
+-
+-static bool check_val(const char __user *in, size_t count)
+-{
+-	char buffer[2] = {0};
+-	int ret;
+-
+-	if (count <= 1)
+-		return false;
+-
+-	if (count > sizeof(buffer))
+-		count = sizeof(buffer);
+-
+-	/* returns number of bytes not copied */
+-	ret = __arch_copy_from_user(buffer, in, count - 1);
+-
+-	if (ret == (count - 1))
++	return ret;
++}
++
++static int check_val(const char __user *in, size_t count)
++{
++	char buffer[2];
++
++	if (!count || count > sizeof(buffer))
++		return -EINVAL;
++	if (copy_from_user(buffer, in, count))
+ 		return -EFAULT;
+-
+-	return strcmp(buffer, "1") ? false : true;
++	if (buffer[0] != '1' || (count == 2 && buffer[1] != '\n'))
++		return -EINVAL;
++	return 0;
+ }
+ 
+ static ssize_t qcom_cpuss_stats_reset_write(struct file *file,
+@@ -384,14 +448,13 @@
+ 	int ncpu;
+ 	u8 i, j;
+ 	ssize_t ret;
+-	struct platform_device *pdev;
+ 
+ 	t_info = (struct qcom_target_info *)in->i_private;
+ 	ncpu = t_info->ncpu;
+-	pdev = t_info->pdev;
+-
+-	if (!check_val(buffer, count))
+-		return -EINVAL;
++
++	ret = check_val(buffer, count);
++	if (ret)
++		return ret;
+ 
+ 	/* Reset cpu LPM/Residencies */
+ 	mutex_lock(&t_info->stats_reset_lock);
+@@ -459,19 +522,20 @@
+ 					     u8 cpu, u32 lpm_cfg)
+ {
+ 	void __iomem *reg, *base;
+-	struct platform_device *pdev = t_info->pdev;
+ 	u32 offset;
+ 	int bit, ret;
+ 	char cpu_name[CPUNAME_SZ] = {0}, stats_name[STATS_NAME_SZ] = {0}, *state;
+ 
++	if (cpu >= MAX_POSSIBLE_CPUS)
++		return -EINVAL;
+ 	snprintf(cpu_name, sizeof(cpu_name), "pcpu%u", cpu);
+ 	t_info->cpu_dir[cpu] = debugfs_create_dir(cpu_name,
+ 						  t_info->stats_rootdir);
+ 
+-	base = devm_ioremap(&pdev->dev, t_info->apss_seq_mem_base,
+-			    t_info->apss_seq_mem_size);
+-	if (!base)
+-		return -ENOMEM;
++	if (IS_ERR_OR_NULL(t_info->cpu_dir[cpu]))
++		return t_info->cpu_dir[cpu] ? PTR_ERR(t_info->cpu_dir[cpu]) : -ENOMEM;
++
++	base = t_info->apss_base;
+ 
+ 	for (bit = 0; bit < MAX_CPU_LPM_BITS; bit++) {
+ 		if (lpm_cfg & BIT(bit)) {
+@@ -482,10 +546,12 @@
+ 			reg = base + offset;
+ 			state = get_str_cpu_lpm_state(1 << bit);
+ 			if (state) {
+-				debugfs_create_file(state, 0444,
++				ret = qcom_cpuss_create_file(state, 0444,
+ 						    t_info->cpu_dir[cpu],
+ 						    (void *) reg,
+ 						    &qcom_cpuss_sleep_stats_fops);
++				if (ret)
++					return ret;
+ 				snprintf(stats_name, sizeof(stats_name),
+ 					 "pcpu%u: %s", cpu, state);
+ 				ret = store_stats_data(t_info, stats_name, reg);
+@@ -502,19 +568,15 @@
+ 						u32 cl_cfg)
+ {
+ 	void __iomem *reg, *base;
+-	struct platform_device *pdev = t_info->pdev;
+ 	u32 offset;
+ 	int bit, ret;
+ 	char *state;
+ 
+ 	t_info->cl_rootdir = debugfs_create_dir("L3", t_info->stats_rootdir);
+-	if (!t_info->cl_rootdir)
+-		return -ENOMEM;
+-
+-	base = devm_ioremap(&pdev->dev, t_info->apss_seq_mem_base,
+-			    t_info->apss_seq_mem_size);
+-	if (!base)
+-		return -ENOMEM;
++	if (IS_ERR_OR_NULL(t_info->cl_rootdir))
++		return t_info->cl_rootdir ? PTR_ERR(t_info->cl_rootdir) : -ENOMEM;
++
++	base = t_info->apss_base;
+ 
+ 	for (bit = 0; bit < MAX_CL_LPM_BITS; bit++) {
+ 		if (cl_cfg & BIT(bit)) {
+@@ -525,10 +587,12 @@
+ 			reg = base + offset;
+ 			state = get_str_cl_lpm_state(1 << bit);
+ 			if (state) {
+-				debugfs_create_file(state, 0444,
++				ret = qcom_cpuss_create_file(state, 0444,
+ 						    t_info->cl_rootdir,
+ 						    (void *) reg,
+ 						    &qcom_cpuss_sleep_stats_fops);
++				if (ret)
++					return ret;
+ 				ret = store_stats_data(t_info, state, reg);
+ 				if (ret)
+ 					return ret;
+@@ -543,15 +607,11 @@
+ 						u8 cpu, u32 residency_cfg)
+ {
+ 	void __iomem *reg, *base;
+-	struct platform_device *pdev = t_info->pdev;
+ 	u32 offset;
+ 	int bit, ret;
+ 	char stats_name[STATS_NAME_SZ] = {0}, *state;
+ 
+-	base = devm_ioremap(&pdev->dev, t_info->apss_seq_mem_base,
+-			    t_info->apss_seq_mem_size);
+-	if (!base)
+-		return -ENOMEM;
++	base = t_info->apss_base;
+ 
+ 	for (bit = 0; bit < MAX_CPU_RESIDENCY_BITS; bit += 2) {
+ 		if (residency_cfg & BIT(bit)) {
+@@ -562,10 +622,12 @@
+ 			reg = base + offset;
+ 			state = get_str_cpu_res(1 << bit);
+ 			if (state) {
+-				debugfs_create_file(state, 0444,
++				ret = qcom_cpuss_create_file(state, 0444,
+ 						    t_info->cpu_dir[cpu],
+ 						    (void *) reg,
+ 						    &qcom_cpuss_sleep_stats_fops);
++				if (ret)
++					return ret;
+ 				snprintf(stats_name, sizeof(stats_name),
+ 					 "pcpu%u: %s", cpu, state);
+ 				ret = store_stats_data(t_info, stats_name, reg);
+@@ -582,7 +644,6 @@
+ 						u32 cl_residency_cfg)
+ {
+ 	void __iomem *reg;
+-	struct platform_device *pdev = t_info->pdev;
+ 	u32 offset;
+ 	int bit, ret;
+ 	char *state;
+@@ -594,15 +655,14 @@
+ 			if (offset == -EINVAL)
+ 				return offset;
+ 
+-		reg = devm_ioremap(&pdev->dev, t_info->apss_seq_mem_base +
+-				   offset, 0x4);
+-		if (!reg)
+-			return -ENOMEM;
++		reg = t_info->apss_base + offset;
+ 		state = get_str_cl_res(1 << bit);
+ 		if (state) {
+-			debugfs_create_file(state, 0444, t_info->cl_rootdir,
++			ret = qcom_cpuss_create_file(state, 0444, t_info->cl_rootdir,
+ 					    (void *) reg,
+ 					    &qcom_cpuss_sleep_stats_fops);
++			if (ret)
++				return ret;
+ 			ret = store_stats_data(t_info, state, reg);
+ 			if (ret)
+ 				return ret;
+@@ -629,7 +689,7 @@
+ 		addr = t_info->per_cpu_lpm_cfg[j];
+ 		ret = qcom_scm_io_readl(addr, &val);
+ 		if (ret)
+-			return -EINVAL;
++			return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read CPU config at %pa\n", &addr);
+ 
+ 		ret = qcom_cpuss_sleep_stats_create_cpu_debugfs(t_info, i, val);
+ 		if (ret)
+@@ -639,7 +699,7 @@
+ 		addr += (t_info->offsets[APSS_CPU_LPM_RESIDENCY_CNTR_CFG_n] + OFFSET_4BYTES * i);
+ 		ret = qcom_scm_io_readl(addr, &val);
+ 		if (ret)
+-			return -EINVAL;
++			return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read CPU config at %pa\n", &addr);
+ 
+ 		ret = qcom_cpuss_sleep_stats_create_cpu_residency_debugfs(t_info, i, val);
+ 		if (ret)
+@@ -650,7 +710,7 @@
+ 	addr = t_info->l3_seq_lpm_cfg;
+ 	ret = qcom_scm_io_readl(addr, &val);
+ 	if (ret)
+-		return -EINVAL;
++		return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read cluster config at %pa\n", &addr);
+ 
+ 	ret = qcom_cpuss_sleep_stats_create_cluster_debugfs(t_info, val);
+ 	if (ret)
+@@ -660,110 +720,111 @@
+ 	addr = t_info->apss_seq_mem_base + t_info->offsets[APSS_CL_LPM_RESIDENCY_CNTR_CFG];
+ 	ret = qcom_scm_io_readl(addr, &val);
+ 	if (ret)
++		return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read cluster config at %pa\n", &addr);
++
++	ret = qcom_cpuss_sleep_stats_create_cl_residency_debugfs(t_info, val);
++
++	return ret;
++}
++
++static int qcom_cpuss_sleep_stats_probe(struct platform_device *pdev)
++{
++	struct qcom_target_info *info;
++	struct resource *res;
++	u32 ncpu;
++	u64 mpidr;
++	unsigned int seen = 0;
++	int cpu, pcpu, ret;
++
++	ret = of_property_read_u32(pdev->dev.of_node, "num-cpus", &ncpu);
++	if (ret)
++		return ret;
++	if (ncpu < MIN_POSSIBLE_CPUS || ncpu > MAX_POSSIBLE_CPUS)
+ 		return -EINVAL;
+-
+-	ret = qcom_cpuss_sleep_stats_create_cl_residency_debugfs(t_info, val);
+-
+-	return ret;
+-}
+-
+-static void get_mpidr_cpu(void *cpu)
+-{
+-	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
+-
+-	*((uint32_t *)cpu) = MPIDR_AFFINITY_LEVEL(mpidr, 1);
+-}
+-
+-static int qcom_cpuss_sleep_stats_probe(struct platform_device *pdev)
+-{
+-	int ret;
+-	struct dentry *root_dir;
+-	struct qcom_target_info *t_info;
+-	struct resource *res;
+-	int cpu, pcpu;
+-
+-	t_info = devm_kzalloc(&pdev->dev, sizeof(struct qcom_target_info),
+-			      GFP_KERNEL);
+-	if (!t_info)
++	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
++	if (!info)
+ 		return -ENOMEM;
+-
+-	INIT_LIST_HEAD(&t_info->complete_stats.node);
+-
+-	root_dir = debugfs_create_dir("qcom_cpuss_sleep_stats", NULL);
+-	t_info->stats_rootdir = root_dir;
+-	t_info->pdev = pdev;
+-
+-	memset(t_info->cpu_pcpu_map, U8_MAX, MAX_POSSIBLE_CPUS);
+-	/* Get cfg address for cpu/cluster */
++	info->pdev = pdev;
++	info->ncpu = ncpu;
++	info->offsets = device_get_match_data(&pdev->dev);
++	if (!info->offsets)
++		return -ENODEV;
++	INIT_LIST_HEAD(&info->complete_stats.node);
++	mutex_init(&info->stats_reset_lock);
++	memset(info->cpu_pcpu_map, U8_MAX, sizeof(info->cpu_pcpu_map));
+ 	for_each_possible_cpu(cpu) {
+-		char reg_name[SEQ_LPM_STR_SZ] = {0};
+-
+-		smp_call_function_single(cpu, get_mpidr_cpu, &pcpu, true);
+-		snprintf(reg_name, sizeof(reg_name), "seq_lpm_cntr_cfg_cpu%u",
+-			 pcpu);
+-		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+-						   reg_name);
++		char reg_name[SEQ_LPM_STR_SZ];
++
++		if (cpu >= MAX_POSSIBLE_CPUS)
++			return dev_err_probe(&pdev->dev, -EINVAL, "Logical CPU %d exceeds native capacity\n", cpu);
++		/* The boot-time MPIDR map is valid for offline CPUs too. */
++		mpidr = cpu_logical_map(cpu);
++		if (mpidr == U64_MAX)
++			return dev_err_probe(&pdev->dev, -EINVAL, "Invalid MPIDR map for CPU %d\n", cpu);
++		pcpu = MPIDR_AFFINITY_LEVEL(mpidr, 1);
++		if (pcpu >= MAX_POSSIBLE_CPUS || pcpu >= info->ncpu)
++			return dev_err_probe(&pdev->dev, -EINVAL, "Physical CPU %d exceeds native count\n", pcpu);
++		snprintf(reg_name, sizeof(reg_name), "seq_lpm_cntr_cfg_cpu%u", pcpu);
++		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, reg_name);
+ 		if (!res)
+ 			continue;
+-
+-		t_info->cpu_pcpu_map[cpu] = pcpu;
+-		t_info->per_cpu_lpm_cfg[cpu] = res->start;
+-		t_info->per_cpu_lpm_cfg_size[cpu] = resource_size(res);
+-	}
+-
+-	res =  platform_get_resource_byname(pdev, IORESOURCE_MEM,
+-					    "apss_seq_mem_base");
++		if (pcpu >= info->ncpu || (seen & BIT(pcpu)) ||
++		    !qcom_cpuss_cfg_resource_valid(res))
++			return dev_err_probe(&pdev->dev, -EINVAL, "Duplicate CPU %d or invalid config resource %pr\n", pcpu, res);
++		seen |= BIT(pcpu);
++		info->cpu_pcpu_map[cpu] = pcpu;
++		info->per_cpu_lpm_cfg[cpu] = res->start;
++		info->per_cpu_lpm_cfg_size[cpu] = sizeof(u32);
++	}
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "apss_seq_mem_base");
+ 	if (!res)
+ 		return -ENODEV;
+-
+-	t_info->apss_seq_mem_base = res->start;
+-	t_info->apss_seq_mem_size = resource_size(res);
+-
+-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+-					   "l3_seq_lpm_cntr_cfg");
++	if (!qcom_cpuss_cfg_resource_valid(res))
++		return dev_err_probe(&pdev->dev, -EINVAL, "Invalid native stats resource %pr\n", res);
++	info->apss_seq_mem_base = res->start;
++	info->apss_seq_mem_size = resource_size(res);
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "l3_seq_lpm_cntr_cfg");
+ 	if (!res)
+ 		return -ENODEV;
+-
+-	t_info->l3_seq_lpm_cfg = res->start;
+-	t_info->l3_seq_lpm_size = resource_size(res);
+-
+-	of_property_read_u32(pdev->dev.of_node, "num-cpus", &t_info->ncpu);
+-	if (t_info->ncpu < MIN_POSSIBLE_CPUS ||  t_info->ncpu > MAX_POSSIBLE_CPUS)
+-		return -EINVAL;
+-
+-	t_info->offsets = (u32 *)device_get_match_data(&pdev->dev);
+-	if (!t_info->offsets)
+-		return -ENODEV;
+-
+-	/*
+-	 * Function to read cfgs register to know lpm stats per cpu/cluster and
+-	 * create debugfs
+-	 */
+-	ret = qcom_cpuss_read_lpm_and_residency_cfg_informaion(t_info);
++	if (!qcom_cpuss_cfg_resource_valid(res))
++		return dev_err_probe(&pdev->dev, -EINVAL, "Invalid native stats resource %pr\n", res);
++	info->l3_seq_lpm_cfg = res->start;
++	info->l3_seq_lpm_size = sizeof(u32);
++	ret = qcom_cpuss_validate_offsets(info);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "Native counter offsets exceed APSS window\n");
++	info->apss_base = devm_ioremap(&pdev->dev, info->apss_seq_mem_base,
++				      info->apss_seq_mem_size);
++	if (!info->apss_base)
++		return -ENOMEM;
++	info->stats_rootdir = debugfs_create_dir("qcom_cpuss_sleep_stats", NULL);
++	if (IS_ERR_OR_NULL(info->stats_rootdir))
++		return info->stats_rootdir ? PTR_ERR(info->stats_rootdir) : -ENOMEM;
++	ret = qcom_cpuss_read_lpm_and_residency_cfg_informaion(info);
++	if (ret)
++		goto cleanup;
++	ret = qcom_cpuss_create_file("stats", 0444, info->stats_rootdir,
++				    &info->complete_stats.node, &qcom_cpuss_all_stats_fops);
++	if (ret)
++		goto cleanup;
++	ret = qcom_cpuss_create_file("reset", 0220, info->stats_rootdir,
++				    info, &qcom_cpuss_stats_reset_fops);
++	if (ret)
++		goto cleanup;
++	/* Registered last: debugfs drains before any devres-backed data is freed. */
++	ret = devm_add_action_or_reset(&pdev->dev, qcom_cpuss_cleanup, info);
+ 	if (ret)
+ 		return ret;
+-
+-	debugfs_create_file("stats", 0444, root_dir,
+-				(void *) &t_info->complete_stats.node,
+-				&qcom_cpuss_all_stats_fops);
+-
+-	/* Debugfs to reset all LPM and residency */
+-	mutex_init(&t_info->stats_reset_lock);
+-	debugfs_create_file("reset", 0220, root_dir, (void *) t_info,
+-			    &qcom_cpuss_stats_reset_fops);
+-
+-	platform_set_drvdata(pdev, root_dir);
+-
++	platform_set_drvdata(pdev, info);
++	return 0;
++cleanup:
++	qcom_cpuss_cleanup(info);
+ 	return ret;
+ }
+ 
+-static int qcom_cpuss_sleep_stats_remove(struct platform_device *pdev)
+-{
+-	struct dentry *root = platform_get_drvdata(pdev);
+-
+-	debugfs_remove_recursive(root);
+-
+-	return 0;
++static void qcom_cpuss_sleep_stats_remove(struct platform_device *pdev)
++{
++	qcom_cpuss_cleanup(platform_get_drvdata(pdev));
+ }
+ 
+ static const struct of_device_id qcom_cpuss_stats_table[] = {
+@@ -782,6 +843,7 @@
+ 	},
+ };
+ 
++MODULE_DEVICE_TABLE(of, qcom_cpuss_stats_table);
+ module_platform_driver(qcom_cpuss_sleep_stats);
+ 
+ MODULE_DESCRIPTION("Qualcomm Technologies, Inc. (QTI) CPUSS sleep stats driver");

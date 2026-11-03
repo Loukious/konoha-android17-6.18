@@ -1490,3 +1490,7 @@ config QCOM_GLINK_PKT
 config QCOM_CPUSS_SLEEP_STATS_V4
 	tristate "Onyx native CPUSS v4 sleep statistics"
 	depends on OF && DEBUG_FS
+
+config QCOM_CPUSS_SLEEP_STATS
+	tristate "Onyx native CPUSS sleep statistics"
+	depends on OF && DEBUG_FS && QCOM_SCM

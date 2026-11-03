@@ -80,6 +80,7 @@ def main():
         "glink_pkt": "verify_glink_pkt",
         "wlan_wiphy_lock": "verify_wlan_wiphy_lock",
         "cpuss_v4": "verify_cpuss_v4",
+        "cpuss_native": "verify_cpuss_native",
     }
     provider_validations = {}
     for name, verifier in provider_verifiers.items():
