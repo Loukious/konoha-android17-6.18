@@ -56,8 +56,15 @@ The failure-injection cases exercise CSR routing/refcounts/restoration, stream
 overrun boundaries, TPDM capability/index bounds, reverse request/monitor errors,
 VFE lookup bounds and the precise statistics errno. They do not establish
 hardware trace timing, authenticated reverse power transfer or camera behavior.
-The phone still runs the prior 350-module artifact; this candidate has not been
-installed. Runtime results from that prior artifact are baseline evidence only.
+The 352-module artifact was installed on 2026-11-03. All six partition readbacks,
+the kernel build ID and selected module build IDs match. Android completed boot
+with SELinux enforcing and mi_thermald running. Statistics ABI and thermal
+regression checks pass; the bounded startup capture reports no CPU warnings,
+BUGs, panics, page allocation failures or refcount warnings. Both CSR devices,
+both byte-counter devices and four trace-NoC devices are present. Camera service
+enumerates seven devices and two public cameras; the removed CCI scheduler calls
+produce no sys_nice denial in this capture. Streaming and trace timing still need
+their own hardware checks.
 
 ## ROM and firmware findings: notes only
 

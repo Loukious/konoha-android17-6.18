@@ -4233,6 +4233,7 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mca_vbat_ovp_monitor",
         ":mpam",
         ":cpu_mpam",
         ":platform_mpam",
@@ -4984,4 +4985,15 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers"],
+)
+
+
+ddk_module(
+    name = "mca_vbat_ovp_monitor",
+    srcs = ["drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c", "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h"],
+    out = "mca_vbat_ovp_monitor.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_mca_headers", ":mca_headers", ":mca_sysfs", ":mca_log", ":mca_hwid", ":mca_parse_dts", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_wireless_class", ":mca_event"],
 )

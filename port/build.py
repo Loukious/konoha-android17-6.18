@@ -49,6 +49,10 @@ def main():
     platform_validation = verify_platform_providers(workspace / "onyx")
     (artifacts / "platform-providers-host-validation.json").write_text(
         json.dumps(platform_validation, indent=2) + "\n")
+    from verify_vbat_ovp import verify as verify_vbat_ovp
+    vbat_validation = verify_vbat_ovp(workspace / "onyx")
+    (artifacts / "vbat-ovp-host-validation.json").write_text(
+        json.dumps(vbat_validation, indent=2) + "\n")
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -108,7 +112,7 @@ def main():
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
                  "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
-                 "qdss_diagnostic.py", "common_fixes.py",
+                 "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
         shutil.copyfile(HERE / name, inputs / name)
     shutil.copytree(HERE / "patches", inputs / "patches")
@@ -146,6 +150,7 @@ def main():
         "mi_thermal_host_validation": thermal_validation,
         "device_services_host_validation": services_validation,
         "platform_providers_host_validation": platform_validation,
+        "vbat_ovp_host_validation": vbat_validation,
         "devicetree_verification": {
             "overlay_engines_agree": dt_report["overlay_engines_agree"],
             "bootloader_ids_preserved": dt_report["bootloader_ids_preserved"],

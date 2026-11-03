@@ -1,5 +1,5 @@
 {
-  "BUILD.bazel": "a9bbc2f7ca75a22001cd063a082be534a074bc9d52e96762159f44f867d6471a",
+  "BUILD.bazel": "aaddcb5f1d3d11a541e31b9999e0cadb43742cb2934b85f13526ad42288d7a81",
   "Kconfig": "55e1eb6330054633749bfba67ce6f0c3a446db121d136cf1d2001656e8adb87b",
   "arch/arm64/gunyah/gh_arm.c": "86e4188905ab0131e0b0aba85e5ffe7f7635ddf48ce61f73c3b1232014fb22f9",
   "arch/arm64/gunyah/irq.c": "715d258645ae536e0569d77a125db872ffd61434410439212aae10617661f3a2",
@@ -4970,5 +4970,7 @@
   "sound/usb/usb_audio_qmi_svc.c": "ac87db6b4ffcd33582349a7228864f06f33a77a95dbc029d0af0639d05257297",
   "sound/usb/usb_audio_qmi_v01.c": "84615788dd3636c3a812e5398951a435f7323a260a44714303b44874b13d0588",
   "sound/usb/usb_audio_qmi_v01.h": "130dd06757d1f463e93a0ca80a8ea718532bf190abad2726da69099e4fd89e55",
-  "sound/usb/usbaudio.h": "0803749fa4cc4e7785120397f3a8176e31573a56bcf1e5522c2fa2a90f96e08e"
+  "sound/usb/usbaudio.h": "0803749fa4cc4e7785120397f3a8176e31573a56bcf1e5522c2fa2a90f96e08e",
+  "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h": "2fbde5d8f65976240934a322bc601bc5c1fa3ae1bcf08ee5ab66f0059eddd83a",
+  "drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c": "7aca35e55b16bc7213fa6ce8dddcfcd4ff09be66909bec57b79e130933d858c7"
 }

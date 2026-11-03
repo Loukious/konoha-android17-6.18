@@ -29897,5 +29897,17 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/hwtracing/coresight/coresight-byte-cntr.c",
     "blob": "7a169bf8f52dc2b513c404989ce8aeb3452f1f52"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c",
+    "blob": "ceb4e90ed60255e98a13d90dad92e774aad11797"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h",
+    "blob": "6b52e4a25d0339b6de43fe4d4eccb74a1213f6bb"
   }
 ]

@@ -1407,5 +1407,9 @@
   {
     "target": "coresight_trace_noc",
     "output": "coresight-trace-noc.ko"
+  },
+  {
+    "target": "mca_vbat_ovp_monitor",
+    "output": "mca_vbat_ovp_monitor.ko"
   }
 ]

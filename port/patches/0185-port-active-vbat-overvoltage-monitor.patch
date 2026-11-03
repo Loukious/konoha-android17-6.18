@@ -1,0 +1,474 @@
+--- a/drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c
++++ b/drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c
+@@ -26,6 +26,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/err.h>
+ #include <linux/platform_device.h>
++#include <linux/mutex.h>
+ #include <mca/common/mca_parse_dts.h>
+ #include "inc/mca_vbat_ovp_monitor.h"
+ #include <mca/common/mca_sysfs.h>
+@@ -45,122 +46,101 @@
+ #define FAST_HEARTBEAT_TIMER_MS 10000
+ #define NORMAL_HEARTBEAT_TIMER_MS 60000
+ 
++/* Called with info->lock held. A failed observation cannot clear a fault. */
+ static int mca_vbat_mon_get_vbat_ovp_status(struct mca_vbat_ovp_mon_dev *info)
+ {
+-	int ret;
+-	int vbat_now_mv, temp;
+-	int usb_online = 0, wireless_online = 0, vbat_ovp_threshold_mv;
+-	int ffc_sts;
+-	static int vbat_ovp_triggered = 0;
+-
+-	if (!info)
+-		return 0;
+-
+-	/* parallel fg to do, now only support single 1S/2S(also have single fg) battery */
+-	if (info->fg_type > MCA_FG_TYPE_SINGLE_NUM_MAX)
+-		return 0;
+-
+-	(void)strategy_class_fg_ops_get_temperature(&temp);
+-	/* no need to monitor vbat ovp when batt temp >= 48 degree*/
++	int ret, vbat_now_mv, temp, ffc_sts, threshold;
++	int usb_online = 0, wireless_online = 0;
++
++	ret = strategy_class_fg_ops_get_temperature(&temp);
++	if (ret)
++		return ret;
+ 	if (temp >= 480)
+-		return 0;
+-	(void)strategy_class_fg_ops_get_voltage(&vbat_now_mv);
++		return info->triggered;
++	ret = strategy_class_fg_ops_get_voltage(&vbat_now_mv);
++	if (ret)
++		return ret;
++	if (vbat_now_mv <= 0)
++		return -ENODATA;
+ 	ret = platform_class_buckchg_ops_get_online(MAIN_BUCK_CHARGER,
+ 						    &usb_online);
+-	ret |= platform_class_wireless_is_present(WIRELESS_ROLE_MASTER,
++	if (ret)
++		return ret;
++	if (!usb_online && info->has_wireless) {
++		ret = platform_class_wireless_is_present(WIRELESS_ROLE_MASTER,
+ 						  &wireless_online);
+-
+-	if (ret) {
++		if (ret)
++			return ret;
++	}
++	if (!usb_online && !wireless_online) {
++		info->triggered = false;
+ 		return 0;
+-	} else {
+-		/* no need to monitor when power absent */
+-		if (!usb_online && !wireless_online) {
+-			return 0;
+-		} else {
+-			ffc_sts = strategy_class_fg_get_fastcharge();
+-			if (ffc_sts)
+-				vbat_ovp_threshold_mv =
+-					info->vbat_ovp_thr_ffr_mv;
+-			else
+-				vbat_ovp_threshold_mv =
+-					info->vbat_ovp_thr_nor_mv;
+-			if (info->fake_vbat_override_mv > 0)
+-				vbat_now_mv = info->fake_vbat_override_mv;
+-			mca_log_info(
+-				"vbat_now_mv = %d, vbat_ovp_triggered: %d\n",
+-				vbat_now_mv, vbat_ovp_triggered);
+-			if (!vbat_ovp_triggered &&
+-			    vbat_now_mv > vbat_ovp_threshold_mv +
+-						  info->vbat_ovp_thr_hys_mv) {
+-				vbat_ovp_triggered = 1;
+-				mca_log_err(
+-					"vbat ovp triggered: vbat_ovp_triggered = %d\n",
+-					vbat_ovp_triggered);
+-				return 1;
+-			} else if (vbat_ovp_triggered &&
+-				   vbat_now_mv <=
+-					   vbat_ovp_threshold_mv -
+-						   info->vbat_ovp_recharge_delta_mv) {
+-				vbat_ovp_triggered = 0;
+-				mca_log_info(
+-					"vbat ovp cleared: vbat_ovp_triggered = %d\n",
+-					vbat_ovp_triggered);
+-				return 0;
+-			} else if (vbat_ovp_triggered) {
+-				return 1;
+-			}
+-		}
+-	}
+-
+-	return 0;
++	}
++	ffc_sts = strategy_class_fg_get_fastcharge();
++	if (ffc_sts < 0)
++		return ffc_sts;
++	threshold = ffc_sts ? info->vbat_ovp_thr_ffr_mv : info->vbat_ovp_thr_nor_mv;
++	if (info->fake_vbat_override_mv > 0)
++		vbat_now_mv = max(vbat_now_mv, info->fake_vbat_override_mv);
++	if (!info->triggered && vbat_now_mv > threshold + info->vbat_ovp_thr_hys_mv)
++		info->triggered = true;
++	else if (info->triggered && vbat_now_mv <= threshold - info->vbat_ovp_recharge_delta_mv)
++		info->triggered = false;
++	return info->triggered;
+ }
+ 
+ static void mca_vbat_ovp_monitor_workfunc(struct work_struct *work)
+ {
+ 	struct mca_vbat_ovp_mon_dev *info = container_of(
+ 		work, struct mca_vbat_ovp_mon_dev, monitor_vbat_ovp_work.work);
+-	int vbat_ovp_confirmed = 0;
+-	int interval = NORMAL_HEARTBEAT_TIMER_MS;
+-	int fake_vbat_ovp = 0;
+-
+-	mca_log_info("fake_vbat_for_debug = %d\n", info->fake_vbat_for_debug);
+-	if (info->fg_type == MCA_FG_TYPE_SINGLE_SERIES) {
+-		if (info->fake_vbat_for_debug > 9200)
+-			fake_vbat_ovp = 1;
+-		else
+-			fake_vbat_ovp = 0;
+-	} else {
+-		if (info->fake_vbat_for_debug > 4600)
+-			fake_vbat_ovp = 1;
+-		else
+-			fake_vbat_ovp = 0;
+-	}
+-
+-	if (info->fake_vbat_ovp_status != fake_vbat_ovp) {
+-		info->fake_vbat_ovp_status = fake_vbat_ovp;
+-		mca_log_err("fake_vbat_ovp = %d\n", fake_vbat_ovp);
++	int status, interval, notify_status;
++	bool notify = false;
++
++	mutex_lock(&info->lock);
++	if (info->stopping) {
++		mutex_unlock(&info->lock);
++		return;
++	}
++	status = mca_vbat_mon_get_vbat_ovp_status(info);
++	if (status >= 0) {
++		/* A debug trigger may assert protection, but cannot mask a real fault. */
++		info->fake_vbat_ovp_status = info->fake_vbat_for_debug > 4600;
++		status |= info->fake_vbat_ovp_status;
++		if (info->batt_ovp_status != status) {
++			info->batt_ovp_status = status;
++			notify_status = status;
++			notify = true;
++		}
++	}
++	interval = status < 0 || info->batt_ovp_status ?
++		FAST_HEARTBEAT_TIMER_MS : NORMAL_HEARTBEAT_TIMER_MS;
++	mutex_unlock(&info->lock);
++	if (notify)
+ 		mca_event_block_notify(MCA_EVENT_TYPE_HW_INFO,
+-				       MCA_EVENT_VBAT_OVP_CHANGE,
+-				       &info->fake_vbat_ovp_status);
+-		goto next;
+-	}
+-
+-	vbat_ovp_confirmed = mca_vbat_mon_get_vbat_ovp_status(info);
+-
+-	if (info->batt_ovp_status != vbat_ovp_confirmed) {
+-		info->batt_ovp_status = vbat_ovp_confirmed;
+-		mca_event_block_notify(MCA_EVENT_TYPE_HW_INFO,
+-				       MCA_EVENT_VBAT_OVP_CHANGE,
+-				       &info->batt_ovp_status);
+-	}
+-
+-	if (vbat_ovp_confirmed)
+-		interval = FAST_HEARTBEAT_TIMER_MS;
+-	else
+-		interval = NORMAL_HEARTBEAT_TIMER_MS;
+-next:
+-	schedule_delayed_work(&info->monitor_vbat_ovp_work,
+-			      msecs_to_jiffies(interval));
++				       MCA_EVENT_VBAT_OVP_CHANGE, &notify_status);
++	mutex_lock(&info->lock);
++	if (!info->stopping)
++		schedule_delayed_work(&info->monitor_vbat_ovp_work,
++				      msecs_to_jiffies(interval));
++	mutex_unlock(&info->lock);
++}
++
++/* Optional native settings use defaults; malformed values still fail probe. */
++static int vbat_ovp_read_u32(struct device_node *np, const char *name,
++			   int *value, u32 fallback)
++{
++	u32 parsed = fallback;
++	int ret;
++
++	if (of_find_property(np, name, NULL)) {
++		ret = of_property_read_u32(np, name, &parsed);
++		if (ret)
++			return ret;
++	}
++	if (parsed > 20000)
++		return -ERANGE;
++	*value = parsed;
++	return 0;
+ }
+ 
+ static int mca_vbat_ovp_mon_parse_dt(struct mca_vbat_ovp_mon_dev *info)
+@@ -168,34 +148,51 @@
+ 	struct device_node *np = info->dev->of_node;
+ 	int ret = 0;
+ 	const struct mca_hwid *hwid = mca_get_hwid_info();
++	struct device_node *charger;
++	u32 support_wls = 0;
+ 
+ 	if (!np) {
+ 		mca_log_err("device tree info missing\n");
+-		return -1;
++		return -EINVAL;
+ 	}
+ 
+ 	info->support_global_fv =
+ 		of_property_read_bool(np, "support_global_fv");
+-	ret = mca_parse_dts_u32(np, "vbat_ovp_threshold_ffc",
+-				&info->vbat_ovp_threshold_ffc_mv,
+-				VBAT_OVP_THR_FFC_DEFAULT_MV);
+-	ret |= mca_parse_dts_u32(np, "vbat_ovp_threshold_normal",
+-				 &info->vbat_ovp_threshold_normal_mv,
+-				 VBAT_OVP_THR_NORMAL_DEFAULT_UV);
+-	(void)mca_parse_dts_u32(np, "vbat_ovp_threshold_ffc_gl",
+-				&info->vbat_ovp_threshold_ffc_gl_mv,
+-				VBAT_OVP_THR_FFC_GL_DEFAULT_MV);
+-	(void)mca_parse_dts_u32(np, "vbat_ovp_threshold_normal_gl",
+-				&info->vbat_ovp_threshold_normal_gl_mv,
+-				VBAT_OVP_THR_NORMAL_GL_DEFAULT_UV);
+-	ret |= mca_parse_dts_u32(np, "vbat_ovp_threshold_hys",
+-				 &info->vbat_ovp_thr_hys_mv,
+-				 VBAT_OVP_THR_DEFAULT_HYS_MV);
+-	ret |= mca_parse_dts_u32(np, "vbat_ovp_recharge_delta",
+-				 &info->vbat_ovp_recharge_delta_mv,
+-				 VBAT_OVP_RECHARGE_DELTA_MV);
+-	ret |= mca_parse_dts_u32(np, "fg_type", &info->fg_type,
+-				 MCA_FG_TYPE_SINGLE);
++	{
++		struct {
++			const char *name;
++			int *value;
++			u32 fallback;
++		} fields[] = {
++			{ "vbat_ovp_threshold_ffc", &info->vbat_ovp_threshold_ffc_mv, VBAT_OVP_THR_FFC_DEFAULT_MV },
++			{ "vbat_ovp_threshold_normal", &info->vbat_ovp_threshold_normal_mv, VBAT_OVP_THR_NORMAL_DEFAULT_UV },
++			{ "vbat_ovp_threshold_ffc_gl", &info->vbat_ovp_threshold_ffc_gl_mv, VBAT_OVP_THR_FFC_GL_DEFAULT_MV },
++			{ "vbat_ovp_threshold_normal_gl", &info->vbat_ovp_threshold_normal_gl_mv, VBAT_OVP_THR_NORMAL_GL_DEFAULT_UV },
++			{ "vbat_ovp_threshold_hys", &info->vbat_ovp_thr_hys_mv, VBAT_OVP_THR_DEFAULT_HYS_MV },
++			{ "vbat_ovp_recharge_delta", &info->vbat_ovp_recharge_delta_mv, VBAT_OVP_RECHARGE_DELTA_MV },
++			{ "fg_type", &info->fg_type, MCA_FG_TYPE_SINGLE },
++		};
++		int i;
++
++		for (i = 0; i < ARRAY_SIZE(fields); i++) {
++			ret = vbat_ovp_read_u32(np, fields[i].name,
++					      fields[i].value, fields[i].fallback);
++			if (ret)
++				return ret;
++		}
++	}
++	if (info->fg_type != MCA_FG_TYPE_SINGLE)
++		return -EOPNOTSUPP;
++	if (info->support_global_fv && !hwid)
++		return -EPROBE_DEFER;
++	charger = of_find_compatible_node(NULL, NULL, "mca,business_charger");
++	if (!charger)
++		return -ENODEV;
++	ret = of_property_read_u32(charger, "support-wls", &support_wls);
++	info->has_wireless = of_device_is_available(charger) && support_wls;
++	of_node_put(charger);
++	if (ret)
++		return ret;
+ 
+ 	if (hwid && info->support_global_fv &&
+ 	    hwid->country_version != CountryCN) {
+@@ -207,7 +204,13 @@
+ 		info->vbat_ovp_thr_nor_mv = info->vbat_ovp_threshold_normal_mv;
+ 	}
+ 
+-	return ret;
++	if (!info->vbat_ovp_thr_ffr_mv || !info->vbat_ovp_thr_nor_mv ||
++	    info->vbat_ovp_thr_hys_mv >= info->vbat_ovp_thr_nor_mv ||
++	    info->vbat_ovp_thr_hys_mv >= info->vbat_ovp_thr_ffr_mv ||
++	    info->vbat_ovp_recharge_delta_mv >= info->vbat_ovp_thr_nor_mv ||
++	    info->vbat_ovp_recharge_delta_mv >= info->vbat_ovp_thr_ffr_mv)
++		return -EINVAL;
++	return 0;
+ }
+ 
+ static ssize_t vbat_ovp_sysfs_show(struct device *dev,
+@@ -243,11 +246,16 @@
+ 					  vbat_ovp_sysfs_field_tbl,
+ 					  VBAT_OVP_SYSFS_ATTRS_SIZE);
+ 	if (!attr_info)
+-		return -1;
++		return -EINVAL;
+ 
+ 	if (!info) {
+ 		mca_log_err("%s dev_driverdata is null\n", __func__);
+-		return -1;
++		return -EINVAL;
++	}
++	mutex_lock(&info->lock);
++	if (info->stopping) {
++		mutex_unlock(&info->lock);
++		return -ENODEV;
+ 	}
+ 	switch (attr_info->sysfs_attr_name) {
+ 	case FAKE_VBAT_FOR_DEBUG:
+@@ -261,6 +269,7 @@
+ 	default:
+ 		break;
+ 	}
++	mutex_unlock(&info->lock);
+ 	return count;
+ }
+ 
+@@ -276,37 +285,43 @@
+ 					  vbat_ovp_sysfs_field_tbl,
+ 					  VBAT_OVP_SYSFS_ATTRS_SIZE);
+ 	if (!attr_info)
+-		return -1;
++		return -EINVAL;
+ 
+ 	if (!info) {
+ 		mca_log_err("%s dev_driverdata is null\n", __func__);
+-		return -1;
++		return -EINVAL;
+ 	}
+ 
+ 	if (kstrtoint(buf, 10, &val))
+ 		return -EINVAL;
+-
++	if (val > 20000)
++		return -ERANGE;
++
++	mutex_lock(&info->lock);
++	if (info->stopping) {
++		mutex_unlock(&info->lock);
++		return -ENODEV;
++	}
+ 	switch (attr_info->sysfs_attr_name) {
+ 	case FAKE_VBAT_FOR_DEBUG:
+ 		info->fake_vbat_for_debug = val;
+ 		mca_log_err("set the %d fake vbat for debug = %d\n",
+ 			    attr_info->sysfs_attr_name, val);
+ 
+-		cancel_delayed_work(&info->monitor_vbat_ovp_work);
+-		schedule_delayed_work(&info->monitor_vbat_ovp_work, 0);
++		mod_delayed_work(system_wq, &info->monitor_vbat_ovp_work, 0);
+ 		break;
+ 	case FAKE_VBAT_OVERRIDE:
+ 		info->fake_vbat_override_mv = val;
+ 		mca_log_err("set the %d fake vbat override = %d\n",
+ 			    attr_info->sysfs_attr_name, val);
+ 
+-		cancel_delayed_work(&info->monitor_vbat_ovp_work);
+-		schedule_delayed_work(&info->monitor_vbat_ovp_work, 0);
++		mod_delayed_work(system_wq, &info->monitor_vbat_ovp_work, 0);
+ 		break;
+ 	default:
+ 		break;
+ 	}
+ 
++	mutex_unlock(&info->lock);
+ 	return count;
+ }
+ 
+@@ -328,11 +343,13 @@
+ 		return -ENOMEM;
+ 
+ 	info->dev = &pdev->dev;
++	mutex_init(&info->lock);
++	info->stopping = true;
+ 	platform_set_drvdata(pdev, info);
+ 	ret = mca_vbat_ovp_mon_parse_dt(info);
+ 	if (ret) {
+-		mca_log_err("parse dt faile\n");
+-		return -1;
++		mca_log_err("parse dt failed: %d\n", ret);
++		return ret;
+ 	}
+ 
+ 	info->batt_ovp_status = 0;
+@@ -341,26 +358,51 @@
+ 	info->fake_vbat_override_mv = -22;
+ 	INIT_DELAYED_WORK(&info->monitor_vbat_ovp_work,
+ 			  mca_vbat_ovp_monitor_workfunc);
++	ret = vbat_ovp_mon_sysfs_create_group(info->dev);
++	if (ret)
++		return dev_err_probe(info->dev, ret == -ENODEV ? -EPROBE_DEFER : ret,
++				     "VBAT sysfs registration failed\n");
++	mutex_lock(&info->lock);
++	info->sysfs_created = true;
++	info->stopping = false;
+ 	schedule_delayed_work(&info->monitor_vbat_ovp_work,
+ 			      msecs_to_jiffies(NORMAL_HEARTBEAT_TIMER_MS));
+-	vbat_ovp_mon_sysfs_create_group(info->dev);
+-	mca_log_err("%s success\n", __func__);
++	mutex_unlock(&info->lock);
++	mca_log_info("%s success\n", __func__);
+ 	return 0;
+ }
+ 
+-static int mca_vbat_ovp_mon_remove(struct platform_device *pdev)
+-{
+-	return 0;
++static void mca_vbat_ovp_mon_stop(struct platform_device *pdev)
++{
++	struct mca_vbat_ovp_mon_dev *info = platform_get_drvdata(pdev);
++	bool remove_sysfs;
++
++	mutex_lock(&info->lock);
++	info->stopping = true;
++	remove_sysfs = info->sysfs_created;
++	info->sysfs_created = false;
++	mutex_unlock(&info->lock);
++	if (remove_sysfs)
++		mca_sysfs_remove_link_group(SYSFS_DEV_5, "vbat_ovp", info->dev,
++					    &vbat_ovp_sysfs_attr_group);
++	cancel_delayed_work_sync(&info->monitor_vbat_ovp_work);
++}
++
++static void mca_vbat_ovp_mon_remove(struct platform_device *pdev)
++{
++	mca_vbat_ovp_mon_stop(pdev);
+ }
+ 
+ static void mca_vbat_ovp_mon_shutdown(struct platform_device *pdev)
+ {
++	mca_vbat_ovp_mon_stop(pdev);
+ }
+ 
+ static const struct of_device_id match_table[] = {
+ 	{ .compatible = "mca,vbat_ovp_monitor" },
+ 	{},
+ };
++MODULE_DEVICE_TABLE(of, match_table);
+ 
+ static struct platform_driver mca_vbat_ovp_mon_driver = {
+ 	.driver = {
+@@ -387,4 +429,4 @@
+ 
+ MODULE_DESCRIPTION("battery ovp software protection");
+ MODULE_AUTHOR("jiangfei1@xiaomi.com");
+-MODULE_LICENSE("GPL v2");
+\ No newline at end of file
++MODULE_LICENSE("GPL v2");
+--- a/drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h
++++ b/drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h
+@@ -44,6 +44,11 @@
+ 
+ struct mca_vbat_ovp_mon_dev {
+ 	struct device *dev;
++	struct mutex lock;
++	bool stopping;
++	bool sysfs_created;
++	bool has_wireless;
++	bool triggered;
+ 	struct delayed_work monitor_vbat_ovp_work;
+ 	int vbat_ovp_thr_ffr_mv;
+ 	int vbat_ovp_thr_nor_mv;
