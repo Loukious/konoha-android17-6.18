@@ -31,8 +31,7 @@ struct device_node { const char *name; u32 *cells; int len, cpu, physical, refs;
 struct device { struct device_node *of_node; const char *name; };
 struct platform_device { struct device dev; };
 typedef unsigned int cpumask_t;
-#define NUM_DCVS_HW_TYPES 3
-enum dcvs_hw_type { DCVS_DDR, DCVS_LLCC, DCVS_DDRQOS };
+enum dcvs_hw_type { DCVS_DDR, DCVS_LLCC, DCVS_L3, DCVS_DDRQOS, DCVS_UBWCP, NUM_DCVS_HW_TYPES };
 enum dcvs_path_type { DCVS_SLOW_PATH, DCVS_FAST_PATH, DCVS_PERCPU_PATH, NUM_DCVS_PATHS };
 struct dcvs_freq { u32 ib, ab; enum dcvs_hw_type hw_type; };
 #define QCOM_PMU_MAX_EVS 8
@@ -175,15 +174,26 @@ static void numeric(void) {
  CHECK(memlat_percent(10,0)==0);CHECK(memlat_percent(UINT64_MAX,UINT64_MAX)==100);
  CHECK(memlat_percent(UINT64_MAX/2,UINT64_MAX)==49);CHECK(memlat_percent(200,100)==100);
  struct device dev={0};u32 rows=0;u32 values[]={1000000,100000,2000000,200000};struct device_node n={.cells=values,.len=sizeof(values)};
- CHECK(init_cpufreq_memfreq_map(&dev,&n,&rows) && rows==2);
- n.len=4;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));n.len=0;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));n.len=sizeof(values);
- values[2]=999999;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));values[2]=2000000;
- values[0]=0;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));values[0]=1000000;
- values[3]=50000;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));values[3]=200000;
- values[2]=UINT32_MAX;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));values[2]=2000000;
- values[3]=UINT32_MAX;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));values[3]=200000;
- n.len=15*8;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));n.len=sizeof(values);
- allocation_fail=1;CHECK(!init_cpufreq_memfreq_map(&dev,&n,&rows));allocation_fail=0;
+ CHECK(init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows) && rows==2);
+ n.len=4;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));n.len=0;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));n.len=sizeof(values);
+ values[2]=999999;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));values[2]=2000000;
+ values[0]=0;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));values[0]=1000000;
+ values[3]=50000;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));values[3]=200000;
+ values[2]=UINT32_MAX;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));values[2]=2000000;
+ values[3]=UINT32_MAX;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));values[3]=200000;
+ n.len=15*8;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));n.len=sizeof(values);
+ allocation_fail=1;CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));allocation_fail=0;
+ /* Exact native tuna DDRQOS gold, prime and prime-latfloor map rows. */
+ u32 qos_maps[][4]={{2073600,0,3014400,1},{1478400,0,3206400,1},{2169600,0,3206400,1}};
+ for(unsigned int q=0;q<3;q++) {
+  n.cells=qos_maps[q];struct cpufreq_memfreq_map *qos=init_cpufreq_memfreq_map(&dev,&n,DCVS_DDRQOS,&rows);
+  CHECK(qos && rows==2 && qos[0].memfreq_khz==0 && qos[1].memfreq_khz==1);
+  struct memlat_mon qmon={.freq_map=qos,.freq_map_len=rows};
+  CHECK(cpufreq_to_memfreq(&qmon,qos[0].cpufreq_mhz)==0 && cpufreq_to_memfreq(&qmon,qos[0].cpufreq_mhz+1)==1);
+  CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_DDR,&rows));
+  CHECK(!init_cpufreq_memfreq_map(&dev,&n,DCVS_LLCC,&rows));
+ }
+ n.cells=values;
  struct device_node cpu={.cpu=0};n.cpu_count=1;n.cpus[0]=&cpu;struct platform_device p={.dev={.of_node=&n}};cpumask_t mask;u32 mpidr;
  physical_cpu=31;CHECK(!get_mask_and_mpidr_from_pdev(&p,&mask,&mpidr) && mask==1 && mpidr==BIT(31) && !cpu.refs);
  physical_cpu=32;CHECK(get_mask_and_mpidr_from_pdev(&p,&mask,&mpidr)==-ERANGE && !cpu.refs);

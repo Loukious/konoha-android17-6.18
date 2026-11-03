@@ -13,7 +13,8 @@ The 6.18 API uses `hrtimer_setup`. Wide frequency/percentage arithmetic uses
 `mul_u64_u64_div_u64`, which must be present in the kernel's KMI symbol list.
 
 The port validates map length, firmware row encoding, ordering, CPUs and physical
-CPU mask bounds. Counter resets, missing elapsed time and zero denominators
+CPU mask bounds. Native zero/one DDRQOS maps are accepted only for the
+DDRQOS hardware group; DDR and LLCC still require nonzero frequencies. Counter resets, missing elapsed time and zero denominators
 cannot create wraparound votes. Rejected firmware writes leave sysfs state
 unchanged; failed votes do not advance the driver's committed frequency, so
 subsequent samples retry. Native `threadlat-enabled` has no implementation here
@@ -36,7 +37,7 @@ Recovery after removing a child requires removing and reprobeing the root;
 partial child rebind is not supported.
 
 `verify_memlat.py` compiles functions and declarations extracted verbatim from
-the staged driver against host provider stubs. Its 77 ASan/UBSan cases cover
+the staged driver against host provider stubs. Its 89 ASan/UBSan cases cover
 maps/CPU masks, wide arithmetic, firmware transactions, vote failure/retry,
 raw event bounds, sample publication, callback-registration rollback and
 idempotent teardown, and rejecting unavailable CPUCP event mappings. See `memlat-host-validation.json`. These tests verify the C
