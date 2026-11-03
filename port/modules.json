@@ -1451,5 +1451,9 @@
   {
     "target": "coresight_qmi",
     "output": "coresight-qmi.ko"
+  },
+  {
+    "target": "coresight_tgu",
+    "output": "coresight-tgu.ko"
   }
 ]

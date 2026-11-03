@@ -121,3 +121,19 @@ commands, transport/firmware failures, transaction cancellation, endpoint
 replacement, callbacks during a transaction, ATID/name/buffer bounds, probe
 rollback and removal. Firmware and physical trace delivery remain untested while
 the phone is disconnected. No disabled DT nodes are enabled.
+
+
+`coresight_tgu` imports the pinned native driver for three enabled AMBA TGUs.
+Native `tgu-*` properties are bounded configuration counts; negative selectors,
+full arrays, values wider than registers and register-block overlap fail with
+errors. Configuration writes stay cached until enable. Re-enabling applies the
+cache with the existing PM vote. The driver acquires hardware ownership before
+programming, balances one PM vote per active TGU, and resets or removes an active
+TGU before releasing that vote. No PM operation runs under a spinlock. Remove
+drains sysfs before devm state disappears. Explicit native names and register
+layouts are retained, with a dedicated common helper subtype instead of CATU.
+
+`verify_coresight_tgu.py` passes 2,014 actual-C ASan/UBSan cases covering all
+layout-count boundaries, capacity-filled arrays, selector/word bounds, real
+programming offsets, failed PM/claim/probe paths, re-enable, reset and removal.
+Physical bus-event trigger timing remains untested while the phone is disconnected.

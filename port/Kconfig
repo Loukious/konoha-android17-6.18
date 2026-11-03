@@ -1454,3 +1454,7 @@ config QTI_CPUFREQ_STATS_SCMI_V3
 config CORESIGHT_QMI
 	tristate "Onyx CoreSight QMI firmware control"
 	depends on CORESIGHT
+
+config CORESIGHT_TGU
+	tristate "Onyx CoreSight trigger generation unit"
+	depends on CORESIGHT

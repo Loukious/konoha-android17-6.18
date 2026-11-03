@@ -4264,6 +4264,8 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":coresight_tgu",
+
         ":coresight_qmi",
 
         ":mca_ibat_ocp_monitor",
@@ -5128,4 +5130,14 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":qmi_helpers"],
+)
+
+ddk_module(
+    name = "coresight_tgu",
+    srcs = ["drivers/hwtracing/coresight/coresight-tgu.c"],
+    out = "coresight-tgu.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
 )

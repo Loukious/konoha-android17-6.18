@@ -1,0 +1,588 @@
+diff --git a/drivers/hwtracing/coresight/coresight-tgu.c b/drivers/hwtracing/coresight/coresight-tgu.c
+index 705db7d..e9273cf 100644
+--- a/drivers/hwtracing/coresight/coresight-tgu.c
++++ b/drivers/hwtracing/coresight/coresight-tgu.c
+@@ -16,6 +16,8 @@
+ #include <linux/topology.h>
+ #include <linux/of.h>
+ #include <linux/coresight.h>
++#include <linux/pm_runtime.h>
++#include <linux/property.h>
+ 
+ #include "coresight-priv.h"
+ 
+@@ -37,12 +39,12 @@ do {									\
+ #define TIMER0_STATUS			0x0004
+ #define COUNTER0_STATUS			0x000C
+ #define TGU_STATUS			0x0014
+-#define TIMER0_COMPARE_STEP(n)		(0x0040 + 0x1D8 * n)
+-#define COUNTER0_COMPARE_STEP(n)	(0x0048 + 0x1D8 * n)
+-#define GROUP_REG_STEP(grp, reg, step)	(0x0074 + 0x60 * grp + 0x4 * reg + \
+-								 0x1D8 * step)
+-#define CONDITION_DECODE_STEP(m, n)	(0x0050 + 0x4 * m + 0x1D8 * n)
+-#define CONDITION_SELECT_STEP(m, n)	(0x0060 + 0x4 * m + 0x1D8 * n)
++#define TIMER0_COMPARE_STEP(n)		(0x0040 + 0x1D8 * (n))
++#define COUNTER0_COMPARE_STEP(n)	(0x0048 + 0x1D8 * (n))
++#define GROUP_REG_STEP(grp, reg, step)	(0x0074 + 0x60 * (grp) + 0x4 * (reg) + \
++								 0x1D8 * (step))
++#define CONDITION_DECODE_STEP(m, n)	(0x0050 + 0x4 * (m) + 0x1D8 * (n))
++#define CONDITION_SELECT_STEP(m, n)	(0x0060 + 0x4 * (m) + 0x1D8 * (n))
+ #define GROUP0				0x0074
+ #define GROUP1				0x00D4
+ #define GROUP2				0x0134
+@@ -85,7 +87,9 @@ struct tgu_drvdata {
+ 	struct device			*dev;
+ 	struct coresight_device		*csdev;
+ 	struct clk			*clk;
+-	spinlock_t			spinlock;
++	struct mutex			mutex;
++	resource_size_t			size;
++	bool				removing;
+ 	int				max_steps;
+ 	int				max_conditions;
+ 	int				max_regs;
+@@ -106,275 +110,235 @@ struct tgu_drvdata {
+ DEFINE_CORESIGHT_DEVLIST(tgu_devs, "tgu");
+ 
+ static ssize_t enable_tgu_store(struct device *dev,
+-				struct device_attribute *attr,
+-				const char *buf, size_t size)
++		struct device_attribute *attr, const char *buf, size_t size)
+ {
+-	unsigned long value;
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	int ret, i, j;
++	unsigned long value;
++	int ret = 0, i, j;
+ 
+-	if (kstrtoul(buf, 16, &value))
++	if (kstrtoul(buf, 16, &value) || value > 1)
+ 		return -EINVAL;
+-
+-	/* Enable clock */
+-	ret = pm_runtime_resume_and_get(drvdata->dev);
+-	if (ret < 0)
+-		return ret;
+-
+-	spin_lock(&drvdata->spinlock);
+-	/* Unlock the TGU LAR */
+-	TGU_UNLOCK(drvdata);
+-
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (!value && !drvdata->enable)
++		goto out;
+ 	if (value) {
+-
+-		/* Disable TGU to program the triggers */
+-		tgu_writel(drvdata, 0, TGU_CONTROL);
+-
+-		/* program the TGU Group data for the desired use case*/
+-
+-		for (i = 0; i <= drvdata->grp_refcnt; i++)
+-			tgu_writel(drvdata, drvdata->grp_data[i].value,
+-						drvdata->grp_data[i].grpaddr);
+-
+-		/* program the unused Condition Decode registers NOT bits to 1*/
+-		for (i = 0; i <= drvdata->max_conditions; i++) {
+-			for (j = 0; j <= drvdata->max_steps; j++)
+-				tgu_writel(drvdata, 0x1000000,
+-						CONDITION_DECODE_STEP(i, j));
++		if (!drvdata->enable) {
++			ret = pm_runtime_resume_and_get(drvdata->dev);
++			if (ret < 0)
++				goto out;
++			ret = coresight_claim_device(drvdata->csdev);
++			if (ret) {
++				pm_runtime_put(drvdata->dev);
++				goto out;
++			}
+ 		}
+-		/* program the TGU Condition Decode for the desired use case*/
+-		for (i = 0; i <= drvdata->cond_refcnt; i++)
+-			tgu_writel(drvdata, drvdata->condition_data[i].value,
+-					drvdata->condition_data[i].condaddr);
+-
+-		/* program the TGU Condition Select for the desired use case*/
+-		for (i = 0; i <= drvdata->select_refcnt; i++)
+-			tgu_writel(drvdata, drvdata->select_data[i].value,
+-					drvdata->select_data[i].selectaddr);
+-
+-		/*  Timer and Counter Check */
+-		for (i = 0; i <= drvdata->timer_refcnt; i++)
+-			tgu_writel(drvdata, drvdata->timer_data[i].value,
+-					drvdata->timer_data[i].timeraddr);
+-
+-		for (i = 0; i <= drvdata->counter_refcnt; i++)
+-			tgu_writel(drvdata, drvdata->counter_data[i].value,
+-					drvdata->counter_data[i].counteraddr);
+-
+-		/* Enable TGU to program the triggers */
++		TGU_UNLOCK(drvdata);
++		tgu_writel(drvdata, 0, TGU_CONTROL);
++		for (i = 0; i < drvdata->grp_refcnt; i++)
++			tgu_writel(drvdata, drvdata->grp_data[i].value, drvdata->grp_data[i].grpaddr);
++		for (i = 0; i < drvdata->max_conditions; i++)
++			for (j = 0; j < drvdata->max_steps; j++)
++				tgu_writel(drvdata, 0x1000000, CONDITION_DECODE_STEP(i, j));
++		for (i = 0; i < drvdata->cond_refcnt; i++)
++			tgu_writel(drvdata, drvdata->condition_data[i].value, drvdata->condition_data[i].condaddr);
++		for (i = 0; i < drvdata->select_refcnt; i++)
++			tgu_writel(drvdata, drvdata->select_data[i].value, drvdata->select_data[i].selectaddr);
++		for (i = 0; i < drvdata->timer_refcnt; i++)
++			tgu_writel(drvdata, drvdata->timer_data[i].value, drvdata->timer_data[i].timeraddr);
++		for (i = 0; i < drvdata->counter_refcnt; i++)
++			tgu_writel(drvdata, drvdata->counter_data[i].value, drvdata->counter_data[i].counteraddr);
+ 		tgu_writel(drvdata, 1, TGU_CONTROL);
+-
++		TGU_LOCK(drvdata);
+ 		drvdata->enable = true;
+-		dev_dbg(dev, "Coresight-TGU enabled\n");
+-
+ 	} else {
+-		/* Disable TGU to program the triggers */
++		TGU_UNLOCK(drvdata);
+ 		tgu_writel(drvdata, 0, TGU_CONTROL);
+-
+-		pm_runtime_put_sync(drvdata->dev);
+-		dev_dbg(dev, "Coresight-TGU disabled\n");
++		coresight_disclaim_device_unlocked(drvdata->csdev);
++		TGU_LOCK(drvdata);
++		drvdata->enable = false;
++		pm_runtime_put(drvdata->dev);
+ 	}
+-
+-	TGU_LOCK(drvdata);
+-	spin_unlock(&drvdata->spinlock);
+-	return size;
++out:
++	mutex_unlock(&drvdata->mutex);
++	return ret < 0 ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(enable_tgu);
+ 
+ static ssize_t reset_tgu_store(struct device *dev,
+-				struct device_attribute *attr,
+-				const char *buf, size_t size)
++		struct device_attribute *attr, const char *buf, size_t size)
+ {
++	struct tgu_drvdata *d = dev_get_drvdata(dev->parent);
+ 	unsigned long value;
+-	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	int ret;
+ 
+-	if (kstrtoul(buf, 16, &value))
++	if (kstrtoul(buf, 16, &value) || value != 1)
+ 		return -EINVAL;
+-
+-	if (!drvdata->enable) {
+-		/* Enable clock */
+-		ret = pm_runtime_resume_and_get(drvdata->dev);
++	mutex_lock(&d->mutex);
++	if (d->removing) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (!d->enable) {
++		ret = pm_runtime_resume_and_get(d->dev);
+ 		if (ret < 0)
+-			return ret;
++			goto out;
++		ret = coresight_claim_device(d->csdev);
++		if (ret) {
++			pm_runtime_put(d->dev);
++			goto out;
++		}
+ 	}
+-
+-	spin_lock(&drvdata->spinlock);
+-	/* Unlock the TGU LAR */
+-	TGU_UNLOCK(drvdata);
+-
+-	if (value) {
+-		/* Disable TGU to program the triggers */
+-		tgu_writel(drvdata, 0, TGU_CONTROL);
+-
+-		/* Reset the Reference counters*/
+-		drvdata->grp_refcnt = 0;
+-		drvdata->cond_refcnt = 0;
+-		drvdata->select_refcnt = 0;
+-		drvdata->timer_refcnt = 0;
+-		drvdata->counter_refcnt = 0;
+-
+-		dev_dbg(dev, "Coresight-TGU disabled\n");
+-	} else
+-		dev_dbg(dev, "Invalid input to reset the TGU\n");
+-
+-	TGU_LOCK(drvdata);
+-	spin_unlock(&drvdata->spinlock);
+-	pm_runtime_put_sync(drvdata->dev);
+-	return size;
++	TGU_UNLOCK(d);
++	tgu_writel(d, 0, TGU_CONTROL);
++	coresight_disclaim_device_unlocked(d->csdev);
++	TGU_LOCK(d);
++	d->enable = false;
++	d->grp_refcnt = d->cond_refcnt = d->select_refcnt = 0;
++	d->timer_refcnt = d->counter_refcnt = 0;
++	memset(d->grp_data, 0, sizeof(*d->grp_data) * MAX_GROUP_SETS);
++	memset(d->condition_data, 0, sizeof(*d->condition_data) * MAX_CONDITION_SETS);
++	memset(d->select_data, 0, sizeof(*d->select_data) * MAX_CONDITION_SETS);
++	memset(d->timer_data, 0, sizeof(*d->timer_data) * MAX_TIMER_COUNTER_SETS);
++	memset(d->counter_data, 0, sizeof(*d->counter_data) * MAX_TIMER_COUNTER_SETS);
++	pm_runtime_put(d->dev);
++	ret = 0;
++out:
++	mutex_unlock(&d->mutex);
++	return ret < 0 ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(reset_tgu);
+ 
+-static ssize_t set_group_store(struct device *dev, struct device_attribute
+-					*attr, const char *buf, size_t size)
++static ssize_t set_group_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t size)
+ {
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	int grp, reg, step;
+ 	unsigned long value;
++	int ret = 0;
+ 
+-	if (drvdata->grp_refcnt >= MAX_GROUP_SETS) {
+-		dev_err(drvdata->dev, " Too many groups are being configured\n");
+-		return -EINVAL;
+-	}
+-
+-	if (sscanf(buf, "%d %d %d %lx", &grp, &reg, &step, &value) != 4)
++	if (sscanf(buf, "%d %d %d %lx", &grp, &reg, &step, &value) != 4 || value > U32_MAX ||
++	    grp < 0 || grp >= MAX_GROUPS || reg < 0 || reg >= drvdata->max_regs || step < 0 || step >= drvdata->max_steps)
+ 		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
+-	if ((grp <= MAX_GROUPS) && (reg <= drvdata->max_regs)) {
+-		drvdata->grp_data[drvdata->grp_refcnt].grpaddr =
+-						GROUP_REG_STEP(grp, reg, step);
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing)
++		ret = -ENODEV;
++	else if (drvdata->grp_refcnt >= MAX_GROUP_SETS)
++		ret = -ENOSPC;
++	else {
++		drvdata->grp_data[drvdata->grp_refcnt].grpaddr = GROUP_REG_STEP(grp, reg, step);
+ 		drvdata->grp_data[drvdata->grp_refcnt].value = value;
+ 		drvdata->grp_refcnt++;
+-	} else
+-		dev_err(drvdata->dev, "Invalid group data\n");
+-
+-	spin_unlock(&drvdata->spinlock);
+-
+-	return size;
++	}
++	mutex_unlock(&drvdata->mutex);
++	return ret ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(set_group);
+ 
+-static ssize_t set_condition_store(struct device *dev, struct device_attribute
+-					*attr, const char *buf, size_t size)
++static ssize_t set_condition_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t size)
+ {
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long value;
+ 	int cond, step;
++	unsigned long value;
++	int ret = 0;
+ 
+-	if (drvdata->cond_refcnt >= MAX_CONDITION_SETS) {
+-		dev_err(drvdata->dev, " Too many groups are being configured\n");
+-		return -EINVAL;
+-	}
+-
+-	if (sscanf(buf, "%d %d %lx", &cond, &step, &value) != 3)
++	if (sscanf(buf, "%d %d %lx", &cond, &step, &value) != 3 || value > U32_MAX ||
++	    cond < 0 || cond >= drvdata->max_conditions || step < 0 || step >= drvdata->max_steps)
+ 		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
+-	if ((cond <= drvdata->max_conditions) && (step <=
+-						drvdata->max_steps)) {
+-		drvdata->condition_data[drvdata->cond_refcnt].condaddr =
+-					CONDITION_DECODE_STEP(cond, step);
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing)
++		ret = -ENODEV;
++	else if (drvdata->cond_refcnt >= MAX_CONDITION_SETS)
++		ret = -ENOSPC;
++	else {
++		drvdata->condition_data[drvdata->cond_refcnt].condaddr = CONDITION_DECODE_STEP(cond, step);
+ 		drvdata->condition_data[drvdata->cond_refcnt].value = value;
+ 		drvdata->cond_refcnt++;
+-	} else
+-		dev_err(drvdata->dev, "Invalid condition decode data\n");
+-
+-	spin_unlock(&drvdata->spinlock);
+-
+-	return size;
++	}
++	mutex_unlock(&drvdata->mutex);
++	return ret ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(set_condition);
+ 
+-static ssize_t set_select_store(struct device *dev, struct device_attribute
+-					*attr, const char *buf, size_t size)
++static ssize_t set_select_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t size)
+ {
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long value;
+ 	int select, step;
++	unsigned long value;
++	int ret = 0;
+ 
+-	if (drvdata->select_refcnt >= MAX_CONDITION_SETS) {
+-		dev_err(drvdata->dev, " Too many groups are being configured\n");
+-		return -EINVAL;
+-	}
+-
+-	if (sscanf(buf, "%d %d %lx", &select, &step, &value) != 3)
++	if (sscanf(buf, "%d %d %lx", &select, &step, &value) != 3 || value > U32_MAX ||
++	    select < 0 || select >= drvdata->max_conditions || step < 0 || step >= drvdata->max_steps)
+ 		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
+-
+-	if ((select <= drvdata->max_conditions) && (step <=
+-					drvdata->max_steps)) {
+-		drvdata->select_data[drvdata->select_refcnt].selectaddr =
+-					CONDITION_SELECT_STEP(select, step);
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing)
++		ret = -ENODEV;
++	else if (drvdata->select_refcnt >= MAX_CONDITION_SETS)
++		ret = -ENOSPC;
++	else {
++		drvdata->select_data[drvdata->select_refcnt].selectaddr = CONDITION_SELECT_STEP(select, step);
+ 		drvdata->select_data[drvdata->select_refcnt].value = value;
+ 		drvdata->select_refcnt++;
+-	} else
+-		dev_err(drvdata->dev, "Invalid select decode data\n");
+-
+-	spin_unlock(&drvdata->spinlock);
+-
+-	return size;
++	}
++	mutex_unlock(&drvdata->mutex);
++	return ret ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(set_select);
+ 
+-static ssize_t set_timer_store(struct device *dev, struct device_attribute
+-					*attr, const char *buf, size_t size)
++static ssize_t set_timer_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t size)
+ {
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long value;
+ 	int step;
++	unsigned long value;
++	int ret = 0;
+ 
+-	if (drvdata->timer_refcnt >= MAX_TIMER_COUNTER_SETS) {
+-		dev_err(drvdata->dev, " Too many groups are being configured\n");
+-		return -EINVAL;
+-	}
+-
+-	if (sscanf(buf, "%d %lx", &step, &value) != 2)
++	if (sscanf(buf, "%d %lx", &step, &value) != 2 || value > U32_MAX ||
++	    step < 0 || step >= drvdata->max_timer_counter)
+ 		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
+-	if (step <= drvdata->max_timer_counter) {
+-		drvdata->timer_data[drvdata->timer_refcnt].timeraddr =
+-						TIMER0_COMPARE_STEP(step);
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing)
++		ret = -ENODEV;
++	else if (drvdata->timer_refcnt >= MAX_TIMER_COUNTER_SETS)
++		ret = -ENOSPC;
++	else {
++		drvdata->timer_data[drvdata->timer_refcnt].timeraddr = TIMER0_COMPARE_STEP(step);
+ 		drvdata->timer_data[drvdata->timer_refcnt].value = value;
+ 		drvdata->timer_refcnt++;
+-	} else
+-		dev_err(drvdata->dev, "Invalid TGU timer data\n");
+-
+-	spin_unlock(&drvdata->spinlock);
+-
+-	return size;
++	}
++	mutex_unlock(&drvdata->mutex);
++	return ret ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(set_timer);
+ 
+-static ssize_t set_counter_store(struct device *dev, struct device_attribute
+-					*attr, const char *buf, size_t size)
++static ssize_t set_counter_store(struct device *dev, struct device_attribute *attr,
++		const char *buf, size_t size)
+ {
+ 	struct tgu_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long value;
+ 	int step;
++	unsigned long value;
++	int ret = 0;
+ 
+-	if (drvdata->counter_refcnt >= MAX_TIMER_COUNTER_SETS) {
+-		dev_err(drvdata->dev, " Too many groups are being configured\n");
+-		return -EINVAL;
+-	}
+-
+-	if (sscanf(buf, "%d %lx", &step, &value) != 2)
++	if (sscanf(buf, "%d %lx", &step, &value) != 2 || value > U32_MAX ||
++	    step < 0 || step >= drvdata->max_timer_counter)
+ 		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
+-	if (step <= drvdata->max_timer_counter) {
+-		drvdata->counter_data[drvdata->counter_refcnt].counteraddr =
+-						COUNTER0_COMPARE_STEP(step);
++	mutex_lock(&drvdata->mutex);
++	if (drvdata->removing)
++		ret = -ENODEV;
++	else if (drvdata->counter_refcnt >= MAX_TIMER_COUNTER_SETS)
++		ret = -ENOSPC;
++	else {
++		drvdata->counter_data[drvdata->counter_refcnt].counteraddr = COUNTER0_COMPARE_STEP(step);
+ 		drvdata->counter_data[drvdata->counter_refcnt].value = value;
+ 		drvdata->counter_refcnt++;
+-	} else
+-		dev_err(drvdata->dev, "Invalid TGU counter data\n");
+-
+-	spin_unlock(&drvdata->spinlock);
+-
+-	return size;
++	}
++	mutex_unlock(&drvdata->mutex);
++	return ret ? ret : (ssize_t)size;
+ }
+ static DEVICE_ATTR_WO(set_counter);
+ 
+@@ -398,6 +362,21 @@ static const struct attribute_group *tgu_attr_grps[] = {
+ 	NULL,
+ };
+ 
++static int tgu_validate_layout(struct tgu_drvdata *d)
++{
++	if (d->size < 0x1000 || d->max_steps <= 0 || d->max_steps > 8 ||
++	    d->max_conditions <= 0 || d->max_conditions > 4 ||
++	    d->max_regs <= 0 || d->max_regs > 24 ||
++	    d->max_timer_counter <= 0 || d->max_timer_counter > MAX_TIMER_COUNTER_SETS)
++		return -EINVAL;
++	/* The last programming address must stay below integration/management. */
++	if (GROUP_REG_STEP(MAX_GROUPS - 1, d->max_regs - 1, d->max_steps - 1) >= 0xF00)
++		return -EINVAL;
++	return 0;
++}
++
++static const struct coresight_ops tgu_ops = {};
++
+ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ {
+ 	int ret = 0;
+@@ -406,7 +385,8 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ 	struct tgu_drvdata *drvdata;
+ 	struct coresight_desc desc = { 0 };
+ 
+-	desc.name = coresight_alloc_device_name(&tgu_devs, dev);
++	if (device_property_read_string(dev, "coresight-name", &desc.name))
++		desc.name = coresight_alloc_device_name(&tgu_devs, dev);
+ 	if (!desc.name)
+ 		return -ENOMEM;
+ 	pdata = coresight_get_platform_data(dev);
+@@ -423,10 +403,11 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ 	dev_set_drvdata(dev, drvdata);
+ 
+ 	drvdata->base = devm_ioremap_resource(dev, &adev->res);
+-	if (!drvdata->base)
+-		return -ENOMEM;
++	if (IS_ERR(drvdata->base))
++		return PTR_ERR(drvdata->base);
++	drvdata->size = resource_size(&adev->res);
+ 
+-	spin_lock_init(&drvdata->spinlock);
++	mutex_init(&drvdata->mutex);
+ 
+ 	ret = of_property_read_u32(adev->dev.of_node, "tgu-steps",
+ 						&drvdata->max_steps);
+@@ -448,6 +429,10 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ 	if (ret)
+ 		return -EINVAL;
+ 
++	ret = tgu_validate_layout(drvdata);
++	if (ret)
++		return ret;
++
+ 	/* Alloc memory for Grps, Conditions and Steps */
+ 	drvdata->grp_data = devm_kzalloc(dev, MAX_GROUP_SETS *
+ 				       sizeof(*drvdata->grp_data),
+@@ -483,6 +468,9 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ 	drvdata->enable = false;
+ 
+ 	desc.type = CORESIGHT_DEV_TYPE_HELPER;
++	desc.subtype.helper_subtype = CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_TGU;
++	desc.ops = &tgu_ops;
++	desc.access = CSDEV_ACCESS_IOMEM(drvdata->base);
+ 	desc.pdata = adev->dev.platform_data;
+ 	desc.dev = &adev->dev;
+ 	desc.groups = tgu_attr_grps;
+@@ -492,18 +480,30 @@ static int tgu_probe(struct amba_device *adev, const struct amba_id *id)
+ 		goto err;
+ 	}
+ 
+-	pm_runtime_put_sync(&adev->dev);
++	pm_runtime_put(&adev->dev);
+ 	dev_dbg(dev, "TGU initialized\n");
+ 	return 0;
+ err:
+ 	return ret;
+ }
+ 
+-static void __exit tgu_remove(struct amba_device *adev)
++static void tgu_remove(struct amba_device *adev)
+ {
+-	struct tgu_drvdata *drvdata = dev_get_drvdata(&adev->dev);
+-
+-	coresight_unregister(drvdata->csdev);
++	struct tgu_drvdata *d = dev_get_drvdata(&adev->dev);
++
++	sysfs_remove_groups(&d->csdev->dev.kobj, tgu_attr_grps);
++	mutex_lock(&d->mutex);
++	d->removing = true;
++	if (d->enable) {
++		TGU_UNLOCK(d);
++		tgu_writel(d, 0, TGU_CONTROL);
++		coresight_disclaim_device_unlocked(d->csdev);
++		TGU_LOCK(d);
++		d->enable = false;
++		pm_runtime_put(d->dev);
++	}
++	mutex_unlock(&d->mutex);
++	coresight_unregister(d->csdev);
+ }
+ 
+ static struct amba_id tgu_ids[] = {
+@@ -515,6 +515,8 @@ static struct amba_id tgu_ids[] = {
+ 	{ 0, 0},
+ };
+ 
++MODULE_DEVICE_TABLE(amba, tgu_ids);
++
+ static struct amba_driver tgu_driver = {
+ 	.drv = {
+ 		.name			=	"coresight-tgu",

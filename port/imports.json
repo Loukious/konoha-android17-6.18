@@ -30011,5 +30011,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/hwtracing/coresight/coresight-qmi.h",
     "blob": "4f0ffe43aaab71962e8bd53c2562025f6694ce84"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-tgu.c",
+    "blob": "705db7d74d8eefa1626bbd78a09cab516bf4f00f"
   }
 ]
