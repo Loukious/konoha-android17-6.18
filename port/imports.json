@@ -29915,5 +29915,29 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/power/supply/mca/mca_qcom_sysfs/mca_qcom_sysfs.c",
     "blob": "74fb066534f5721834787cf43172ae3e3e09d47b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-cti-core.c",
+    "blob": "4f0985901b651535830550df7bfdc3b5098f578d"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-cti-platform.c",
+    "blob": "c95130e34aa381d379c8803ee21602056c888768"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-cti-sysfs.c",
+    "blob": "66d51aaa4b757e802ba06ad52c10afa9237904e9"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/hwtracing/coresight/coresight-cti.h",
+    "blob": "5bacfe020d5eb2762af772cba8888f9c8f151e7a"
   }
 ]

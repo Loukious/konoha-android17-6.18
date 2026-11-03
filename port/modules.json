@@ -1415,5 +1415,9 @@
   {
     "target": "mca_qcom_sysfs",
     "output": "mca_qcom_sysfs.ko"
+  },
+  {
+    "target": "coresight_cti",
+    "output": "coresight-cti.ko"
   }
 ]

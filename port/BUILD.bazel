@@ -4256,6 +4256,7 @@ kernel_module_group(
         ":coresight_tmc",
         ":coresight_csr",
         ":coresight_trace_noc",
+        ":coresight_cti",
         ":mca_ut_test",
         ":hl7603",
 
@@ -5008,4 +5009,19 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":platform_mca_headers", ":mca_headers", ":mca_log", ":mca_protocol_class", ":mca_protocol_pd_class", ":mca_strategy_class", ":mca_strategy_fg_class", ":mca_platform_buckchg_class", ":mca_platform_cp_class", ":mca_platform_fg_ic_ops"],
+)
+
+ddk_module(
+    name = "coresight_cti",
+    srcs = [
+        "drivers/hwtracing/coresight/coresight-cti-core.c",
+        "drivers/hwtracing/coresight/coresight-cti-platform.c",
+        "drivers/hwtracing/coresight/coresight-cti-sysfs.c",
+        "drivers/hwtracing/coresight/coresight-cti.h",
+    ],
+    out = "coresight-cti.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
 )
