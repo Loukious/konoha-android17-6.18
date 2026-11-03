@@ -1,0 +1,166 @@
+{
+  "temporary_read_only_debugfs": "/data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z",
+  "status": "PASS: exact production driver binds, 17 real counters readable and advancing, two load/unload cycles clean",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T153808728566Z",
+  "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+  "persistent_install": false,
+  "register_writes": false,
+  "module_verification": [
+    {
+      "module": "qcom_cpuss_sleep_stats.ko",
+      "sha256": "cfedb653d08cad2fca45f1e11d71781e69b8f349504c31e19214e82a9f304cde",
+      "vermagic": "6.18.38-android17-5-maybe-dirty-4k SMP preempt mod_unload modversions aarch64",
+      "imports_checked": 41,
+      "depends": "qcom-scm",
+      "aliases": [
+        "of:N*T*Cqcom,cpuss-sleep-stats",
+        "of:N*T*Cqcom,cpuss-sleep-statsC*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2C*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3C*"
+      ]
+    },
+    {
+      "module": "onyx_cpuss_dt_diag.ko",
+      "sha256": "c63957fdaf84ada8eeb716dea03625ff8505923476d2610efe559b68e7d5b9ba",
+      "vermagic": "6.18.38-android17-5-maybe-dirty-4k SMP preempt mod_unload modversions aarch64",
+      "imports_checked": 12,
+      "depends": "",
+      "aliases": []
+    },
+    {
+      "module": "qcom_cpuss_sleep_stats.ko",
+      "sha256": "79dd229e4b7740b6af2c71a43a5420f5974e511173b6e8d8b10d789fe152193a",
+      "vermagic": "6.18.38-android17-5-maybe-dirty-4k SMP preempt mod_unload modversions aarch64",
+      "imports_checked": 40,
+      "depends": "qcom-scm",
+      "aliases": [
+        "of:N*T*Cqcom,cpuss-sleep-stats",
+        "of:N*T*Cqcom,cpuss-sleep-statsC*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2C*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3C*"
+      ]
+    }
+  ],
+  "snapshots": [
+    {
+      "cycle": 0,
+      "sample": 0,
+      "values": {
+        "pcpu0: C3_residency": 29657204601,
+        "pcpu0: C4_residency": 27323845348,
+        "pcpu1: C3_residency": 17240358552,
+        "pcpu1: C4_residency": 67985543134,
+        "pcpu2: C3_residency": 1218161453,
+        "pcpu2: C4_residency": 106776284274,
+        "pcpu3: C3_residency": 1132312699,
+        "pcpu3: C4_residency": 107351464054,
+        "pcpu4: C3_residency": 1367146313,
+        "pcpu4: C4_residency": 106744582433,
+        "pcpu5: C3_residency": 3246749605,
+        "pcpu5: C4_residency": 96164753638,
+        "pcpu6: C3_residency": 2465421700,
+        "pcpu6: C4_residency": 97373336977,
+        "pcpu7: C3_residency": 555621944,
+        "pcpu7: C4_residency": 106444874741,
+        "D4_residency": 0
+      }
+    },
+    {
+      "cycle": 0,
+      "sample": 1,
+      "values": {
+        "pcpu0: C3_residency": 29682131705,
+        "pcpu0: C4_residency": 27359928106,
+        "pcpu1: C3_residency": 17253108584,
+        "pcpu1: C4_residency": 68059461928,
+        "pcpu2: C3_residency": 1219053871,
+        "pcpu2: C4_residency": 106867942235,
+        "pcpu3: C3_residency": 1132933697,
+        "pcpu3: C4_residency": 107438774973,
+        "pcpu4: C3_residency": 1367767865,
+        "pcpu4: C4_residency": 106844946568,
+        "pcpu5: C3_residency": 3247686560,
+        "pcpu5: C4_residency": 96259958558,
+        "pcpu6: C3_residency": 2466722957,
+        "pcpu6: C4_residency": 97468611801,
+        "pcpu7: C3_residency": 556791445,
+        "pcpu7: C4_residency": 106533720556,
+        "D4_residency": 0
+      }
+    },
+    {
+      "cycle": 0,
+      "sample": 2,
+      "values": {
+        "pcpu0: C3_residency": 29721088232,
+        "pcpu0: C4_residency": 27393336040,
+        "pcpu1: C3_residency": 17273504216,
+        "pcpu1: C4_residency": 68142051727,
+        "pcpu2: C3_residency": 1219053871,
+        "pcpu2: C4_residency": 106988100810,
+        "pcpu3: C3_residency": 1132933697,
+        "pcpu3: C4_residency": 107561703348,
+        "pcpu4: C3_residency": 1367767865,
+        "pcpu4: C4_residency": 106954078807,
+        "pcpu5: C3_residency": 3248496789,
+        "pcpu5: C4_residency": 96372876191,
+        "pcpu6: C3_residency": 2468269131,
+        "pcpu6: C4_residency": 97580874162,
+        "pcpu7: C3_residency": 557014022,
+        "pcpu7: C4_residency": 106655873734,
+        "D4_residency": 0
+      }
+    },
+    {
+      "cycle": 1,
+      "sample": 0,
+      "values": {
+        "pcpu0: C3_residency": 29726629726,
+        "pcpu0: C4_residency": 27394119912,
+        "pcpu1: C3_residency": 17280326089,
+        "pcpu1: C4_residency": 68147946328,
+        "pcpu2: C3_residency": 1219053871,
+        "pcpu2: C4_residency": 107016265056,
+        "pcpu3: C3_residency": 1132933697,
+        "pcpu3: C4_residency": 107591970171,
+        "pcpu4: C3_residency": 1367767865,
+        "pcpu4: C4_residency": 106984222630,
+        "pcpu5: C3_residency": 3248775382,
+        "pcpu5: C4_residency": 96391561844,
+        "pcpu6: C3_residency": 2472946820,
+        "pcpu6: C4_residency": 97593493608,
+        "pcpu7: C3_residency": 557014022,
+        "pcpu7: C4_residency": 106675109523,
+        "D4_residency": 0
+      }
+    }
+  ],
+  "deltas": {
+    "pcpu0: C3_residency": 63883631,
+    "pcpu0: C4_residency": 69490692,
+    "pcpu1: C3_residency": 33145664,
+    "pcpu1: C4_residency": 156508593,
+    "pcpu2: C3_residency": 892418,
+    "pcpu2: C4_residency": 211816536,
+    "pcpu3: C3_residency": 620998,
+    "pcpu3: C4_residency": 210239294,
+    "pcpu4: C3_residency": 621552,
+    "pcpu4: C4_residency": 209496374,
+    "pcpu5: C3_residency": 1747184,
+    "pcpu5: C4_residency": 208122553,
+    "pcpu6: C3_residency": 2847431,
+    "pcpu6: C4_residency": 207537185,
+    "pcpu7: C3_residency": 1392078,
+    "pcpu7: C4_residency": 210998993,
+    "D4_residency": 0
+  },
+  "module_build_id": "92332032ed92b8922cd188a45b971e9ba9ae79fa",
+  "limits": [
+    "Volatile DT opt-in; persistent images still need installation and post-reboot validation.",
+    "No hardware reset or write was exercised; firmware count-enable configuration remains zero."
+  ]
+}

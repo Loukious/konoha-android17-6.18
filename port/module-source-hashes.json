@@ -512,7 +512,7 @@
   "drivers/soc/qcom/qcom_aoss.c": "db3ff3cb92edd44435a30edcba0d0a1fd49a45fbbf28c1e7e0ebdc1b9740bdbf",
   "drivers/soc/qcom/qcom_cpu_vendor_hooks.c": "567ac3aaa56f803f672cbb3836a1ab8b0dec4a4d3ca13322f73fa0fec2b2116d",
   "drivers/soc/qcom/qcom_cpucp.c": "9dc90f6db06ed54c3ad566a83631340b3e18278f3032baf91914beb5fb3e8723",
-  "drivers/soc/qcom/qcom_cpuss_sleep_stats.c": "f1b5378b99f40caa6010e398daab8d51773980451cc2da5f632be4c598e753a7",
+  "drivers/soc/qcom/qcom_cpuss_sleep_stats.c": "2d7f21d495dc3b9b08ffcaa18c6c254b1a3df222b314d7bc50c72006de719cf6",
   "drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c": "c96ef431fc1c58298b87d631c99cacc5ffe13ea005e3a0d1e1e4751ea155b8f4",
   "drivers/soc/qcom/qcom_logbuf_boot_log.c": "5b5152ce517c03c71dc211099733d98ea50b1197f5c8b59f346b3aa596b26917",
   "drivers/soc/qcom/qcom_logbuf_vendor_hooks.c": "6cf57992fa0448bbb851bc2ed610eba21b50ad1aee37095fa559dec3aa72ef27",

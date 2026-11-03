@@ -1,0 +1,52 @@
+FUNCTION 0x15261c24
+15261c24: bti c
+15261c28: pacia x30, sp
+15261c2c: stp x29, x30, [sp, #-0x20]!
+15261c30: stp x20, x19, [sp, #0x10]
+15261c34: mov x29, sp
+15261c38: adrp x8, #0x153dd000
+15261c3c: ldrb w9, [x8, #0x331]
+15261c40: tbnz w9, #0, #0x15261c8c
+15261c44: mov w19, #1
+15261c48: mov w20, #0xb770
+15261c4c: movk w20, #0x2ec, lsl #16
+15261c50: strb w19, [x8, #0x331]
+15261c54: bl #0x15261cbc
+15261c58: cmp w0, w20
+15261c5c: b.ne #0x15261ca0
+15261c60: mov w1, #0xfa1
+15261c64: adrp x0, #0x153db000
+15261c68: adrp x2, #0x153ba000
+15261c6c: movk w1, #0xb, lsl #16
+15261c70: add x0, x0, #0x36c
+15261c74: add x2, x2, #0xb78
+15261c78: mov w3, #1
+15261c7c: mov w19, #1
+15261c80: bl #0x15266954
+15261c84: cmp w0, w20
+15261c88: b.ne #0x15261ca0
+15261c8c: adrp x8, #0x153ba000
+15261c90: ldr w8, [x8, #0xb78]
+15261c94: cmp w8, #1
+15261c98: cset w19, eq
+15261c9c: b #0x15261ca8
+15261ca0: adrp x8, #0x153ba000
+15261ca4: str w19, [x8, #0xb78]
+15261ca8: mov w0, w19
+15261cac: ldp x20, x19, [sp, #0x10]
+15261cb0: ldp x29, x30, [sp], #0x20
+15261cb4: retaa
+15261cb8: sb
+FUNCTION 0x1526d5fc
+1526d5fc: bti c
+1526d600: mov w8, #0x8780
+1526d604: movk w8, #0x221c, lsl #16
+1526d608: ldr w9, [x8]
+1526d60c: ldr w8, [x8, #4]
+1526d610: and w9, w9, #0x7800780
+1526d614: and w8, w8, #0x4000
+1526d618: orr w8, w9, w8
+1526d61c: cmp w8, #0
+1526d620: cset w0, eq
+1526d624: ret
+1526d628: sb

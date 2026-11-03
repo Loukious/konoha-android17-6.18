@@ -1,0 +1,205 @@
+{
+  "source": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/hyp_a.img",
+  "source_sha256": "130e8d202b64798a6aae82220dc85abc5810ca9a90f3668b9974e7a1097b3b69",
+  "scope": "Read-only static HYP firmware analysis; no phone commands or firmware changes.",
+  "address_mapping": "Primary LOAD file offset=ELF VA+0x1000. Secondary LOAD table210000 at file110000.",
+  "vm_mapping_headers": [
+    {
+      "header_va": "0xd33b0",
+      "count": 144,
+      "array_va": "0xc8f10",
+      "vmid": 6
+    },
+    {
+      "header_va": "0xd33c8",
+      "count": 5,
+      "array_va": "0xcaa10",
+      "vmid": 62
+    },
+    {
+      "header_va": "0xd33e0",
+      "count": 5,
+      "array_va": "0xcab00",
+      "vmid": 57
+    },
+    {
+      "header_va": "0xd33f8",
+      "count": 86,
+      "array_va": "0xcabf0",
+      "vmid": 30
+    },
+    {
+      "header_va": "0xd3410",
+      "count": 9,
+      "array_va": "0xcbc10",
+      "vmid": 31
+    },
+    {
+      "header_va": "0xd3428",
+      "count": 610,
+      "array_va": "0xcbdc0",
+      "vmid": 3
+    },
+    {
+      "header_va": "0xd3440",
+      "count": 10,
+      "array_va": "0xd3020",
+      "vmid": 60
+    },
+    {
+      "header_va": "0xd3458",
+      "count": 9,
+      "array_va": "0xd3200",
+      "vmid": 12
+    }
+  ],
+  "cpuss_hlos_descriptors": [
+    {
+      "descriptor_va": "0xd0e60",
+      "file_offset": "0xd1e60",
+      "fields": [
+        "0x10000",
+        "0x17800000",
+        "0x17800000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0e90",
+      "file_offset": "0xd1e90",
+      "fields": [
+        "0x10000",
+        "0x17810000",
+        "0x17810000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0ec0",
+      "file_offset": "0xd1ec0",
+      "fields": [
+        "0x10000",
+        "0x17820000",
+        "0x17820000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0ef0",
+      "file_offset": "0xd1ef0",
+      "fields": [
+        "0x10000",
+        "0x17830000",
+        "0x17830000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0f20",
+      "file_offset": "0xd1f20",
+      "fields": [
+        "0x10000",
+        "0x17840000",
+        "0x17840000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0f50",
+      "file_offset": "0xd1f50",
+      "fields": [
+        "0x10000",
+        "0x17850000",
+        "0x17850000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0f80",
+      "file_offset": "0xd1f80",
+      "fields": [
+        "0x10000",
+        "0x17860000",
+        "0x17860000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0fb0",
+      "file_offset": "0xd1fb0",
+      "fields": [
+        "0x10000",
+        "0x17870000",
+        "0x17870000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd0fe0",
+      "file_offset": "0xd1fe0",
+      "fields": [
+        "0x10000",
+        "0x178a0000",
+        "0x178a0000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    },
+    {
+      "descriptor_va": "0xd1010",
+      "file_offset": "0xd2010",
+      "fields": [
+        "0x10000",
+        "0x178c0000",
+        "0x178c0000",
+        "0x4",
+        "0xf",
+        "0x1"
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "claim": "CPUSS descriptors occur in VMID3/HLOS array with610 records.",
+      "evidence": "Row VA d3428: count262, R_AARCH64_RELATIVE pointer addendcbdc0 at destinationd3430, VMID3. Init ae314..ae3a4 uses row VMID for mapping89524\u2192892d0\u219285e48."
+    },
+    {
+      "claim": "CPUSS descriptor platform mask1 passes initialized platform gate.",
+      "evidence": "Init ae1f8 unconditionally ORs1 into248710; descriptor+28 consumed atae360\u2192ad124 and compared against that mask."
+    },
+    {
+      "claim": "CPUSS mappings request read access in internal bitmap model.",
+      "evidence": "Descriptor+18 is4;ae86c..ae8c8 invokesb5504 with {VMID,flags}, where+4 bit2 adds reader VMID, bit1 adds writer VMID. No claim of successful runtime MMIO read."
+    },
+    {
+      "claim": "Atomic native IO READ/WRITE fast calls are explicitly forwarded.",
+      "evidence": "Owner2 fast IDs low16501/502 special-case at57150\u219256658\u219256730\u219211e00\u219248d90\u21928b6b0\u21928be60. No native501 entry in local210000..210450 dispatcher table."
+    },
+    {
+      "claim": "Native c2000501 reaches outgoing smc#0 with syscall ID preserved.",
+      "evidence": "81c2c managed-call selector contains masked02000501 atc80c4 and02000502 atc80c8, returns0;81c84\u219281e1c\u219281e40\u2192c32bc.838d8 stored original ID; c32c4 loads it; c3370 executes smc#0."
+    }
+  ],
+  "limits": [
+    "Static configuration establishes intended HLOS mapping, not a successful live load from17800054.",
+    "Mapping initialization can exclude disabled VMIDs throughac264/b5688; current Android VM initialization was not independently observed.",
+    "Firmware response status cannot be attributed to a TZ gate solely from this HYP analysis."
+  ]
+}

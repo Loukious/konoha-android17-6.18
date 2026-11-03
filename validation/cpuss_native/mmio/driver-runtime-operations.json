@@ -1,0 +1,182 @@
+[
+  {
+    "command": "cat /proc/sys/kernel/random/boot_id",
+    "returncode": 0,
+    "output": "f2e3caf9-2423-4d93-801e-1f0927f1b27e\n"
+  },
+  {
+    "command": "getenforce",
+    "returncode": 0,
+    "output": "Enforcing\n"
+  },
+  {
+    "command": "test -d /sys/module/qcom_cpuss_sleep_stats && echo yes",
+    "returncode": 0,
+    "output": "yes\n"
+  },
+  {
+    "command": "readlink /sys/bus/platform/devices/17800054.cpuss-sleep-stats/driver",
+    "returncode": 1,
+    "output": ""
+  },
+  {
+    "command": "sha256sum /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-0.ko",
+    "returncode": 0,
+    "output": "cfedb653d08cad2fca45f1e11d71781e69b8f349504c31e19214e82a9f304cde  /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-0.ko\n"
+  },
+  {
+    "command": "sha256sum /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-1.ko",
+    "returncode": 0,
+    "output": "c63957fdaf84ada8eeb716dea03625ff8505923476d2610efe559b68e7d5b9ba  /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-1.ko\n"
+  },
+  {
+    "command": "sha256sum /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-2.ko",
+    "returncode": 0,
+    "output": "79dd229e4b7740b6af2c71a43a5420f5974e511173b6e8d8b10d789fe152193a  /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-2.ko\n"
+  },
+  {
+    "command": "mkdir /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "mount -t debugfs -o ro debugfs /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rmmod qcom_cpuss_sleep_stats",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "insmod /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-1.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "insmod /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-0.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "readlink /sys/bus/platform/devices/17800054.cpuss-sleep-stats/driver",
+    "returncode": 0,
+    "output": "../../../../bus/platform/drivers/qcom_cpuss_sleep_stats\n"
+  },
+  {
+    "command": "cat /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats/stats",
+    "returncode": 0,
+    "output": "pcpu0: C3_residency: 29657204601\npcpu0: C4_residency: 27323845348\npcpu1: C3_residency: 17240358552\npcpu1: C4_residency: 67985543134\npcpu2: C3_residency: 1218161453\npcpu2: C4_residency: 106776284274\npcpu3: C3_residency: 1132312699\npcpu3: C4_residency: 107351464054\npcpu4: C3_residency: 1367146313\npcpu4: C4_residency: 106744582433\npcpu5: C3_residency: 3246749605\npcpu5: C4_residency: 96164753638\npcpu6: C3_residency: 2465421700\npcpu6: C4_residency: 97373336977\npcpu7: C3_residency: 555621944\npcpu7: C4_residency: 106444874741\nD4_residency: 0\n"
+  },
+  {
+    "command": "cat /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats/stats",
+    "returncode": 0,
+    "output": "pcpu0: C3_residency: 29682131705\npcpu0: C4_residency: 27359928106\npcpu1: C3_residency: 17253108584\npcpu1: C4_residency: 68059461928\npcpu2: C3_residency: 1219053871\npcpu2: C4_residency: 106867942235\npcpu3: C3_residency: 1132933697\npcpu3: C4_residency: 107438774973\npcpu4: C3_residency: 1367767865\npcpu4: C4_residency: 106844946568\npcpu5: C3_residency: 3247686560\npcpu5: C4_residency: 96259958558\npcpu6: C3_residency: 2466722957\npcpu6: C4_residency: 97468611801\npcpu7: C3_residency: 556791445\npcpu7: C4_residency: 106533720556\nD4_residency: 0\n"
+  },
+  {
+    "command": "cat /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats/stats",
+    "returncode": 0,
+    "output": "pcpu0: C3_residency: 29721088232\npcpu0: C4_residency: 27393336040\npcpu1: C3_residency: 17273504216\npcpu1: C4_residency: 68142051727\npcpu2: C3_residency: 1219053871\npcpu2: C4_residency: 106988100810\npcpu3: C3_residency: 1132933697\npcpu3: C4_residency: 107561703348\npcpu4: C3_residency: 1367767865\npcpu4: C4_residency: 106954078807\npcpu5: C3_residency: 3248496789\npcpu5: C4_residency: 96372876191\npcpu6: C3_residency: 2468269131\npcpu6: C4_residency: 97580874162\npcpu7: C3_residency: 557014022\npcpu7: C4_residency: 106655873734\nD4_residency: 0\n"
+  },
+  {
+    "command": "rmmod qcom_cpuss_sleep_stats",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "readlink /sys/bus/platform/devices/17800054.cpuss-sleep-stats/driver",
+    "returncode": 1,
+    "output": ""
+  },
+  {
+    "command": "test ! -e /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats && echo removed",
+    "returncode": 0,
+    "output": "removed\n"
+  },
+  {
+    "command": "insmod /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-0.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "readlink /sys/bus/platform/devices/17800054.cpuss-sleep-stats/driver",
+    "returncode": 0,
+    "output": "../../../../bus/platform/drivers/qcom_cpuss_sleep_stats\n"
+  },
+  {
+    "command": "cat /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats/stats",
+    "returncode": 0,
+    "output": "pcpu0: C3_residency: 29726629726\npcpu0: C4_residency: 27394119912\npcpu1: C3_residency: 17280326089\npcpu1: C4_residency: 68147946328\npcpu2: C3_residency: 1219053871\npcpu2: C4_residency: 107016265056\npcpu3: C3_residency: 1132933697\npcpu3: C4_residency: 107591970171\npcpu4: C3_residency: 1367767865\npcpu4: C4_residency: 106984222630\npcpu5: C3_residency: 3248775382\npcpu5: C4_residency: 96391561844\npcpu6: C3_residency: 2472946820\npcpu6: C4_residency: 97593493608\npcpu7: C3_residency: 557014022\npcpu7: C4_residency: 106675109523\nD4_residency: 0\n"
+  },
+  {
+    "command": "rmmod qcom_cpuss_sleep_stats",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "readlink /sys/bus/platform/devices/17800054.cpuss-sleep-stats/driver",
+    "returncode": 1,
+    "output": ""
+  },
+  {
+    "command": "test ! -e /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z/qcom_cpuss_sleep_stats && echo removed",
+    "returncode": 0,
+    "output": "removed\n"
+  },
+  {
+    "command": "rmmod qcom_cpuss_sleep_stats",
+    "returncode": 1,
+    "output": "rmmod: failed to unload qcom_cpuss_sleep_stats: No such file or directory\n"
+  },
+  {
+    "command": "rmmod onyx_cpuss_dt_diag",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "test ! -e /sys/firmware/devicetree/base/soc/cpuss-sleep-stats@17800054/qcom,config-mmio && echo removed",
+    "returncode": 0,
+    "output": "removed\n"
+  },
+  {
+    "command": "insmod /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-2.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "umount /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rmdir /data/local/tmp/onyx-cpuss-debugfs-20261103T154232Z",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rm -f /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-0.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rm -f /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-1.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rm -f /data/local/tmp/onyx-cpuss-driver-20261103T154232Z-2.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "cat /proc/sys/kernel/random/boot_id",
+    "returncode": 0,
+    "output": "f2e3caf9-2423-4d93-801e-1f0927f1b27e\n"
+  },
+  {
+    "command": "getenforce",
+    "returncode": 0,
+    "output": "Enforcing\n"
+  }
+]

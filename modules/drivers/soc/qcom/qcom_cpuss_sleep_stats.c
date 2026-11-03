@@ -140,11 +140,14 @@ struct qcom_target_info {
 	int ncpu;
 	phys_addr_t per_cpu_lpm_cfg[MAX_POSSIBLE_CPUS];
 	u32 per_cpu_lpm_cfg_size[MAX_POSSIBLE_CPUS];
+	void __iomem *per_cpu_cfg_base[MAX_POSSIBLE_CPUS];
 	phys_addr_t apss_seq_mem_base;
 	resource_size_t apss_seq_mem_size;
 	void __iomem *apss_base;
 	phys_addr_t l3_seq_lpm_cfg;
 	u32 l3_seq_lpm_size;
+	void __iomem *l3_cfg_base;
+	bool config_mmio;
 	const u32 *offsets;
 	u8 cpu_pcpu_map[MAX_POSSIBLE_CPUS];
 	struct qcom_cpuss_stats complete_stats;
@@ -673,6 +676,34 @@ static int qcom_cpuss_sleep_stats_create_cl_residency_debugfs(struct qcom_target
 	return 0;
 }
 
+/* Only DT-selected HLOS-readable configuration uses MMIO; reset stays secure. */
+static int qcom_cpuss_read_cfg(struct qcom_target_info *info, phys_addr_t addr,
+			       void __iomem *reg, u32 *val)
+{
+	if (!info->config_mmio)
+		return qcom_scm_io_readl(addr, val);
+	*val = readl_relaxed(reg);
+	return 0;
+}
+
+static int qcom_cpuss_map_cfg(struct qcom_target_info *info)
+{
+	int cpu;
+
+	if (!info->config_mmio)
+		return 0;
+	for (cpu = 0; cpu < MAX_POSSIBLE_CPUS; cpu++) {
+		if (info->cpu_pcpu_map[cpu] == U8_MAX)
+			continue;
+		info->per_cpu_cfg_base[cpu] =
+			devm_ioremap(&info->pdev->dev, info->per_cpu_lpm_cfg[cpu], sizeof(u32));
+		if (!info->per_cpu_cfg_base[cpu])
+			return -ENOMEM;
+	}
+	info->l3_cfg_base = devm_ioremap(&info->pdev->dev, info->l3_seq_lpm_cfg, sizeof(u32));
+	return info->l3_cfg_base ? 0 : -ENOMEM;
+}
+
 static int qcom_cpuss_read_lpm_and_residency_cfg_informaion(struct qcom_target_info *t_info)
 {
 	u32 val;
@@ -687,7 +718,7 @@ static int qcom_cpuss_read_lpm_and_residency_cfg_informaion(struct qcom_target_i
 			continue;
 
 		addr = t_info->per_cpu_lpm_cfg[j];
-		ret = qcom_scm_io_readl(addr, &val);
+		ret = qcom_cpuss_read_cfg(t_info, addr, t_info->per_cpu_cfg_base[j], &val);
 		if (ret)
 			return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read CPU config at %pa\n", &addr);
 
@@ -697,7 +728,9 @@ static int qcom_cpuss_read_lpm_and_residency_cfg_informaion(struct qcom_target_i
 
 		addr = t_info->apss_seq_mem_base;
 		addr += (t_info->offsets[APSS_CPU_LPM_RESIDENCY_CNTR_CFG_n] + OFFSET_4BYTES * i);
-		ret = qcom_scm_io_readl(addr, &val);
+		ret = qcom_cpuss_read_cfg(t_info, addr, t_info->apss_base +
+			t_info->offsets[APSS_CPU_LPM_RESIDENCY_CNTR_CFG_n] + OFFSET_4BYTES * i,
+			&val);
 		if (ret)
 			return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read CPU config at %pa\n", &addr);
 
@@ -708,7 +741,7 @@ static int qcom_cpuss_read_lpm_and_residency_cfg_informaion(struct qcom_target_i
 
 	/* cluster lpm */
 	addr = t_info->l3_seq_lpm_cfg;
-	ret = qcom_scm_io_readl(addr, &val);
+	ret = qcom_cpuss_read_cfg(t_info, addr, t_info->l3_cfg_base, &val);
 	if (ret)
 		return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read cluster config at %pa\n", &addr);
 
@@ -718,7 +751,8 @@ static int qcom_cpuss_read_lpm_and_residency_cfg_informaion(struct qcom_target_i
 
 	/* cluster residency */
 	addr = t_info->apss_seq_mem_base + t_info->offsets[APSS_CL_LPM_RESIDENCY_CNTR_CFG];
-	ret = qcom_scm_io_readl(addr, &val);
+	ret = qcom_cpuss_read_cfg(t_info, addr, t_info->apss_base +
+				t_info->offsets[APSS_CL_LPM_RESIDENCY_CNTR_CFG], &val);
 	if (ret)
 		return dev_err_probe(&t_info->pdev->dev, ret, "Cannot read cluster config at %pa\n", &addr);
 
@@ -746,6 +780,7 @@ static int qcom_cpuss_sleep_stats_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	info->pdev = pdev;
 	info->ncpu = ncpu;
+	info->config_mmio = of_property_read_bool(pdev->dev.of_node, "qcom,config-mmio");
 	info->offsets = device_get_match_data(&pdev->dev);
 	if (!info->offsets)
 		return -ENODEV;
@@ -797,6 +832,9 @@ static int qcom_cpuss_sleep_stats_probe(struct platform_device *pdev)
 				      info->apss_seq_mem_size);
 	if (!info->apss_base)
 		return -ENOMEM;
+	ret = qcom_cpuss_map_cfg(info);
+	if (ret)
+		return ret;
 	info->stats_rootdir = debugfs_create_dir("qcom_cpuss_sleep_stats", NULL);
 	if (IS_ERR_OR_NULL(info->stats_rootdir))
 		return info->stats_rootdir ? PTR_ERR(info->stats_rootdir) : -ENOMEM;

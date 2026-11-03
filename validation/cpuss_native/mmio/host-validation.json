@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "cases": 5024,
+  "sanitizers": "ASan+UBSan, recovery disabled",
+  "source_sha256": {
+    "drivers/soc/qcom/qcom_cpuss_sleep_stats.c": "2d7f21d495dc3b9b08ffcaa18c6c254b1a3df222b314d7bc50c72006de719cf6"
+  },
+  "limits": [
+    "Complete driver runs against bounded MMIO/SCM/debugfs/devres stubs. Hardware counter/reset behavior and actual debugfs proxy lifetime need kernel/device evidence."
+  ]
+}

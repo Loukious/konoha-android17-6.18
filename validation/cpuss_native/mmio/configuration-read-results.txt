@@ -1,0 +1,19 @@
+[ 4788.455185] ONYX_CPUSS_DIAG addr=0x0000000017800054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455310] ONYX_CPUSS_DIAG addr=0x0000000017810054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455408] ONYX_CPUSS_DIAG addr=0x0000000017820054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455506] ONYX_CPUSS_DIAG addr=0x0000000017830054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455601] ONYX_CPUSS_DIAG addr=0x0000000017840054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455716] ONYX_CPUSS_DIAG addr=0x0000000017850054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455824] ONYX_CPUSS_DIAG addr=0x0000000017860054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.455921] ONYX_CPUSS_DIAG addr=0x0000000017870054 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.456031] ONYX_CPUSS_DIAG addr=0x00000000178a0098 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000000
+[ 4788.456130] ONYX_CPUSS_DIAG addr=0x00000000178cc004 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456223] ONYX_CPUSS_DIAG addr=0x00000000178cc008 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456315] ONYX_CPUSS_DIAG addr=0x00000000178cc00c scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456410] ONYX_CPUSS_DIAG addr=0x00000000178cc010 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456503] ONYX_CPUSS_DIAG addr=0x00000000178cc014 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456607] ONYX_CPUSS_DIAG addr=0x00000000178cc018 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456702] ONYX_CPUSS_DIAG addr=0x00000000178cc01c scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456795] ONYX_CPUSS_DIAG addr=0x00000000178cc020 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000014
+[ 4788.456887] ONYX_CPUSS_DIAG addr=0x00000000178cc030 scm_ret=-22 scm_value=00000000 mmio_ret=0 mmio_value=00000004
+[ 4788.456891] ONYX_CPUSS_DIAG complete: 18 configuration reads, no writes
