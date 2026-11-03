@@ -14,7 +14,7 @@ startup checks, front/rear photos and short 1080p recordings. Camera synchroniza
 recovery itself is unchanged; separate SOF-skip diagnostics remain. New
 LTS/KernelSU builds require device validation.
 
-The current candidate uses Linux **6.18.38** with **365 platform modules**.
+The current candidate uses Linux **6.18.38** with **370 platform modules**.
 It adds native CSR/ETR byte-counter streaming, trace-NoC and TPDM BC/TC/GPR
 controls, fixes reverse-charging gear error handling, and addresses kernel
 camera startup/statistics findings. See [kernel follow-up notes](port/kernel-followup.md)
@@ -22,7 +22,8 @@ for validation limits and the ROM-side findings recorded without ROM changes.
 The remaining-provider batch adds native VBAT protection, memlat, Qualcomm CTI
 and qcom-battery sysfs. See [module port notes](port/remaining-active-modules.md)
 for their validation and hardware limits. A further batch adds native boot/suspend
-diagnostics, IBAT/business providers, SCMI statistics, QMI/TGU and CPUCP logging.
+diagnostics, IBAT/business providers, SCMI statistics, QMI/TGU, CPUCP logging and
+FAST hints, C1DCVS/DYNPF controls, and dummy/remote ETM trace sources.
 The phone still runs the validated
 352-module candidate; this batch has not been installed.
 
@@ -43,7 +44,7 @@ On the source branch:
 - `common/` contains the complete pinned upstream GKI with the required common
   fixes applied. CI independently recreates and verifies every source file,
   executable bit and symlink before building.
-- `modules/` contains all 4,995 materialized, modified source/build files used
+- `modules/` contains all 5,001 materialized, modified source/build files used
   by the module port, including WLAN, IPA, Bluetooth, graphics, audio, camera,
   charging, PMIC/SPMI, clocks, USB and the remaining device driver groups.
 - `port/imports.json` records the exact original repositories, commits and Git
@@ -88,7 +89,7 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
-Every build includes GKI, all 365 modules, both supported device-tree variants,
+Every build includes GKI, all 370 modules, both supported device-tree variants,
 KernelSU dev's exact source archive, classic/extended symbol CRC verification,
 input hashes and logs. Download `konoha-gki-and-modules.tar.gz`, `kernel-abi/`
 and `SHA256SUMS` from the build's artifacts. These are build outputs, not a

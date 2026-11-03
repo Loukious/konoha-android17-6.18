@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "cases": 119,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/power/supply/mca/mca_business/business_misc/inc/mca_business_misc.h": "f9fb0e527a70ca1996e6bd8b17865612e8d85b6f57cf48239597bdf4f5a918f5",
+    "drivers/power/supply/mca/mca_business/business_misc/mca_business_votable.c": "06ff7cdf82a999f9e1056ccbaccef000206529ae1a8a2df54e486280ae8c1b2f",
+    "drivers/power/supply/mca/mca_business/business_misc/mca_business_misc.c": "10e703dcfbdf8eb556bab177a1fedb1bcc07125c6c82883fe5a1d3cfe9634633"
+  },
+  "limits": [
+    "Voter and wakeup stubs verify rollback and teardown; kernel SRCU/provider lifetime is validated separately."
+  ]
+}

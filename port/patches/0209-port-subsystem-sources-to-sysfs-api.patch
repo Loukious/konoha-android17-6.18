@@ -1,0 +1,72 @@
+--- a/drivers/hwtracing/coresight/coresight-dummy.c
++++ b/drivers/hwtracing/coresight/coresight-dummy.c
+@@ -93,6 +93,10 @@
+ {
+ 	struct dummy_drvdata *d = dev_get_drvdata(csdev->dev.parent);
+ 	int ret = 0;
++
++	/* Native subsystem sources are controlled by the sysfs trace path. */
++	if (mode != CS_MODE_SYSFS)
++		return -EINVAL;
+ 
+ 	mutex_lock(&d->mutex);
+ 	if (d->removing) {
+@@ -306,8 +310,8 @@
+ 	mutex_lock(&d->mutex);
+ 	d->removing = true;
+ 	mutex_unlock(&d->mutex);
+-	if (d->enabled)
+-		coresight_disable(d->csdev);
++	if (d->csdev->type == CORESIGHT_DEV_TYPE_SOURCE)
++		coresight_disable_sysfs(d->csdev);
+ 	coresight_unregister(d->csdev);
+ 	pm_runtime_disable(&pdev->dev);
+ 	if (d->id_owned) {
+--- a/drivers/hwtracing/coresight/coresight-remote-etm.c
++++ b/drivers/hwtracing/coresight/coresight-remote-etm.c
+@@ -122,6 +122,10 @@
+ 	struct remote_etm_drvdata *d = dev_get_drvdata(csdev->dev.parent);
+ 	unsigned int i;
+ 	int ret;
++
++	/* Native subsystem sources are controlled by the sysfs trace path. */
++	if (mode != CS_MODE_SYSFS)
++		return -EINVAL;
+ 
+ 	mutex_lock(&d->mutex);
+ 	if (d->removing) {
+@@ -338,7 +342,7 @@
+ 	dev_info(dev, "Remote ETM initialized\n");
+ 
+ 	if (boot_enable) {
+-		ret = coresight_enable(drvdata->csdev);
++		ret = coresight_enable_sysfs(drvdata->csdev);
+ 		if (ret)
+ 			dev_warn(dev, "Default remote ETM enable failed: %d\n", ret);
+ 	}
+@@ -358,8 +362,7 @@
+ 	mutex_lock(&d->mutex);
+ 	d->removing = true;
+ 	mutex_unlock(&d->mutex);
+-	if (d->active_path)
+-		coresight_disable(d->csdev);
++	coresight_disable_sysfs(d->csdev);
+ 	mutex_lock(&d->mutex);
+ 	if (d->enable)
+ 		ret = qmi_disable_remote_etm(d);
+@@ -423,13 +426,13 @@
+ 	},
+ };
+ 
+-int __init remote_etm_init(void)
++static int __init remote_etm_init(void)
+ {
+ 	return platform_driver_register(&remote_etm_driver);
+ }
+ module_init(remote_etm_init);
+ 
+-void __exit remote_etm_exit(void)
++static void __exit remote_etm_exit(void)
+ {
+ 	platform_driver_unregister(&remote_etm_driver);
+ }

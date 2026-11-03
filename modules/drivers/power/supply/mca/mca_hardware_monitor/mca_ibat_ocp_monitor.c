@@ -49,15 +49,15 @@
 
 static int mca_ibat_mon_get_ibat_ocp_flag(struct mca_ibat_ocp_mon_dev *info)
 {
-	int role, current, ret, flag = 0;
+	int role, ibat_ua, ret, flag = 0;
 	s64 magnitude;
 
 	for (role = FG_IC_MASTER; role <= FG_IC_SLAVE; role++) {
-		ret = platform_fg_ops_get_curr(role, &current);
+		ret = platform_fg_ops_get_curr(role, &ibat_ua);
 		if (ret)
 			return ret;
 		/* Native FG current and thresholds are microamps, despite _ma names. */
-		magnitude = current < 0 ? -(s64)current : current;
+		magnitude = ibat_ua < 0 ? -(s64)ibat_ua : ibat_ua;
 		magnitude = max_t(s64, magnitude, role == FG_IC_MASTER ?
 			info->fake_master_ibat_override_ma : info->fake_slave_ibat_override_ma);
 		if (magnitude > info->ocp_threshold[role])

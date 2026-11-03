@@ -20,7 +20,7 @@ struct fwnode_handle { bool qmi; };
 struct coresight_device;
 struct coresight_connection { struct coresight_device *dest_dev; struct fwnode_handle *dest_fwnode; };
 struct coresight_platform_data { int nr_outconns; struct coresight_connection **out_conns; };
-struct coresight_device { struct device dev; struct coresight_platform_data *pdata; int type; struct { int helper_subtype; } subtype; enum cs_mode mode; bool qmi; };
+struct coresight_device { struct device dev; struct coresight_platform_data *pdata; int type; struct { int helper_subtype; } subtype; enum cs_mode mode; int refcnt; bool qmi; };
 struct coresight_path { struct coresight_device *sink; int trace_id; };
 struct perf_event { int unused; };
 struct coresight_desc { const char *name; int type; struct { int source_subtype, sink_subtype; } subtype; void *ops, *groups; struct coresight_platform_data *pdata; struct device *dev; };
@@ -125,10 +125,20 @@ static void pm_runtime_enable(struct device *dev) { pm_users++; }
 static void pm_runtime_disable(struct device *dev) { pm_users--; }
 static struct coresight_device *coresight_register(struct coresight_desc *desc) { registered.dev.parent = desc->dev; registered.pdata = desc->pdata; registered.type = desc->type; return register_error ? ERR_PTR(register_error) : &registered; }
 static void coresight_unregister(struct coresight_device *dev) { unregisters++; }
-static void coresight_disable(struct coresight_device *dev);
-static int coresight_enable(struct coresight_device *dev) { return -EIO; }
+static void coresight_disable_sysfs(struct coresight_device *dev);
+static int coresight_enable_sysfs(struct coresight_device *dev);
 /* INSERT_FUNCTIONS */
-static void coresight_disable(struct coresight_device *dev) {
+static int coresight_enable_sysfs(struct coresight_device *dev) {
+    if (dev->mode == CS_MODE_SYSFS) return 0; /* SOURCE_OTHERS is idempotent. */
+    int ret = node.source ? dummy_source_enable(dev, NULL, CS_MODE_SYSFS, &path) :
+                           remote_etm_enable(dev, NULL, CS_MODE_SYSFS, &path);
+    if (!ret) dev->refcnt = 1;
+    return ret;
+}
+static void coresight_disable_sysfs(struct coresight_device *dev) {
+    if (dev->type != CORESIGHT_DEV_TYPE_SOURCE || dev->mode != CS_MODE_SYSFS) return;
+    assert(dev->refcnt == 1);
+    dev->refcnt--;
     if (node.source) dummy_source_disable(dev, NULL); else remote_etm_disable(dev, NULL);
 }
 static void reset(void) {
@@ -184,7 +194,8 @@ int main(void) {
     CHECK(remote_etm_get_traceid(&d) == -ENOSPC && !d.reserved && !used_ids[1]);
     struct remote_etm_drvdata *r = remote(true);
     CHECK(remote_etm_trace_id(&registered, CS_MODE_SYSFS, &sink) == 36);
-    CHECK(remote_etm_enable(&registered, NULL, CS_MODE_SYSFS, &path) == 0 && r->reserved == 2 && used_ids[36] && used_ids[37]);
+    CHECK(remote_etm_enable(&registered, NULL, CS_MODE_PERF, &path) == -EINVAL && !qmi_enables && !r->reserved);
+    CHECK(coresight_enable_sysfs(&registered) == 0 && r->reserved == 2 && used_ids[36] && used_ids[37]);
     CHECK(remote_etm_enable(&registered, NULL, CS_MODE_SYSFS, &path) == -EBUSY);
     remote_etm_disable(&registered, NULL); CHECK(!r->reserved && !used_ids[36] && !used_ids[37] && !csr.users);
     r = remote(true); used_ids[37] = true;
@@ -198,12 +209,15 @@ int main(void) {
     CHECK(remote_etm_enable(&registered, NULL, CS_MODE_SYSFS, &path) == 0 && r->reserved == 2 && !r->stop_failed);
     qmi_disable_error = -EIO; remote_etm_disable(&registered, NULL);
     CHECK(r->reserved == 2 && r->stop_failed && !csr.users && registered.mode == CS_MODE_DISABLED);
-    qmi_disable_error = 0; CHECK(remote_etm_enable(&registered, NULL, CS_MODE_SYSFS, &path) == 0);
+    qmi_disable_error = 0; CHECK(coresight_enable_sysfs(&registered) == 0);
     qmi_disable_error = -EIO; CHECK(remote_etm_suspend(&pdev.dev) == -EIO && !r->suspended && r->reserved == 2);
     qmi_disable_error = 0; CHECK(remote_etm_suspend(&pdev.dev) == 0 && r->suspended && r->reserved == 2 && csr.users == 1);
     qmi_enable_error = -EIO; CHECK(remote_etm_resume(&pdev.dev) == -EIO && r->suspended);
     qmi_enable_error = 0; CHECK(remote_etm_resume(&pdev.dev) == 0 && !r->suspended);
-    remote_etm_remove(&pdev); CHECK(!used_ids[36] && !used_ids[37] && !csr.users && !pm_users && unregisters == 1);
+    remote_etm_remove(&pdev); CHECK(!used_ids[36] && !used_ids[37] && !csr.users && !pm_users && unregisters == 1 && !registered.refcnt && !r->active_path);
+    r = remote(true); CHECK(coresight_enable_sysfs(&registered) == 0);
+    qmi_disable_error = -EIO; remote_etm_remove(&pdev);
+    CHECK(used_ids[36] && used_ids[37] && r->stop_failed && !r->active_path && !csr.users && !registered.refcnt);
     r = remote(false); path.trace_id = r->traceids[0];
     CHECK(remote_etm_enable(&registered, NULL, CS_MODE_SYSFS, &path) == 0 && qmi_assigns == 1 && sent_atids.num_atids == 2);
     CHECK(sent_atids.atids[0] == r->traceids[0] && sent_atids.atids[1] == r->traceids[1]);
@@ -219,9 +233,11 @@ int main(void) {
     CHECK(dummy_probe(&pdev) == 0 && used_ids[50]);
     struct dummy_drvdata *dummy = pdev.dev.data;
     CHECK(dummy_trace_id(&registered, CS_MODE_SYSFS, &sink) == 50);
-    CHECK(dummy_source_enable(&registered, NULL, CS_MODE_SYSFS, &path) == 0 && dummy->enabled && !qmi_assigns);
+    CHECK(dummy_source_enable(&registered, NULL, CS_MODE_PERF, &path) == -EINVAL && !dummy->enabled);
+    CHECK(coresight_enable_sysfs(&registered) == 0 && dummy->enabled && !qmi_assigns);
+    CHECK(coresight_enable_sysfs(&registered) == 0 && registered.refcnt == 1);
     CHECK(dummy_source_enable(&registered, NULL, CS_MODE_SYSFS, &path) == -EBUSY);
-    dummy_remove(&pdev); CHECK(!used_ids[50] && !pm_users && !dummy->id_owned);
+    dummy_remove(&pdev); CHECK(!used_ids[50] && !pm_users && !dummy->id_owned && !registered.refcnt && registered.mode == CS_MODE_DISABLED);
     reset(); node.source = true;
     CHECK(dummy_probe(&pdev) == 0); dummy = pdev.dev.data;
     qmi_assign_error = -EREMOTEIO;

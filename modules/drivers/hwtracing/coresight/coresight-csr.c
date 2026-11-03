@@ -96,6 +96,60 @@ out:
 	return ret;
 }
 
+/* The primary ID is already owned by the common CSR path helper. */
+int qcom_csr_route_ids(struct coresight_path *path, const u8 *ids, unsigned int count, bool enable)
+{
+	struct coresight_device *sink, *helper = NULL;
+	struct csr_drvdata *d;
+	u32 offset;
+	unsigned int i, j;
+	int conn, ret;
+
+	if (!path || !ids || !count || count > 8)
+		return -EINVAL;
+	for (i = 0; i < count; i++) {
+		if (!IS_VALID_CS_TRACE_ID(ids[i]))
+			return -EINVAL;
+		for (j = 0; j < i; j++)
+			if (ids[i] == ids[j])
+				return -EINVAL;
+	}
+	sink = coresight_get_sink(path);
+	if (!sink)
+		return -EINVAL;
+	/* Native non-ETR sinks have no ATID filter to program. */
+	if (!device_property_present(sink->dev.parent, "coresight-csr"))
+		return 0;
+	for (conn = 0; conn < sink->pdata->nr_outconns; conn++) {
+		helper = sink->pdata->out_conns[conn]->dest_dev;
+		if (helper && helper->type == CORESIGHT_DEV_TYPE_HELPER &&
+		    helper->subtype.helper_subtype == CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR)
+			break;
+		helper = NULL;
+	}
+	if (!helper)
+		return -ENODEV;
+	if (device_property_read_u32(sink->dev.parent, "csr-atid-offset", &offset))
+		return -EINVAL;
+	d = dev_get_drvdata(helper->dev.parent);
+	for (i = 0; i < count; i++) {
+		if (ids[i] == path->trace_id)
+			continue;
+		ret = csr_route(d, offset, ids[i], enable);
+		if (ret)
+			goto rollback;
+	}
+	return 0;
+rollback:
+	if (enable)
+		while (i--) {
+			if (ids[i] != path->trace_id)
+				csr_route(d, offset, ids[i], false);
+		}
+	return ret;
+}
+EXPORT_SYMBOL_GPL(qcom_csr_route_ids);
+
 static int csr_path_route(struct coresight_device *csdev, void *data, bool enable)
 {
 	struct csr_drvdata *d = dev_get_drvdata(csdev->dev.parent);

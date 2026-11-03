@@ -1188,6 +1188,42 @@ ddk_module(
 )
 
 ddk_headers(
+    name = "c1dcvs_headers",
+    hdrs = ["include/linux/scmi_c1dcvs.h"],
+    linux_includes = ["include"],
+)
+
+ddk_module(
+    name = "c1dcvs_scmi_v2",
+    srcs = ["drivers/soc/qcom/dcvs/c1dcvs_scmi_v2.c"],
+    out = "c1dcvs_scmi_v2.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":scmi_vendor_headers", ":c1dcvs_headers", ":qcom_scmi_client"],
+)
+
+ddk_module(
+    name = "dynpf_scmi",
+    srcs = ["drivers/soc/qcom/dcvs/dynpf_scmi.c"],
+    out = "dynpf_scmi.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":scmi_vendor_headers", ":qcom_scmi_client"],
+)
+
+ddk_module(
+    name = "cpucp_fast",
+    srcs = ["drivers/soc/qcom/cpucp_fast.c"],
+    out = "cpucp_fast.ko",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":walt_headers", ":sched_walt", ":qcom_cpucp"],
+)
+
+ddk_headers(
     name = "cpufreq_headers",
     hdrs = ["include/linux/qcom-cpufreq-hw.h", "include/trace/events/dcvsh.h"],
     linux_includes = ["include"],
@@ -4275,6 +4311,9 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":coresight_dummy",
+        ":coresight_remote_etm",
+
         ":coresight_tgu",
         ":coresight_qmi",
         ":mca_ibat_ocp_monitor",
@@ -4450,6 +4489,9 @@ kernel_module_group(
         ":bwmon",
         ":qcom_pmu_lib",
         ":memlat",
+        ":cpucp_fast",
+        ":dynpf_scmi",
+        ":c1dcvs_scmi_v2",
         ":cpucp_log",
         ":cpufreq_stats_scmi_v3",
         ":cpufreq_stats_scmi_v2",
@@ -5114,6 +5156,13 @@ ddk_module(
     srcs = [
         "drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c",
         "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h",
+        "drivers/power/supply/mca/include/mca/strategy/strategy_fg_class.h",
+        "drivers/power/supply/mca/include/mca/strategy/strategy_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_buckchg_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_wireless_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_fg_ic_ops.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_loadsw_class.h",
+        "drivers/power/supply/mca/include/mca/protocol/protocol_class.h",
     ],
     out = "mca_ibat_ocp_monitor.ko",
     kernel_build = "//common:kernel_aarch64",
@@ -5124,9 +5173,8 @@ ddk_module(
 
 ddk_headers(
     name = "coresight_qmi_headers",
-    hdrs = ["drivers/hwtracing/coresight/coresight-qmi.h"],
+    hdrs = ["drivers/hwtracing/coresight/coresight-qmi.h", ":remote_headers"],
     includes = ["drivers/hwtracing/coresight"],
-    deps = [":remote_headers"],
 )
 
 ddk_module(
@@ -5147,4 +5195,24 @@ ddk_module(
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",
     deps = [":coresight_provider_headers"],
+)
+
+ddk_module(
+    name = "coresight_dummy",
+    srcs = ["drivers/hwtracing/coresight/coresight-dummy.c"],
+    out = "coresight-dummy.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":coresight_qmi", ":coresight_csr"],
+)
+
+ddk_module(
+    name = "coresight_remote_etm",
+    srcs = ["drivers/hwtracing/coresight/coresight-remote-etm.c"],
+    out = "coresight-remote-etm.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_qmi_headers", ":coresight_qmi", ":coresight_csr"],
 )

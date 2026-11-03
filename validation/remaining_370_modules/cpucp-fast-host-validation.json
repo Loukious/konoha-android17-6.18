@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "cases": 19,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/soc/qcom/cpucp_fast.c": "f54a1d9146c3140098fed45c16c095d7bfc617edf6d0334896545c972fbdfe06"
+  },
+  "limits": [
+    "WALT/mailbox service stubs verify hint control flow; physical scheduler migration needs device verification."
+  ]
+}

@@ -74,6 +74,9 @@ def main():
         "coresight_qmi": "verify_coresight_qmi",
         "coresight_tgu": "verify_coresight_tgu",
         "cpucp_log": "verify_cpucp_log",
+        "scmi_controls": "verify_scmi_controls",
+        "cpucp_fast": "verify_cpucp_fast",
+        "coresight_sources": "verify_coresight_sources",
     }
     provider_validations = {}
     for name, verifier in provider_verifiers.items():

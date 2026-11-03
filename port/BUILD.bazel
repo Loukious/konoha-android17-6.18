@@ -5156,6 +5156,13 @@ ddk_module(
     srcs = [
         "drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c",
         "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h",
+        "drivers/power/supply/mca/include/mca/strategy/strategy_fg_class.h",
+        "drivers/power/supply/mca/include/mca/strategy/strategy_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_buckchg_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_wireless_class.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_fg_ic_ops.h",
+        "drivers/power/supply/mca/include/mca/platform/platform_loadsw_class.h",
+        "drivers/power/supply/mca/include/mca/protocol/protocol_class.h",
     ],
     out = "mca_ibat_ocp_monitor.ko",
     kernel_build = "//common:kernel_aarch64",

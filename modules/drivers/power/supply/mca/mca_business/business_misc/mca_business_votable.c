@@ -17,7 +17,7 @@
  *
  */
 #include <linux/slab.h>
-#include <linux/pm_wakeup.h>
+#include <linux/device.h>
 #include "inc/mca_business_misc.h"
 #include <linux/module.h>
 #include <linux/kernel.h>

@@ -1,0 +1,51 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T120140705659Z",
+  "platform_modules": 370,
+  "imported_crcs": 22508,
+  "artifact_hashes": 2257,
+  "staged_source_hashes": 5001,
+  "host_cases": {
+    "mi_thermal_host_validation": 50,
+    "device_services_host_validation": null,
+    "platform_providers_host_validation": 1120,
+    "vbat_ovp_host_validation": 834,
+    "cti_assoc_host_validation": 3,
+    "qcom_sysfs_host_validation": 744,
+    "coresight_cti_host_validation": 26417,
+    "memlat_host_validation": 89,
+    "boot_diagnostics_host_validation": 16,
+    "business_misc_host_validation": 119,
+    "ibat_ocp_host_validation": 157,
+    "scmi_stats_host_validation": 42,
+    "coresight_qmi_host_validation": 774,
+    "coresight_tgu_host_validation": 2016,
+    "cpucp_log_host_validation": 41,
+    "scmi_controls_host_validation": 63,
+    "cpucp_fast_host_validation": 19,
+    "coresight_sources_host_validation": 341
+  },
+  "common_replay": {
+    "gki_files_verified": 91827,
+    "upstream_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0"
+  },
+  "first_stage": {
+    "status": "PASS",
+    "report": "/home/loukious/Android/konoha-android17-6.18-port-20261031/packaging/remaining-370-first-stage-20261103T120140705659Z/report.json",
+    "sha256": "3dbb1b3c55bcdcb3ecd176ff5868f8cddaf7cd2435d03fa3ace1dcb05eedafa7"
+  },
+  "bundle": {
+    "status": "PASS",
+    "report": "/home/loukious/Android/konoha-android17-6.18-port-20261031/packaging/remaining-370-bundle-20261103T120140705659Z/report.json",
+    "sha256": "4fe574e272dcb53dedc19884832ab6d45fbe013cb4a223f009e944487511819d",
+    "packaged_modules": 450,
+    "catalog_modules_checked": 479,
+    "versioned_imports_checked": 28881,
+    "unavailable_load_list_names": 101
+  },
+  "limits": [
+    "No 356/370 batch flashed; phone remains on 352-module installation.",
+    "Metadata, sanitizer and DT validation do not prove hardware behavior.",
+    "glink_pkt still absent; Bluetooth control gap documented separately. Hotspot reset cause unresolved."
+  ]
+}

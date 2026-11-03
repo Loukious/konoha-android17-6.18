@@ -166,3 +166,11 @@ CSR reference rollback and original register bits, every valid/invalid 8-bit ID,
 malformed counts, static collisions, probe allocation failures, firmware errors,
 stop quarantine/retry, suspend/resume, shared dummy sinks and teardown. Physical
 trace delivery remains untested while the phone is disconnected.
+
+## Bluetooth control transport priority (2026-11-03)
+
+The 352-module installation lacks native `glink_pkt`. Firmware already exposes the unbound ADSP `bt_cp_ctrl` RPMSG channel, and native Onyx DT requests its `/dev/bt_cp_ctrl` endpoint. The vendor Bluetooth library opens this control device before it opens the codec DMA client. ROM ueventd already supplies the required bluetooth:system ownership; restore this kernel provider before assessing a ROM change. Playback success still requires a runtime retest.
+
+Source: `baseline/kernel/xiaomi/sm8735/drivers/rpmsg/glink_pkt.c`; draft/source review in `/home/loukious/Android/konoha-remaining-diagnostics/glink-pkt-draft` and `port/GLINK-PKT-PORT-REVIEW.md` in that worktree. Patch 0210 reserved. Native removal, registration-error propagation, nonblocking read locking, obsolete IDA calls and zero-copy mapping ownership need repair before validation/installation. The provider has no native OF aliases despite matching an active `qcom,glinkpkt` node, so the prior inventory's absence of DT matches is incomplete.
+
+Hotspot reboot remains unresolved after two captures, including offload disabled. See `validation/hotspot_bt_20261103/findings.md`; no error suppression or speculative protocol change is justified by the current traces.

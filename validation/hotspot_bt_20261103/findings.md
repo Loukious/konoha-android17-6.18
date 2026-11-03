@@ -1,0 +1,19 @@
+# Hotspot and Bluetooth investigation — 2026-11-03
+
+Phone 5493f3c6 still runs the installed 352-module 6.18.38 build. Neither the validated 356 batch nor the 370 candidate has been flashed.
+
+Hotspot fully rebooted twice, including once with tethering hardware offload disabled. Boot IDs changed from f4391c4c-2c8e-4ac0-96d5-2233af1e246a to 69c5f967-1fd3-4be8-bc7e-603eea40b8c6 and then d69ef739-977c-4ee7-9747-4131bd0b73dd. The temporary tether_offload_disabled setting was restored to its original 0 and independently rechecked.
+
+Both streams stop during Wi-Fi AP startup on 5260 MHz / center 5290 MHz, DFS enabled. No panic/oops is present in the captured tail; pstore is empty. The 16 MiB oops partition contains eight historic July/August records, including 6.6.143; none establishes the current reset cause. Exact bytes, SHA256 and parsed timestamps are saved under persistent-crash-check. RSO stop handling explicitly returns on the null timer. dp_peer_setup_wifi3 also deliberately returns failure for an AP BSS peer. These errors must not be treated as the proven reboot site. HE ops values 0x19003ff0 and 0x21003ff0 encode valid colors 25/33 and RTS threshold 1023 under the D3 firmware masks; their differing values are not evidence of uninitialized memory.
+
+Bluetooth connects with SBC but fails to prepare btaudio_rx (DAI 2, 44100 Hz). The codec cannot enqueue genuine DMA configuration requests without its persistent client. The HAL's brief /dev/btfmcodec_dev open / ioctl 0xbfaf / close at boot is configuration, not that persistent client. Both AIDL and HIDL CP property readers default to true; HIDL bytes at 0x541d5 independently confirm it. Do not fix playback by faking DMA responses or disabling native CP.
+
+Concrete missing kernel service: /sys/bus/rpmsg/devices/3000000.remoteproc-adsp:glink-edge.bt_cp_ctrl.-1.-1 exists, reports rpmsg:bt_cp_ctrl and has no bound driver. /dev/bt_cp_ctrl is absent. Native Onyx DT contains qcom,glinkpkt with an ADSP bt_cp_ctrl child; ROM ueventd already declares bluetooth:system 0660. glink_pkt is an unavailable vendor load-list module; its absent OF aliases obscured its DT/service dependency in the prior inventory. Source is baseline/kernel/xiaomi/sm8735/drivers/rpmsg/glink_pkt.c.
+
+Static vendor binary evidence: android.hardware.bluetooth@1.0-impl-qti.so SHA256 46e88d04c46f0ae04b56fcea9b0b72055342dbaeb32fa4c972ab2dbcdb3ab4ff. XpanManagerMainThreadRoutine calls GlinkTransport::OpenGlinkChannel(1) at 0x152c0c and branches away on failure at 0x152c14; only after success does it call KernelProxyTransport::OpenKpTransport at 0x152c44. GlinkTransport::OpenGlinkChannel(1) opens /dev/bt_cp_ctrl (string 0x62903). KernelProxyTransport opens /dev/btfmcodec_dev. This establishes a native dependency that must be restored in the kernel; whether its restoration resolves every playback issue requires a runtime retest. Initialization also depends on native controller/transport state and gates; their runtime values are not yet fully established.
+
+REA evidence retained: CP bytes ev_ce979efc8b3305857e97aa81b42ddcd9c9702e39c463dcdb61ad7fbb7072036c; CP default ev_c4d7c1ee946880b3cf474a876095e4c991ad0dad14175b743871d1c55379482c; KernelProxyTransport references ev_5c64846d774a690caba4d47852e1631ca9566c1ff0a4e8512a5d038fb776c086. Hopper's containing-function metadata misidentifies several anonymous neighboring procedures; instruction addresses and ELF dynamic symbols are used for those ranges. Static observations are not execution traces.
+
+Next: port native glink_pkt, validate its lifetime/error/packet behavior and build a matched artifact. Continue hotspot investigation separately; no proven hotspot fix yet. Record any ROM findings separately, without implementing speculative ROM changes.
+
+Capture root: /home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-hotspot-bt-20261103T110918Z
