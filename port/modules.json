@@ -332,6 +332,10 @@
     "output": "qcom-pmu-lib.ko"
   },
   {
+    "target": "memlat",
+    "output": "memlat.ko"
+  },
+  {
     "target": "qcom_cpufreq_hw",
     "output": "qcom-cpufreq-hw.ko"
   },

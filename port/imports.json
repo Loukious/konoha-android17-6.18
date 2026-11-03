@@ -29939,5 +29939,11 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/hwtracing/coresight/coresight-cti.h",
     "blob": "5bacfe020d5eb2762af772cba8888f9c8f151e7a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/dcvs/memlat.c",
+    "blob": "e0c32012b70e3f8d9adba7ed56ac041aa501b1e6"
   }
 ]

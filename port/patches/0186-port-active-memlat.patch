@@ -1,0 +1,1366 @@
+--- a/drivers/soc/qcom/dcvs/memlat.c
++++ b/drivers/soc/qcom/dcvs/memlat.c
+@@ -25,8 +25,12 @@
+ #include <linux/of_fdt.h>
+ #include <linux/of_device.h>
+ #include <linux/mutex.h>
+-#include <linux/cpu.h>
+ #include <linux/spinlock.h>
++#include <linux/completion.h>
++#include <linux/overflow.h>
++#include <linux/math64.h>
++#include <linux/hrtimer.h>
++#include <linux/workqueue.h>
+ #include <trace/hooks/sched.h>
+ #include <soc/qcom/dcvs.h>
+ #include <soc/qcom/pmu_lib.h>
+@@ -191,6 +195,7 @@
+ 	u32				max_freq;
+ 	u32				cur_freq;
+ 	struct kobject			kobj;
++	struct completion		kobj_released;
+ 	bool				is_compute;
+ 	u32				index;
+ };
+@@ -202,6 +207,7 @@
+ 	enum dcvs_path_type		sampling_path_type;
+ 	enum dcvs_path_type		threadlat_path_type;
+ 	bool				cpucp_enabled;
++	bool				sampling_registered;
+ 	u32				sampling_cur_freq;
+ 	u32				adaptive_cur_freq;
+ 	u32				adaptive_high_freq;
+@@ -218,11 +224,13 @@
+ 	u32				num_inited_mons;
+ 	struct mutex			mons_lock;
+ 	struct kobject			kobj;
++	struct completion		kobj_released;
+ };
+ 
+ struct memlat_dev_data {
+ 	struct device			*dev;
+ 	struct kobject			kobj;
++	struct completion		kobj_released;
+ 	u32				common_ev_ids[NUM_COMMON_EVS];
+ 	struct work_struct		work;
+ 	struct workqueue_struct		*memlat_wq;
+@@ -234,10 +242,15 @@
+ 	int				num_grps;
+ 	int				num_inited_grps;
+ 	spinlock_t			fp_agg_lock;
+-	spinlock_t			fp_commit_lock;
+ 	bool				fp_enabled;
+ 	bool				sampling_enabled;
+ 	bool				inited;
++	bool				stopping;
++	bool				scheduler_hook;
++	bool				jiffies_hook;
++	bool				idle_notifier;
++	bool				cpucp_started;
++	struct scmi_device		*scmi_dev;
+ /* CPUCP related struct fields */
+ 	const struct qcom_scmi_vendor_ops *ops;
+ 	struct scmi_protocol_handle	*ph;
+@@ -285,7 +298,7 @@
+ {									\
+ 	int ret;							\
+ 	unsigned int val;						\
+-	struct scalar_param_msg msg;                                            \
++	struct scalar_param_msg msg = { };                                            \
+ 	struct memlat_mon *mon = to_memlat_mon(kobj);			\
+ 	struct memlat_group *grp = mon->memlat_grp;			\
+ 	const struct qcom_scmi_vendor_ops *ops = memlat_data->ops;       \
+@@ -294,8 +307,9 @@
+ 		return ret;						\
+ 	val = max(val, _min);						\
+ 	val = min(val, _max);						\
+-	mon->name = val;						\
+-	if ((mon->type & CPUCP_MON) && ops)  {				\
++	if ((mon->type & CPUCP_MON) && !ops)			\
++		return -ENODEV;					\
++	if (mon->type & CPUCP_MON)  {				\
+ 		msg.hw_type = grp->hw_type;                                             \
+ 		msg.mon_idx = mon->index;                                                \
+ 		msg.val = val;                                          \
+@@ -306,6 +320,7 @@
+ 			return ret;					\
+ 		}							\
+ 	}								\
++	mon->name = val;						\
+ 	return count;							\
+ }									\
+ 
+@@ -324,7 +339,7 @@
+ {                                                                      \
+ 		int ret;                                                        \
+ 		unsigned int val;                                               \
+-		struct scalar_param_msg msg;                                            \
++		struct scalar_param_msg msg = { };                                            \
+ 		struct memlat_group *grp = to_memlat_grp(kobj);                 \
+ 		const struct qcom_scmi_vendor_ops *ops = memlat_data->ops;       \
+ 		ret = kstrtouint(buf, 10, &val);                                \
+@@ -332,8 +347,9 @@
+ 			return ret;                                             \
+ 		val = max(val, _min);                                           \
+ 		val = min(val, _max);                                           \
+-		grp->name = val;                                                \
+-		if (grp->cpucp_enabled && ops) {                                        \
++		if (grp->cpucp_enabled && !ops)                          \
++			return -ENODEV;                                         \
++		if (grp->cpucp_enabled) {                                        \
+ 			msg.hw_type = grp->hw_type;                                             \
+ 			msg.mon_idx = 0;                                                \
+ 			msg.val = val;                                          \
+@@ -344,6 +360,7 @@
+ 				return ret;                                     \
+ 			}                                                       \
+ 		}                                                               \
++		grp->name = val;                                                \
+ 		return count;                                                   \
+ }
+ 
+@@ -355,7 +372,7 @@
+ 	unsigned int freq;
+ 	struct memlat_mon *mon = to_memlat_mon(kobj);
+ 	struct memlat_group *grp = mon->memlat_grp;
+-	struct scalar_param_msg msg;
++	struct scalar_param_msg msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops =  memlat_data->ops;
+ 
+ 	ret = kstrtouint(buf, 10, &freq);
+@@ -363,12 +380,13 @@
+ 		return ret;
+ 	freq = max(freq, grp->hw_min_freq);
+ 	freq = min(freq, mon->max_freq);
+-	mon->min_freq = freq;
+-
+-	if ((mon->type & CPUCP_MON) && ops) {
++
++	if ((mon->type & CPUCP_MON) && !ops)
++		return -ENODEV;
++	if (mon->type & CPUCP_MON) {
+ 		msg.hw_type = grp->hw_type;
+ 		msg.mon_idx = mon->index;
+-		msg.val = mon->min_freq;
++		msg.val = freq;
+ 		ret = ops->set_param(memlat_data->ph,
+ 				&msg, MEMLAT_ALGO_STR, MEMLAT_SET_MIN_FREQ, sizeof(msg));
+ 		if (ret < 0) {
+@@ -377,6 +395,7 @@
+ 		}
+ 	}
+ 
++	mon->min_freq = freq;
+ 	return count;
+ }
+ 
+@@ -388,7 +407,7 @@
+ 	unsigned int freq;
+ 	struct memlat_mon *mon = to_memlat_mon(kobj);
+ 	struct memlat_group *grp = mon->memlat_grp;
+-	struct scalar_param_msg msg;
++	struct scalar_param_msg msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops =  memlat_data->ops;
+ 
+ 	ret = kstrtouint(buf, 10, &freq);
+@@ -396,11 +415,12 @@
+ 		return ret;
+ 	freq = max(freq, mon->min_freq);
+ 	freq = min(freq, grp->hw_max_freq);
+-	mon->max_freq = freq;
+-	if ((mon->type & CPUCP_MON) && ops) {
++	if ((mon->type & CPUCP_MON) && !ops)
++		return -ENODEV;
++	if (mon->type & CPUCP_MON) {
+ 		msg.hw_type = grp->hw_type;
+ 		msg.mon_idx = mon->index;
+-		msg.val = mon->max_freq;
++		msg.val = freq;
+ 		ret = ops->set_param(memlat_data->ph,
+ 				&msg, MEMLAT_ALGO_STR, MEMLAT_SET_MAX_FREQ, sizeof(msg));
+ 		if (ret < 0) {
+@@ -409,6 +429,7 @@
+ 		}
+ 	}
+ 
++	mon->max_freq = freq;
+ 	return count;
+ }
+ 
+@@ -476,14 +497,13 @@
+ 	val = max(val, MIN_SAMPLE_MS);
+ 	val = min(val, MAX_SAMPLE_MS);
+ 
+-	memlat_data->sample_ms = val;
+-
+ 	if (memlat_data->ops) {
+ 		ret = update_cpucp_sample_ms(val);
+ 		if (ret < 0)
+-			pr_err("Warning: CPUCP sample_ms not set: %d\n", ret);
+-	}
+-
++			return ret;
++	}
++
++	WRITE_ONCE(memlat_data->sample_ms, val);
+ 	return count;
+ }
+ 
+@@ -608,14 +628,14 @@
+ static ssize_t show_cur_freq(struct kobject *kobj,
+ 			     struct attribute *attr, char *buf)
+ {
+-	struct scalar_param_msg msg;
++	struct scalar_param_msg msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops =  memlat_data->ops;
+ 	struct memlat_mon *mon = to_memlat_mon(kobj);
+ 	struct memlat_group *grp = mon->memlat_grp;
+ 	uint32_t cur_freq;
+ 	int ret;
+ 
+-	if (!grp->cpucp_enabled)
++	if (!(mon->type & CPUCP_MON))
+ 		return scnprintf(buf, PAGE_SIZE, "%u\n", mon->cur_freq);
+ 
+ 	if (!ops)
+@@ -635,7 +655,7 @@
+ static ssize_t show_adaptive_cur_freq(struct kobject *kobj,
+ 				      struct attribute *attr, char *buf)
+ {
+-	struct scalar_param_msg msg;
++	struct scalar_param_msg msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops =  memlat_data->ops;
+ 	uint32_t adaptive_cur_freq;
+ 	struct memlat_group *grp = to_memlat_grp(kobj);
+@@ -762,8 +782,12 @@
+ 	struct qcom_memlat_attr *memlat_attr = to_memlat_attr(attr);
+ 	ssize_t ret = -EIO;
+ 
+-	if (memlat_attr->show)
++	mutex_lock(&memlat_lock);
++	if (!memlat_data || memlat_data->stopping || !memlat_data->inited)
++		ret = -ENODEV;
++	else if (memlat_attr->show)
+ 		ret = memlat_attr->show(kobj, attr, buf);
++	mutex_unlock(&memlat_lock);
+ 
+ 	return ret;
+ }
+@@ -774,8 +798,12 @@
+ 	struct qcom_memlat_attr *memlat_attr = to_memlat_attr(attr);
+ 	ssize_t ret = -EIO;
+ 
+-	if (memlat_attr->store)
++	mutex_lock(&memlat_lock);
++	if (!memlat_data || memlat_data->stopping || !memlat_data->inited)
++		ret = -ENODEV;
++	else if (memlat_attr->store)
+ 		ret = memlat_attr->store(kobj, attr, buf, count);
++	mutex_unlock(&memlat_lock);
+ 
+ 	return ret;
+ }
+@@ -785,46 +813,106 @@
+ 	.store	= attr_store,
+ };
+ 
++static void memlat_settings_release(struct kobject *kobj);
++static void memlat_group_release(struct kobject *kobj);
++static void memlat_monitor_release(struct kobject *kobj);
++
+ static const struct kobj_type memlat_settings_ktype = {
++	.release = memlat_settings_release,
+ 	.sysfs_ops	= &memlat_sysfs_ops,
+ 	.default_groups	= memlat_settings_groups,
+ 
+ };
+ 
+ static const struct kobj_type memlat_mon_ktype = {
++	.release = memlat_monitor_release,
+ 	.sysfs_ops	= &memlat_sysfs_ops,
+ 	.default_groups	= memlat_mon_groups,
+ 
+ };
+ 
+ static const struct kobj_type compute_mon_ktype = {
++	.release = memlat_monitor_release,
+ 	.sysfs_ops	= &memlat_sysfs_ops,
+ 	.default_groups	= compute_mon_groups,
+ 
+ };
+ 
+ static const struct kobj_type memlat_grp_ktype = {
++	.release = memlat_group_release,
+ 	.sysfs_ops	= &memlat_sysfs_ops,
+ 	.default_groups	= memlat_grp_groups,
+ 
+ };
+ 
++/* devres cleanup waits for all active sysfs references before owner memory is freed. */
++static void memlat_kobj_put(struct kobject *kobj, struct completion *released)
++{
++	kobject_del(kobj);
++	kobject_put(kobj);
++	wait_for_completion(released);
++}
++
++static void memlat_settings_release(struct kobject *kobj)
++{
++	struct memlat_dev_data *data = container_of(kobj, struct memlat_dev_data, kobj);
++	complete(&data->kobj_released);
++}
++
++static void memlat_group_release(struct kobject *kobj)
++{
++	struct memlat_group *grp = to_memlat_grp(kobj);
++	complete(&grp->kobj_released);
++}
++
++static void memlat_monitor_release(struct kobject *kobj)
++{
++	struct memlat_mon *mon = to_memlat_mon(kobj);
++	complete(&mon->kobj_released);
++}
++
++static void memlat_settings_cleanup(void *arg)
++{
++	struct memlat_dev_data *data = arg;
++	memlat_kobj_put(&data->kobj, &data->kobj_released);
++}
++
++static void memlat_group_cleanup(void *arg)
++{
++	struct memlat_group *grp = arg;
++	memlat_kobj_put(&grp->kobj, &grp->kobj_released);
++}
++
++static void memlat_monitor_cleanup(void *arg)
++{
++	struct memlat_mon *mon = arg;
++	memlat_kobj_put(&mon->kobj, &mon->kobj_released);
++}
++
+ static u32 cpufreq_to_memfreq(struct memlat_mon *mon, u32 cpu_mhz)
+ {
+-	struct cpufreq_memfreq_map *map = mon->freq_map;
+-	u32 mem_khz = 0;
+-
+-	if (!map)
+-		goto out;
+-
+-	while (map->cpufreq_mhz && map->cpufreq_mhz < cpu_mhz)
+-		map++;
+-	if (!map->cpufreq_mhz)
+-		map--;
+-	mem_khz = map->memfreq_khz;
+-
+-out:
+-	return mem_khz;
++	u32 i;
++
++	if (!mon->freq_map || !mon->freq_map_len)
++		return 0;
++	for (i = 0; i + 1 < mon->freq_map_len; i++)
++		if (mon->freq_map[i].cpufreq_mhz >= cpu_mhz)
++			break;
++	return mon->freq_map[i].memfreq_khz;
++}
++
++static u64 memlat_counter_delta(u64 current, u64 previous)
++{
++	return current >= previous ? current - previous : 0;
++}
++
++static u32 memlat_percent(u64 numerator, u64 denominator)
++{
++	if (!denominator)
++		return 0;
++	if (numerator >= denominator)
++		return 100;
++	return mul_u64_u64_div_u64(numerator, 100, denominator);
+ }
+ 
+ static void calculate_sampling_stats(void)
+@@ -865,8 +953,8 @@
+ 		for (i = 0; i < NUM_COMMON_EVS; i++) {
+ 			if (!memlat_data->common_ev_ids[i])
+ 				continue;
+-			delta->common_ctrs[i] = stats->curr.common_ctrs[i] -
+-						stats->prev.common_ctrs[i];
++			delta->common_ctrs[i] = memlat_counter_delta(stats->curr.common_ctrs[i],
++						stats->prev.common_ctrs[i]);
+ 		}
+ 
+ 		for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
+@@ -877,23 +965,26 @@
+ 				if (!memlat_grp->grp_ev_ids[i])
+ 					continue;
+ 				delta->grp_ctrs[grp][i] =
+-					    stats->curr.grp_ctrs[grp][i] -
+-					    stats->prev.grp_ctrs[grp][i];
++					    memlat_counter_delta(stats->curr.grp_ctrs[grp][i],
++					    stats->prev.grp_ctrs[grp][i]);
+ 			}
+ 		}
+ 
+-		stats->freq_mhz = delta->common_ctrs[CYC_IDX] / delta_us;
++		stats->freq_mhz = delta_us > 0 ?
++			min_t(u64, U32_MAX, div64_u64(delta->common_ctrs[CYC_IDX], delta_us)) : 0;
+ 		if (!memlat_data->common_ev_ids[FE_STALL_IDX])
+ 			stats->fe_stall_pct = 100;
++		else if (!delta->common_ctrs[CYC_IDX])
++			stats->fe_stall_pct = 0;
+ 		else
+-			stats->fe_stall_pct = mult_frac(100,
+-					       delta->common_ctrs[FE_STALL_IDX],
++			stats->fe_stall_pct = memlat_percent(delta->common_ctrs[FE_STALL_IDX],
+ 					       delta->common_ctrs[CYC_IDX]);
+ 		if (!memlat_data->common_ev_ids[BE_STALL_IDX])
+ 			stats->be_stall_pct = 100;
++		else if (!delta->common_ctrs[CYC_IDX])
++			stats->be_stall_pct = 0;
+ 		else
+-			stats->be_stall_pct = mult_frac(100,
+-					       delta->common_ctrs[BE_STALL_IDX],
++			stats->be_stall_pct = memlat_percent(delta->common_ctrs[BE_STALL_IDX],
+ 					       delta->common_ctrs[CYC_IDX]);
+ 		for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
+ 			memlat_grp = memlat_data->groups[grp];
+@@ -902,17 +993,16 @@
+ 				stats->wb_pct[grp] = 0;
+ 				continue;
+ 			}
+-			stats->ipm[grp] = delta->common_ctrs[INST_IDX];
+-			if (delta->grp_ctrs[grp][MISS_IDX])
+-				stats->ipm[grp] /=
+-					delta->grp_ctrs[grp][MISS_IDX];
++			stats->ipm[grp] = min_t(u64, U32_MAX,
++				div64_u64(delta->common_ctrs[INST_IDX],
++					max_t(u64, 1, delta->grp_ctrs[grp][MISS_IDX])));
+ 
+ 			if (!memlat_grp->grp_ev_ids[WB_IDX]
+-					|| !memlat_grp->grp_ev_ids[ACC_IDX])
++					|| !memlat_grp->grp_ev_ids[ACC_IDX]
++					|| !delta->grp_ctrs[grp][ACC_IDX])
+ 				stats->wb_pct[grp] = 0;
+ 			else
+-				stats->wb_pct[grp] = mult_frac(100,
+-						delta->grp_ctrs[grp][WB_IDX],
++				stats->wb_pct[grp] = memlat_percent(delta->grp_ctrs[grp][WB_IDX],
+ 						delta->grp_ctrs[grp][ACC_IDX]);
+ 
+ 			/* one meas event per memlat_group with group name */
+@@ -985,13 +1075,14 @@
+ 		else if (stats->ipm[hw] <= mon->ipm_ceil) {
+ 			ipm_diff = mon->ipm_ceil - stats->ipm[hw];
+ 			max_cpufreq_scaled = stats->freq_mhz;
+-			if (mon->freq_scale_pct &&
++			if (mon->freq_scale_pct && mon->ipm_ceil &&
+ 			    (stats->freq_mhz > mon->freq_scale_floor_mhz &&
+ 			     stats->freq_mhz < mon->freq_scale_ceil_mhz) &&
+ 			    (stats->fe_stall_pct >= mon->fe_stall_floor ||
+ 			     stats->be_stall_pct >= mon->be_stall_floor)) {
+-				max_cpufreq_scaled += (stats->freq_mhz * ipm_diff *
+-					mon->freq_scale_pct) / (mon->ipm_ceil * 100);
++				max_cpufreq_scaled = min_t(u64, U32_MAX,
++					(u64)stats->freq_mhz + mul_u64_u64_div_u64((u64)stats->freq_mhz * ipm_diff,
++					mon->freq_scale_pct, (u64)mon->ipm_ceil * 100));
+ 				max_cpufreq_scaled = min(mon->freq_scale_ceil_mhz,
+ 							 max_cpufreq_scaled);
+ 			}
+@@ -1021,14 +1112,14 @@
+  */
+ static void update_memlat_fp_vote(int cpu, u32 *fp_freqs)
+ {
+-	struct dcvs_freq voted_freqs[MAX_MEMLAT_GRPS];
++	struct dcvs_freq voted_freqs[MAX_MEMLAT_GRPS] = { };
+ 	u32 max_freqs[MAX_MEMLAT_GRPS] = { 0 };
+ 	int grp, i, ret;
+ 	unsigned long flags;
+ 	struct memlat_group *memlat_grp;
+ 	u32 commit_mask = 0;
+ 
+-	if (!memlat_data->fp_enabled || cpu > NUM_FP_VOTERS)
++	if (!memlat_data->fp_enabled || cpu < 0 || cpu >= NUM_FP_VOTERS || !fp_freqs)
+ 		return;
+ 
+ 	local_irq_save(flags);
+@@ -1053,14 +1144,6 @@
+ 		return;
+ 	}
+ 
+-	spin_lock_nested(&memlat_data->fp_commit_lock, SINGLE_DEPTH_NESTING);
+-	for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
+-		if (!(commit_mask & BIT(grp)))
+-			continue;
+-		memlat_grp = memlat_data->groups[grp];
+-		memlat_grp->fp_freq = max_freqs[grp];
+-	}
+-	spin_unlock(&memlat_data->fp_agg_lock);
+ 
+ 	for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
+ 		if (!(commit_mask & BIT(grp)))
+@@ -1072,7 +1155,12 @@
+ 							DCVS_FAST_PATH);
+ 	if (ret < 0)
+ 		pr_err("error updating qcom dcvs fp: %d\n", ret);
+-	spin_unlock(&memlat_data->fp_commit_lock);
++	else {
++		for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++)
++			if (commit_mask & BIT(grp))
++				memlat_data->groups[grp]->fp_freq = max_freqs[grp];
++	}
++	spin_unlock(&memlat_data->fp_agg_lock);
+ 	local_irq_restore(flags);
+ }
+ 
+@@ -1085,6 +1173,9 @@
+ 	struct dcvs_freq new_freq;
+ 	u32 max_freqs[MAX_MEMLAT_GRPS] = { 0 };
+ 
++	mutex_lock(&memlat_lock);
++	if (!memlat_data || !READ_ONCE(memlat_data->inited) || memlat_data->stopping)
++		goto out;
+ 	/* aggregate mons to calculate max freq per memlat_group */
+ 	for (grp = 0; grp < MAX_MEMLAT_GRPS; grp++) {
+ 		memlat_grp = memlat_data->groups[grp];
+@@ -1111,9 +1202,11 @@
+ 		if (!memlat_grp || memlat_grp->sampling_cur_freq == max_freqs[grp] ||
+ 		    memlat_grp->sampling_path_type == NUM_DCVS_PATHS)
+ 			continue;
+-		memlat_grp->sampling_cur_freq = max_freqs[grp];
+-		if (memlat_grp->fp_voting_enabled)
++		if (memlat_grp->fp_voting_enabled) {
++			if (memlat_grp->fp_freq == max_freqs[grp])
++				memlat_grp->sampling_cur_freq = max_freqs[grp];
+ 			continue;
++		}
+ 		new_freq.ib = max_freqs[grp];
+ 		new_freq.ab = 0;
+ 		new_freq.hw_type = grp;
+@@ -1121,11 +1214,17 @@
+ 				&new_freq, 1, memlat_grp->sampling_path_type);
+ 		if (ret < 0)
+ 			dev_err(memlat_grp->dev, "qcom dcvs err: %d\n", ret);
+-	}
++		else
++			memlat_grp->sampling_cur_freq = max_freqs[grp];
++	}
++out:
++	mutex_unlock(&memlat_lock);
+ }
+ 
+ static enum hrtimer_restart memlat_hrtimer_handler(struct hrtimer *timer)
+ {
++	if (!READ_ONCE(memlat_data->inited))
++		return HRTIMER_NORESTART;
+ 	calculate_sampling_stats();
+ 	queue_work(memlat_data->memlat_wq, &memlat_data->work);
+ 
+@@ -1137,12 +1236,13 @@
+ static void memlat_jiffies_update_cb(void *unused, void *extra)
+ {
+ 	ktime_t now = ktime_get();
+-	s64 delta_ns = now - memlat_data->last_jiffy_ts + HALF_TICK_NS;
+-
+-	if (unlikely(!memlat_data->inited))
++	s64 delta_ns;
++
++	if (unlikely(!READ_ONCE(memlat_data->inited)))
+ 		return;
+ 
+-	if (delta_ns > ms_to_ktime(memlat_data->sample_ms)) {
++	delta_ns = now - memlat_data->last_jiffy_ts + HALF_TICK_NS;
++	if (delta_ns > ms_to_ktime(READ_ONCE(memlat_data->sample_ms))) {
+ 		hrtimer_start(&memlat_data->timer, MEMLAT_UPDATE_DELAY,
+ 						HRTIMER_MODE_REL_PINNED);
+ 		memlat_data->last_jiffy_ts = now;
+@@ -1162,7 +1262,7 @@
+ 	u32 event_id;
+ 	u64 ev_data;
+ 
+-	for (i = 0; i < raw_ctrs->num_evs; i++) {
++	for (i = 0; i < min_t(u32, raw_ctrs->num_evs, QCOM_PMU_MAX_EVS); i++) {
+ 		event_id = raw_ctrs->event_ids[i];
+ 		ev_data = raw_ctrs->ev_data[i];
+ 		if (!event_id)
+@@ -1193,10 +1293,13 @@
+ 
+ static void memlat_pmu_idle_cb(struct qcom_pmu_data *data, int cpu, int state)
+ {
+-	struct cpu_stats *stats = per_cpu(sampling_stats, cpu);
++	struct cpu_stats *stats;
+ 	unsigned long flags;
+ 
+-	if (unlikely(!memlat_data->inited))
++	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_possible(cpu) || !data)
++		return;
++	stats = per_cpu(sampling_stats, cpu);
++	if (!stats || unlikely(!READ_ONCE(memlat_data->inited)))
+ 		return;
+ 
+ 	spin_lock_irqsave(&stats->ctrs_lock, flags);
+@@ -1218,21 +1321,21 @@
+ 	s64 delta_ns;
+ 	unsigned long flags;
+ 
+-	if (unlikely(!memlat_data->inited))
++	if (unlikely(!READ_ONCE(memlat_data->inited)))
+ 		return;
+ 
+ 	spin_lock_irqsave(&stats->ctrs_lock, flags);
+ 	delta_ns = now - stats->last_sample_ts + HALF_TICK_NS;
+-	if (delta_ns < ms_to_ktime(memlat_data->sample_ms))
++	if (delta_ns < ms_to_ktime(READ_ONCE(memlat_data->sample_ms)))
+ 		goto out;
+-	stats->sample_ts = now;
+-	stats->idle_sample = false;
+ 	stats->raw_ctrs.num_evs = 0;
+ 	ret = qcom_pmu_read_all_local(&stats->raw_ctrs);
+ 	if (ret < 0 || stats->raw_ctrs.num_evs == 0) {
+ 		pr_err("error reading pmu counters on cpu%d: %d\n", cpu, ret);
+ 		goto out;
+ 	}
++	stats->sample_ts = now;
++	stats->idle_sample = false;
+ 	process_raw_ctrs(stats);
+ 
+ out:
+@@ -1242,26 +1345,25 @@
+ static int get_mask_and_mpidr_from_pdev(struct platform_device *pdev,
+ 					cpumask_t *mask, u32 *cpus_mpidr)
+ {
+-	struct device *dev = &pdev->dev;
+-	struct device_node *dev_phandle;
+-	int cpu, i = 0;
+-	uint32_t physical_cpu;
+-	int ret = -ENODEV;
+-
+-	dev_phandle = of_parse_phandle(dev->of_node, "qcom,cpulist", i++);
+-	while (dev_phandle) {
+-		cpu = of_cpu_node_to_id(dev_phandle);
+-		if (cpu >= 0) {
+-			cpumask_set_cpu(cpu, mask);
+-			physical_cpu = cpu_logical_to_phys(cpu);
+-			*cpus_mpidr |= BIT(physical_cpu);
+-			ret = 0;
+-		}
+-		of_node_put(dev_phandle);
+-		dev_phandle = of_parse_phandle(dev->of_node, "qcom,cpulist", i++);
+-	}
+-
+-	return ret;
++	struct device_node *node;
++	int cpu, physical, i = 0;
++
++	cpumask_clear(mask);
++	*cpus_mpidr = 0;
++	while ((node = of_parse_phandle(pdev->dev.of_node, "qcom,cpulist", i++))) {
++		cpu = of_cpu_node_to_id(node);
++		of_node_put(node);
++		if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_possible(cpu))
++			return -EINVAL;
++		physical = cpu_logical_to_phys(cpu);
++		if (physical < 0)
++			return physical;
++		if (physical >= 32)
++			return -ERANGE;
++		cpumask_set_cpu(cpu, mask);
++		*cpus_mpidr |= BIT(physical);
++	}
++	return cpumask_empty(mask) ? -ENODEV : 0;
+ }
+ 
+ #define COREDEV_TBL_PROP	"qcom,cpufreq-memfreq-tbl"
+@@ -1277,11 +1379,15 @@
+ 
+ 	if (!of_find_property(of_node, COREDEV_TBL_PROP, &len))
+ 		return NULL;
++	if (len <= 0 || len % (sizeof(data) * NUM_COLS))
++		return NULL;
+ 	len /= sizeof(data);
+ 
+ 	if (len % NUM_COLS || len == 0)
+ 		return NULL;
+ 	nf = len / NUM_COLS;
++	if (nf > MAX_MAP_ENTRIES)
++		return NULL;
+ 
+ 	tbl = devm_kzalloc(dev, (nf + 1) * sizeof(struct cpufreq_memfreq_map),
+ 			GFP_KERNEL);
+@@ -1294,12 +1400,18 @@
+ 		if (ret < 0)
+ 			return NULL;
+ 		tbl[i].cpufreq_mhz = data / 1000;
++		if (!tbl[i].cpufreq_mhz || tbl[i].cpufreq_mhz > U16_MAX ||
++		    (i && tbl[i].cpufreq_mhz <= tbl[i - 1].cpufreq_mhz))
++			return NULL;
+ 
+ 		ret = of_property_read_u32_index(of_node, COREDEV_TBL_PROP,
+ 							j + 1, &data);
+ 		if (ret < 0)
+ 			return NULL;
+ 		tbl[i].memfreq_khz = data;
++		if (!data || (data > 1000 ? data / 1000 : data) > U16_MAX ||
++		    (i && data < tbl[i - 1].memfreq_khz))
++			return NULL;
+ 		pr_debug("Entry%d CPU:%u, Mem:%u\n", i, tbl[i].cpufreq_mhz,
+ 				tbl[i].memfreq_khz);
+ 	}
+@@ -1328,35 +1440,124 @@
+ 	return true;
+ }
+ 
++/* memlat_lock held; callbacks stay inactive until the complete tree is ready. */
+ static int memlat_sampling_init(void)
+ {
+-	int cpu;
++	int cpu, ret;
+ 	struct device *dev = memlat_data->dev;
+ 	struct cpu_stats *stats;
+ 
+ 	for_each_possible_cpu(cpu) {
+-		stats = devm_kzalloc(dev, sizeof(*stats), GFP_KERNEL);
+-		if (!stats)
+-			return -ENOMEM;
+-		per_cpu(sampling_stats, cpu) = stats;
+-		spin_lock_init(&stats->ctrs_lock);
+-	}
+-
+-	memlat_data->memlat_wq = create_freezable_workqueue("memlat_wq");
+-	if (!memlat_data->memlat_wq) {
+-		dev_err(dev, "Couldn't create memlat workqueue.\n");
++		stats = per_cpu(sampling_stats, cpu);
++		if (!stats) {
++			stats = devm_kzalloc(dev, sizeof(*stats), GFP_KERNEL);
++			if (!stats)
++				return -ENOMEM;
++			spin_lock_init(&stats->ctrs_lock);
++			per_cpu(sampling_stats, cpu) = stats;
++		}
++	}
++	memlat_data->memlat_wq = alloc_workqueue("memlat_wq", WQ_FREEZABLE | WQ_UNBOUND, 1);
++	if (!memlat_data->memlat_wq)
+ 		return -ENOMEM;
+-	}
+ 	INIT_WORK(&memlat_data->work, &memlat_update_work);
+-
+-	hrtimer_init(&memlat_data->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	memlat_data->timer.function = memlat_hrtimer_handler;
+-
+-	register_trace_android_vh_scheduler_tick(memlat_sched_tick_cb, NULL);
+-	register_trace_android_vh_jiffies_update(memlat_jiffies_update_cb, NULL);
+-	qcom_pmu_idle_register(&memlat_idle_notif);
+-
++	hrtimer_setup(&memlat_data->timer, memlat_hrtimer_handler,
++		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++
++	ret = register_trace_android_vh_scheduler_tick(memlat_sched_tick_cb, NULL);
++	if (ret)
++		goto err_queue;
++	memlat_data->scheduler_hook = true;
++	ret = register_trace_android_vh_jiffies_update(memlat_jiffies_update_cb, NULL);
++	if (ret)
++		goto err_scheduler;
++	memlat_data->jiffies_hook = true;
++	ret = qcom_pmu_idle_register(&memlat_idle_notif);
++	if (ret)
++		goto err_jiffies;
++	memlat_data->idle_notifier = true;
+ 	return 0;
++
++err_jiffies:
++	unregister_trace_android_vh_jiffies_update(memlat_jiffies_update_cb, NULL);
++	memlat_data->jiffies_hook = false;
++err_scheduler:
++	unregister_trace_android_vh_scheduler_tick(memlat_sched_tick_cb, NULL);
++	memlat_data->scheduler_hook = false;
++	tracepoint_synchronize_unregister();
++err_queue:
++	destroy_workqueue(memlat_data->memlat_wq);
++	memlat_data->memlat_wq = NULL;
++	return ret;
++}
++
++static void memlat_stop(void)
++{
++	struct memlat_dev_data *data;
++	int ret;
++
++	mutex_lock(&memlat_lock);
++	data = memlat_data;
++	if (!data || data->stopping) {
++		mutex_unlock(&memlat_lock);
++		return;
++	}
++	data->stopping = true;
++	WRITE_ONCE(data->inited, false);
++	if (data->cpucp_started) {
++		ret = data->ops->stop_activity(data->ph, NULL,
++					      MEMLAT_ALGO_STR, MEMLAT_STOP_TIMER, 0);
++		if (ret)
++			dev_err(data->dev, "CPUCP stop failed: %d\n", ret);
++		data->cpucp_started = false;
++	}
++	mutex_unlock(&memlat_lock);
++
++	if (data->jiffies_hook) {
++		unregister_trace_android_vh_jiffies_update(memlat_jiffies_update_cb, NULL);
++		data->jiffies_hook = false;
++	}
++	if (data->scheduler_hook) {
++		unregister_trace_android_vh_scheduler_tick(memlat_sched_tick_cb, NULL);
++		data->scheduler_hook = false;
++	}
++	tracepoint_synchronize_unregister();
++	if (data->idle_notifier) {
++		qcom_pmu_idle_unregister(&memlat_idle_notif);
++		data->idle_notifier = false;
++	}
++	if (data->memlat_wq) {
++		hrtimer_cancel(&data->timer);
++		cancel_work_sync(&data->work);
++		destroy_workqueue(data->memlat_wq);
++		data->memlat_wq = NULL;
++	}
++	data->sampling_enabled = false;
++	if (data->scmi_dev) {
++		data->scmi_dev->handle->devm_protocol_put(data->scmi_dev, QCOM_SCMI_VENDOR_PROTOCOL);
++		put_device(&data->scmi_dev->dev);
++		data->scmi_dev = NULL;
++		data->ops = NULL;
++	}
++}
++
++static void memlat_voter_cleanup(void *arg)
++{
++	struct memlat_group *grp = arg;
++	struct dcvs_freq votes[MAX_MEMLAT_GRPS] = { };
++	const char *name = grp->sampling_path_type == DCVS_FAST_PATH ? FP_NAME : dev_name(grp->dev);
++	int ret;
++
++	if (!grp->sampling_registered)
++		return;
++	votes[grp->hw_type].hw_type = grp->hw_type;
++	ret = qcom_dcvs_update_votes(name, votes, BIT(grp->hw_type), grp->sampling_path_type);
++	if (ret)
++		dev_err(grp->dev, "Dropping memlat vote failed: %d\n", ret);
++	ret = qcom_dcvs_unregister_voter(name, grp->hw_type, grp->sampling_path_type);
++	if (ret)
++		dev_err(grp->dev, "Unregistering memlat voter failed: %d\n", ret);
++	grp->sampling_registered = false;
+ }
+ 
+ static inline bool should_enable_memlat_fp(void)
+@@ -1381,7 +1582,7 @@
+ static int configure_cpucp_common_events(void)
+ {
+ 
+-	struct ev_map_msg msg;
++	struct ev_map_msg msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops = memlat_data->ops;
+ 	int ret = 0, i, j = 0;
+ 	u8 ev_map[NUM_COMMON_EVS];
+@@ -1406,8 +1607,8 @@
+ 
+ static int configure_cpucp_grp(struct memlat_group *grp)
+ {
+-	struct node_msg msg;
+-	struct ev_map_msg ev_msg;
++	struct node_msg msg = { };
++	struct ev_map_msg ev_msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops = memlat_data->ops;
+ 	int ret = 0, i, j = 0;
+ 	struct device_node *of_node = grp->dev->of_node;
+@@ -1450,21 +1651,20 @@
+ static int configure_cpucp_mon(struct memlat_mon *mon)
+ {
+ 	struct memlat_group *grp = mon->memlat_grp;
+-	struct node_msg msg;
+-	struct scalar_param_msg scalar_msg;
+-	struct map_param_msg map_msg;
++	struct node_msg msg = { };
++	struct scalar_param_msg scalar_msg = { };
++	struct map_param_msg map_msg = { };
+ 	const struct qcom_scmi_vendor_ops *ops = memlat_data->ops;
+ 	int i;
+ 	struct device_node *of_node = mon->dev->of_node;
+ 	int ret;
+-	const char c = ':';
++	const char *name = strrchr(dev_name(mon->dev), ':');
+ 
+ 	msg.cpumask = mon->cpus_mpidr;
+ 	msg.hw_type = grp->hw_type;
+ 	msg.mon_type = mon->is_compute;
+ 	msg.mon_idx = mon->index;
+-	if ((strrchr(dev_name(mon->dev), c) + 1))
+-		scnprintf(msg.mon_name, MAX_NAME_LEN, "%s", (strrchr(dev_name(mon->dev), c) + 1));
++	scnprintf(msg.mon_name, MAX_NAME_LEN, "%s", name ? name + 1 : dev_name(mon->dev));
+ 	ret = ops->set_param(memlat_data->ph, &msg,
+ 			MEMLAT_ALGO_STR, MEMLAT_SET_MONITOR, sizeof(msg));
+ 	if (ret < 0) {
+@@ -1546,6 +1746,8 @@
+ 		return ret;
+ 	}
+ 
++	if (!mon->freq_map_len || mon->freq_map_len > MAX_MAP_ENTRIES)
++		return -EINVAL;
+ 	map_msg.hw_type = grp->hw_type;
+ 	map_msg.mon_idx = mon->index;
+ 	map_msg.nr_rows = mon->freq_map_len;
+@@ -1603,6 +1805,13 @@
+ 	}
+ 
+ 	mutex_lock(&memlat_lock);
++	if (memlat_data->stopping || memlat_data->scmi_dev) {
++		mutex_unlock(&memlat_lock);
++		sdev->handle->devm_protocol_put(sdev, QCOM_SCMI_VENDOR_PROTOCOL);
++		return -EBUSY;
++	}
++	memlat_data->scmi_dev = sdev;
++	get_device(&sdev->dev);
+ 	memlat_data->ph = ph;
+ 	memlat_data->ops = ops;
+ 
+@@ -1625,7 +1834,7 @@
+ 		}
+ 
+ 		for (j = 0; j < grp->num_inited_mons; j++) {
+-			if (!grp->cpucp_enabled)
++			if (!(grp->mons[j].type & CPUCP_MON))
+ 				continue;
+ 			/* Configure per monitor parameters */
+ 			ret = configure_cpucp_mon(&grp->mons[j]);
+@@ -1650,11 +1859,17 @@
+ 			MEMLAT_ALGO_STR, MEMLAT_START_TIMER, 0);
+ 		if (ret < 0)
+ 			pr_err("Error in starting the mem group timer %d\n", ret);
++		else
++			memlat_data->cpucp_started = true;
+ 	}
+ 
+ memlat_unlock:
+-	if (ret < 0)
++	if (ret < 0) {
+ 		memlat_data->ops = NULL;
++		memlat_data->scmi_dev = NULL;
++		sdev->handle->devm_protocol_put(sdev, QCOM_SCMI_VENDOR_PROTOCOL);
++		put_device(&sdev->dev);
++	}
+ 	mutex_unlock(&memlat_lock);
+ 	return ret;
+ }
+@@ -1678,6 +1893,7 @@
+ 		if (ret == -EPROBE_DEFER)
+ 			return ret;
+ 		dev_err(dev, "Error getting scmi_dev ret = %d\n", ret);
++		return ret;
+ 	}
+ #endif
+ 
+@@ -1690,7 +1906,7 @@
+ 	dev_data->cpucp_sample_ms = 8;
+ 
+ 	dev_data->num_grps = of_get_available_child_count(dev->of_node);
+-	if (!dev_data->num_grps) {
++	if (!dev_data->num_grps || dev_data->num_grps > MAX_MEMLAT_GRPS) {
+ 		dev_err(dev, "No memlat grps provided!\n");
+ 		return -ENODEV;
+ 	}
+@@ -1734,7 +1950,7 @@
+ 			if (ret != -EPROBE_DEFER) {
+ 				dev_err(dev, "ev=%u not found on cpu%d: %d\n",
+ 						event_id, cpu, ret);
+-				if (event_id == INST_EV || event_id == CYC_EV)
++				if (i == INST_IDX || i == CYC_IDX)
+ 					return ret;
+ 			} else
+ 				return ret;
+@@ -1747,16 +1963,33 @@
+ 		dev_err(dev, "error getting kobj from qcom_dcvs: %d\n", ret);
+ 		return ret;
+ 	}
++	init_completion(&dev_data->kobj_released);
++	/* Publish while memlat_lock excludes sysfs/probes from partially initialized state. */
++	mutex_lock(&memlat_lock);
++	if (memlat_data) {
++		mutex_unlock(&memlat_lock);
++		return -EBUSY;
++	}
++	memlat_data = dev_data;
+ 	ret = kobject_init_and_add(&dev_data->kobj, &memlat_settings_ktype,
+ 					dcvs_kobj, "memlat_settings");
+ 	if (ret < 0) {
+ 		dev_err(dev, "failed to init memlat settings kobj: %d\n", ret);
++		memlat_data = NULL;
++		mutex_unlock(&memlat_lock);
+ 		kobject_put(&dev_data->kobj);
+-		return ret;
+-	}
+-
+-	memlat_data = dev_data;
+-
++		wait_for_completion(&dev_data->kobj_released);
++		return ret;
++	}
++	ret = devm_add_action(dev, memlat_settings_cleanup, dev_data);
++	if (ret) {
++		memlat_data = NULL;
++		mutex_unlock(&memlat_lock);
++		memlat_settings_cleanup(dev_data);
++		return ret;
++	}
++	dev_set_drvdata(dev, dev_data);
++	mutex_unlock(&memlat_lock);
+ 	return 0;
+ }
+ 
+@@ -1823,6 +2056,12 @@
+ 			return ret;
+ 		}
+ 		memlat_grp->sampling_path_type = path_type;
++		memlat_grp->sampling_registered = true;
++		ret = devm_add_action_or_reset(dev, memlat_voter_cleanup, memlat_grp);
++		if (ret) {
++			of_node_put(of_node);
++			return ret;
++		}
+ 	} else
+ 		memlat_grp->sampling_path_type = NUM_DCVS_PATHS;
+ 
+@@ -1837,12 +2076,14 @@
+ 			of_node_put(of_node);
+ 			return -EINVAL;
+ 		}
++		/* Native driver has no thread-lat callback/voter implementation. */
+ 		memlat_grp->threadlat_path_type = path_type;
+ 	} else
+ 		memlat_grp->threadlat_path_type = NUM_DCVS_PATHS;
+ 
+ 	of_node_put(of_node);
+-	if (path_type >= NUM_DCVS_PATHS) {
++	if (memlat_grp->sampling_path_type >= NUM_DCVS_PATHS &&
++	    memlat_grp->threadlat_path_type >= NUM_DCVS_PATHS) {
+ 		dev_err(dev, "error: no dcvs voting paths\n");
+ 		return -ENODEV;
+ 	}
+@@ -1852,6 +2093,8 @@
+ 		memlat_grp->fp_votes = devm_kzalloc(dev, NUM_FP_VOTERS *
+ 						sizeof(*memlat_grp->fp_votes),
+ 						GFP_KERNEL);
++		if (!memlat_grp->fp_votes)
++			return -ENOMEM;
+ 	}
+ 
+ 	num_mons = of_get_available_child_count(dev->of_node);
+@@ -1904,15 +2147,27 @@
+ 		}
+ 	}
+ 
++	init_completion(&memlat_grp->kobj_released);
+ 	ret = kobject_init_and_add(&memlat_grp->kobj, &memlat_grp_ktype,
+ 				memlat_grp->dcvs_kobj, "memlat");
++	if (ret) {
++		kobject_put(&memlat_grp->kobj);
++		wait_for_completion(&memlat_grp->kobj_released);
++		return ret;
++	}
++	ret = devm_add_action_or_reset(dev, memlat_group_cleanup, memlat_grp);
++	if (ret)
++		return ret;
+ 
+ 	mutex_lock(&memlat_lock);
++	if (!memlat_data || memlat_data->stopping || memlat_data->groups[hw_type]) {
++		mutex_unlock(&memlat_lock);
++		return -EBUSY;
++	}
+ 	memlat_data->num_inited_grps++;
+ 	memlat_data->groups[hw_type] = memlat_grp;
+ 	if (!memlat_data->fp_enabled && should_enable_memlat_fp()) {
+ 		spin_lock_init(&memlat_data->fp_agg_lock);
+-		spin_lock_init(&memlat_data->fp_commit_lock);
+ 		memlat_data->fp_enabled = true;
+ 	}
+ 	mutex_unlock(&memlat_lock);
+@@ -1929,14 +2184,15 @@
+ 	struct memlat_group *memlat_grp;
+ 	struct memlat_mon *mon;
+ 	struct device_node *of_tbl_node, *of_node = dev->of_node;
+-	u32 num_cpus;
++	bool ready;
++	int group;
+ #if IS_ENABLED(CONFIG_QTI_SCMI_VENDOR_PROTOCOL)
+ 	int cpucp_ret = 0;
+ 	struct scmi_device *scmi_dev;
+ #endif
+ 
+ 	ret = cpu_logical_to_phys(0);
+-	if (ret == -EPROBE_DEFER)
++	if (ret < 0)
+ 		return ret;
+ 	memlat_grp = dev_get_drvdata(dev->parent);
+ 	if (!memlat_grp) {
+@@ -1945,35 +2201,40 @@
+ 	}
+ 
+ 	mutex_lock(&memlat_grp->mons_lock);
++	if (memlat_grp->num_inited_mons >= memlat_grp->num_mons) {
++		ret = -EOVERFLOW;
++		goto unlock_out;
++	}
+ 	mon = &memlat_grp->mons[memlat_grp->num_inited_mons];
++	memset(mon, 0, sizeof(*mon));
+ 	mon->memlat_grp = memlat_grp;
+ 	mon->dev = dev;
+ 
+-	if (get_mask_and_mpidr_from_pdev(pdev, &mon->cpus, &mon->cpus_mpidr)) {
++	ret = get_mask_and_mpidr_from_pdev(pdev, &mon->cpus, &mon->cpus_mpidr);
++	if (ret) {
+ 		dev_err(dev, "Mon missing cpulist\n");
+-		ret = -ENODEV;
+-		memlat_grp->num_mons--;
+-		goto unlock_out_init;
+-	}
+-
+-	num_cpus = cpumask_weight(&mon->cpus);
++		goto unlock_out;
++	}
++
+ 
+ 	if (of_property_read_bool(dev->of_node, "qcom,sampling-enabled")) {
+-		mutex_lock(&memlat_lock);
+-		if (!memlat_data->sampling_enabled) {
+-			ret = memlat_sampling_init();
+-			memlat_data->sampling_enabled = true;
++		if (memlat_grp->sampling_path_type >= NUM_DCVS_PATHS) {
++			ret = -EINVAL;
++			goto unlock_out;
+ 		}
+-		mutex_unlock(&memlat_lock);
+ 		mon->type |= SAMPLING_MON;
+ 	}
+-
+-	if (of_property_read_bool(dev->of_node, "qcom,threadlat-enabled"))
+-		mon->type |= THREADLAT_MON;
+-
++	if (of_property_read_bool(dev->of_node, "qcom,threadlat-enabled")) {
++		dev_err(dev, "Threadlat is not implemented by this native provider\n");
++		ret = -EOPNOTSUPP;
++		goto unlock_out;
++	}
+ 	if (of_property_read_bool(dev->of_node, "qcom,cpucp-enabled")) {
++		if (!IS_ENABLED(CONFIG_QTI_SCMI_VENDOR_PROTOCOL)) {
++			ret = -EOPNOTSUPP;
++			goto unlock_out;
++		}
+ 		mon->type |= CPUCP_MON;
+-		memlat_grp->cpucp_enabled = true;
+ 	}
+ 
+ 	if (!mon->type) {
+@@ -2004,8 +2265,16 @@
+ 	else
+ 		of_tbl_node = of_node;
+ 
++	if (IS_ERR_OR_NULL(of_tbl_node)) {
++		if (of_node != dev->of_node)
++			of_node_put(of_node);
++		ret = IS_ERR(of_tbl_node) ? PTR_ERR(of_tbl_node) : -EINVAL;
++		goto unlock_out;
++	}
+ 	mon->freq_map = init_cpufreq_memfreq_map(dev, of_tbl_node,
+ 						 &mon->freq_map_len);
++	if (of_tbl_node != of_node)
++		of_node_put(of_tbl_node);
+ 
+ 	if (of_node != dev->of_node)
+ 		of_node_put(of_node);
+@@ -2020,6 +2289,17 @@
+ 	mon->max_freq = memlat_grp->hw_max_freq;
+ 	mon->cur_freq = mon->min_freq;
+ 
++	mutex_lock(&memlat_lock);
++	if ((mon->type & SAMPLING_MON) && !memlat_data->sampling_enabled) {
++		ret = memlat_sampling_init();
++		if (!ret)
++			memlat_data->sampling_enabled = true;
++	}
++	mutex_unlock(&memlat_lock);
++	if (ret)
++		goto unlock_out;
++
++	init_completion(&mon->kobj_released);
+ 	if (mon->is_compute)
+ 		ret = kobject_init_and_add(&mon->kobj, &compute_mon_ktype,
+ 					memlat_grp->dcvs_kobj, dev_name(dev));
+@@ -2029,73 +2309,115 @@
+ 	if (ret < 0) {
+ 		dev_err(dev, "failed to init memlat mon kobj: %d\n", ret);
+ 		kobject_put(&mon->kobj);
++		wait_for_completion(&mon->kobj_released);
+ 		goto unlock_out;
+ 	}
+ 
++	ret = devm_add_action_or_reset(dev, memlat_monitor_cleanup, mon);
++	if (ret)
++		goto unlock_out;
+ 	mon->index = memlat_grp->num_inited_mons++;
+-unlock_out_init:
+-	if (memlat_grps_and_mons_inited()) {
+-		memlat_data->inited = true;
++	if (mon->type & CPUCP_MON)
++		memlat_grp->cpucp_enabled = true;
++	dev_set_drvdata(dev, mon);
++	mutex_lock(&memlat_lock);
++	ready = memlat_grps_and_mons_inited();
++	mutex_unlock(&memlat_lock);
+ #if IS_ENABLED(CONFIG_QTI_SCMI_VENDOR_PROTOCOL)
+-		scmi_dev = get_qcom_scmi_device();
+-		if (IS_ERR(scmi_dev)) {
+-			cpucp_ret = PTR_ERR(scmi_dev);
+-			dev_err(dev, "get_qcom_scmi_device ret: %d\n", cpucp_ret);
+-		} else {
+-			cpucp_ret = cpucp_memlat_init(scmi_dev);
+-			if (cpucp_ret < 0)
+-				dev_err(dev, "Err during cpucp_memlat_init: %d\n", cpucp_ret);
++	if (ready) {
++		for (group = 0; group < MAX_MEMLAT_GRPS; group++)
++			if (memlat_data->groups[group] && memlat_data->groups[group]->cpucp_enabled)
++				break;
++		if (group < MAX_MEMLAT_GRPS) {
++			scmi_dev = get_qcom_scmi_device();
++			if (IS_ERR(scmi_dev))
++				cpucp_ret = PTR_ERR(scmi_dev);
++			else
++				cpucp_ret = cpucp_memlat_init(scmi_dev);
++			if (cpucp_ret) {
++				dev_err(dev, "CPUCP memlat configuration failed: %d\n", cpucp_ret);
++				/* Keep the complete tree bound, but inactive, for safe removal.
++				 * Do not reinterpret CPUCP-only monitors as sampling voters.
++				 */
++				ready = false;
++			}
+ 		}
++	}
++#else
++	(void)group;
+ #endif
+-	}
++	mutex_lock(&memlat_lock);
++	if (ready)
++		WRITE_ONCE(memlat_data->inited, true);
++	mutex_unlock(&memlat_lock);
+ 
+ unlock_out:
+ 	mutex_unlock(&memlat_grp->mons_lock);
+ 	return ret;
+ }
+ 
++static void qcom_memlat_remove(struct platform_device *pdev)
++{
++	const struct memlat_spec *spec = of_device_get_match_data(&pdev->dev);
++	int cpu;
++
++	memlat_stop();
++	if (!spec)
++		return;
++	if (spec->type != MEMLAT_MON)
++		of_platform_depopulate(&pdev->dev);
++	mutex_lock(&memlat_lock);
++	if (spec->type == MEMLAT_GRP) {
++		struct memlat_group *grp = dev_get_drvdata(&pdev->dev);
++		if (memlat_data && grp && memlat_data->groups[grp->hw_type] == grp) {
++			memlat_data->groups[grp->hw_type] = NULL;
++			memlat_data->num_inited_grps--;
++		}
++	} else if (spec->type == MEMLAT_DEV) {
++		memlat_data = NULL;
++		for_each_possible_cpu(cpu)
++			per_cpu(sampling_stats, cpu) = NULL;
++	}
++	mutex_unlock(&memlat_lock);
++}
++
++static void qcom_memlat_shutdown(struct platform_device *pdev)
++{
++	memlat_stop();
++}
++
+ static int qcom_memlat_probe(struct platform_device *pdev)
+ {
+-	struct device *dev = &pdev->dev;
+-	int ret = 0;
+-	const struct memlat_spec *spec = of_device_get_match_data(dev);
+-	enum memlat_type type = NUM_MEMLAT_TYPES;
+-
+-	if (spec)
+-		type = spec->type;
+-
+-	switch (type) {
++	const struct memlat_spec *spec = of_device_get_match_data(&pdev->dev);
++	int ret;
++
++	if (!spec)
++		return -EINVAL;
++	if (spec->type != MEMLAT_DEV) {
++		mutex_lock(&memlat_lock);
++		ret = !memlat_data ? -EPROBE_DEFER : memlat_data->stopping ? -ENODEV : 0;
++		mutex_unlock(&memlat_lock);
++		if (ret)
++			return ret;
++	}
++	switch (spec->type) {
+ 	case MEMLAT_DEV:
+-		if (memlat_data) {
+-			dev_err(dev, "only one memlat device allowed\n");
+-			ret = -ENODEV;
+-		}
+ 		ret = memlat_dev_probe(pdev);
+-		if (!ret && of_get_available_child_count(dev->of_node))
+-			of_platform_populate(dev->of_node, NULL, NULL, dev);
+ 		break;
+ 	case MEMLAT_GRP:
+ 		ret = memlat_grp_probe(pdev);
+-		if (!ret && of_get_available_child_count(dev->of_node))
+-			of_platform_populate(dev->of_node, NULL, NULL, dev);
+ 		break;
+ 	case MEMLAT_MON:
+-		ret = memlat_mon_probe(pdev);
+-		break;
++		return memlat_mon_probe(pdev);
+ 	default:
+-		/*
+-		 * This should never happen.
+-		 */
+-		dev_err(dev, "Invalid memlat mon type specified: %u\n", type);
+ 		return -EINVAL;
+ 	}
+-
+-	if (ret < 0) {
+-		dev_err(dev, "Failure to probe memlat device: %d\n", ret);
+-		return ret;
+-	}
+-
+-	return 0;
++	if (ret)
++		return ret;
++	ret = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
++	if (ret)
++		qcom_memlat_remove(pdev);
++	return ret;
+ }
+ 
+ static const struct memlat_spec spec[] = {
+@@ -2110,9 +2432,12 @@
+ 	{ .compatible = "qcom,memlat-mon", .data = &spec[2] },
+ 	{}
+ };
++MODULE_DEVICE_TABLE(of, memlat_match_table);
+ 
+ static struct platform_driver qcom_memlat_driver = {
+ 	.probe = qcom_memlat_probe,
++	.remove = qcom_memlat_remove,
++	.shutdown = qcom_memlat_shutdown,
+ 	.driver = {
+ 		.name = "qcom-memlat",
+ 		.of_match_table = memlat_match_table,

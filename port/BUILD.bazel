@@ -1145,6 +1145,17 @@ ddk_module(
     deps = [":pmu_headers", ":cache_irq_headers", ":scmi_vendor_headers", ":cpu_phys_log_map", ":qcom_llcc_pmu", ":qcom_scmi_client"],
 )
 
+ddk_module(
+    name = "memlat",
+    srcs = ["drivers/soc/qcom/dcvs/memlat.c"],
+    out = "memlat.ko",
+    includes = ["drivers/soc/qcom/dcvs"],
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    kernel_build = "//common:kernel_aarch64",
+    deps = [":dcvs_headers", ":pmu_headers", ":scmi_vendor_headers", ":cache_irq_headers", ":qcom_dcvs", ":qcom_pmu_lib", ":qcom_scmi_client", ":cpu_phys_log_map"],
+)
+
 ddk_headers(
     name = "cpufreq_headers",
     hdrs = ["include/linux/qcom-cpufreq-hw.h", "include/trace/events/dcvsh.h"],
@@ -4402,6 +4413,7 @@ kernel_module_group(
         ":qcom_dcvs",
         ":bwmon",
         ":qcom_pmu_lib",
+        ":memlat",
         ":qfprom_sys",
         ":debug_symbol",
         ":qcom_logbuf_boot_log",

@@ -4972,5 +4972,6 @@
   "sound/usb/usb_audio_qmi_v01.h": "130dd06757d1f463e93a0ca80a8ea718532bf190abad2726da69099e4fd89e55",
   "sound/usb/usbaudio.h": "0803749fa4cc4e7785120397f3a8176e31573a56bcf1e5522c2fa2a90f96e08e",
   "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_vbat_ovp_monitor.h": "2fbde5d8f65976240934a322bc601bc5c1fa3ae1bcf08ee5ab66f0059eddd83a",
-  "drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c": "7aca35e55b16bc7213fa6ce8dddcfcd4ff09be66909bec57b79e130933d858c7"
+  "drivers/power/supply/mca/mca_hardware_monitor/mca_vbat_ovp_monitor.c": "7aca35e55b16bc7213fa6ce8dddcfcd4ff09be66909bec57b79e130933d858c7",
+  "drivers/soc/qcom/dcvs/memlat.c": "9228beb87bad1d88942b55a81bad9b74d7574784add4f0ab3f4fea4fbd0e5ee6"
 }
