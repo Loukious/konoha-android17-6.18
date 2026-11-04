@@ -77,3 +77,26 @@ Four additional bootstrap tests execute only inert command mocks, covering the
 environment guard, cleanup targets, preserved tools, disk-gate failure and exact
 55 GiB boundary. No local system cleanup was performed. Reclaimed hosted space
 and complete compilation still require the next hosted run.
+
+## Common recipe additions — 2026-11-04
+
+The complete CI suite now passes 81 host tests. Thirteen added updater tests
+cover mixed Git/unified sections, header-looking hunk content, new certificate
+and HVC-header bytes with null before hashes, identical upstream additions,
+conflicting additions, missing modified sources, inventory mismatches, duplicate
+paths, truncated hunks, nonregular modes and unsafe source/recipe paths.
+Diagnostic conflicts and symlinked input/output files or ancestors leave every
+recipe and common-source file unchanged. All output paths are checked before
+the first recipe write. Python compilation, actionlint and whitespace checks pass.
+
+An independent isolated replay against clean committed files from
+`ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0` exercised the actual accepted recipe:
+19 paths, comprising 13 Git sections and six bare unified sections. Forward
+refresh preserved the exact effective patch and all accepted before/candidate
+hashes, including absent `certs/onyx-accepted-gki.pem` and
+`include/linux/hvc_backend.h`. Partially and fully integrated upstream fixtures
+produced the expected active patch sets. The production common-patch verifier
+accepted each refreshed recipe and restored the clean fixture after application.
+Late common and QDSS diagnostic conflicts left the recipe and common fixture
+unchanged. These are source-replay checks; hosted compilation, release publication
+and device behavior remain separate validation steps.

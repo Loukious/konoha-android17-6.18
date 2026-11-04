@@ -123,6 +123,17 @@ class TrackingTests(unittest.TestCase):
 
 
 class RebaseTests(unittest.TestCase):
+    def snapshot(self, root):
+        return {p.relative_to(root): ('symlink', os.readlink(p)) if p.is_symlink() else
+                ('file', p.read_bytes()) if p.is_file() else ('other', p.stat().st_mode)
+                for p in root.rglob('*')}
+
+    def assert_rejected_without_changes(self, refresh, port, common, root):
+        before = self.snapshot(root)
+        with patch.object(refresh, 'PORT', port), self.assertRaises(ValueError):
+            refresh.refresh(common)
+        self.assertEqual(before, self.snapshot(root))
+
     def setup_fixture(self, root, integrated=False, conflict=False):
         port = root / 'port'
         patches = port / 'common-patches'
@@ -142,6 +153,25 @@ class RebaseTests(unittest.TestCase):
             '--- a/drivers/diag.c\n+++ b/drivers/diag.c\n@@ -1 +1 @@\n-original\n+logged\n')
         (evidence / 'source-validation.json').write_text(json.dumps({'files': {'drivers/diag.c': {}}}))
         return port, common
+
+    def setup_mixed_fixture(self, root):
+        port, common = self.setup_fixture(root)
+        (common / 'drivers/core.c').write_text('old\n-- embedded-old\n')
+        additions = {'certs/accepted.pem': b'-----BEGIN CERTIFICATE-----\naccepted\n-----END CERTIFICATE-----\n',
+                     'include/linux/hvc_backend.h': b'#ifndef HVC_BACKEND_H\n#define HVC_BACKEND_H\n#endif\n'}
+        replay = (b'Subject: mixed common fixes\n\ndiff --git a/drivers/core.c b/drivers/core.c\n'
+                  b'--- a/drivers/core.c\n+++ b/drivers/core.c\n@@ -1,2 +1,2 @@\n'
+                  b'-old\n+fixed\n--- embedded-old\n+++ embedded-new\n')
+        for name, data in additions.items():
+            replay += ('--- /dev/null\n+++ b/' + name + '\n@@ -0,0 +1,' +
+                       str(len(data.splitlines())) + ' @@\n').encode()
+            replay += b''.join(b'+' + line for line in data.splitlines(keepends=True))
+        patches = port / 'common-patches'
+        (patches / 'required.patch').write_bytes(replay)
+        (patches / 'manifest.json').write_text(json.dumps(
+            {'patch': 'effective.patch', 'replay_patch': 'required.patch',
+             'files': {name: {} for name in ['drivers/core.c', *additions]}}))
+        return port, common, additions, replay
 
     def test_forward_rebase_preserves_pristine_common(self):
         refresh = module('refresh_recipe')
@@ -190,6 +220,190 @@ class RebaseTests(unittest.TestCase):
                 refresh.refresh(common)
             after = {p.relative_to(port): p.read_bytes() for p in port.rglob('*') if p.is_file()}
             self.assertEqual(before, after)
+
+    def test_mixed_unified_additions_preserve_exact_patch_and_null_before_hashes(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            port, common, additions, replay = self.setup_mixed_fixture(Path(temporary))
+            before = self.snapshot(common)
+            with patch.object(refresh, 'PORT', port):
+                result = refresh.refresh(common)
+            self.assertEqual(result['active_common_patches'], 3)
+            self.assertEqual((port / 'common-patches/effective.patch').read_bytes(), replay)
+            manifest = json.loads((port / 'common-patches/manifest.json').read_text())
+            self.assertEqual(manifest['patch_sha256'], refresh.sha(replay))
+            for name, data in additions.items():
+                self.assertEqual(manifest['files'][name],
+                                 {'before_sha256': None, 'candidate_sha256': refresh.sha(data)})
+            self.assertEqual(manifest['files']['drivers/core.c']['candidate_sha256'],
+                             refresh.sha(b'fixed\n++ embedded-new\n'))
+            self.assertEqual(before, self.snapshot(common))
+
+    def test_identical_additions_are_integrated_and_removed_from_effective_patch(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            port, common, additions, replay = self.setup_mixed_fixture(Path(temporary))
+            for name, data in additions.items():
+                target = common / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            before = self.snapshot(common)
+            with patch.object(refresh, 'PORT', port):
+                result = refresh.refresh(common)
+            self.assertEqual(result['active_common_patches'], 1)
+            self.assertEqual(result['already_integrated_upstream'], list(additions))
+            self.assertEqual((port / 'common-patches/effective.patch').read_bytes(),
+                             replay[:replay.index(b'--- /dev/null')])
+            manifest = json.loads((port / 'common-patches/manifest.json').read_text())
+            for name, data in additions.items():
+                self.assertEqual(manifest['files'][name],
+                                 {'before_sha256': refresh.sha(data), 'candidate_sha256': refresh.sha(data)})
+            self.assertEqual(before, self.snapshot(common))
+
+    def test_conflicting_late_addition_does_not_mutate_recipe_or_common(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            port, common, _, _ = self.setup_mixed_fixture(root)
+            target = common / 'include/linux/hvc_backend.h'
+            target.parent.mkdir(parents=True)
+            target.write_text('incompatible HVC header\n')
+            self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_missing_modified_source_is_rejected_even_for_empty_old_hunk(self):
+        refresh = module('refresh_recipe')
+        for empty_old in [False, True]:
+            with self.subTest(empty_old=empty_old), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                (common / 'drivers/core.c').unlink()
+                if empty_old:
+                    replay = port / 'common-patches/upstream-platform-remove.patch'
+                    replay.write_bytes(replay.read_bytes().replace(b'@@ -1 +1 @@\n-old\n', b'@@ -0,0 +1 @@\n'))
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_traversal_absolute_and_noncanonical_patch_paths_are_rejected(self):
+        refresh = module('refresh_recipe')
+        for name in ['../escape.c', '/absolute.c', '.git/config', 'drivers/../core.c', 'drivers//core.c']:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                replay = port / 'common-patches/upstream-platform-remove.patch'
+                replay.write_bytes(replay.read_bytes().replace(b'drivers/core.c', name.encode()))
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_mismatched_git_and_unified_paths_are_rejected(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            port, common = self.setup_fixture(root)
+            replay = port / 'common-patches/upstream-platform-remove.patch'
+            replay.write_bytes(replay.read_bytes().replace(
+                b'diff --git a/drivers/core.c b/drivers/core.c',
+                b'diff --git a/drivers/other.c b/drivers/other.c'))
+            self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_source_symlink_file_parent_directory_and_fifo_are_rejected(self):
+        refresh = module('refresh_recipe')
+        for kind in ['symlink-file', 'symlink-parent', 'directory', 'fifo']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                source = common / 'drivers/core.c'
+                if kind == 'symlink-parent':
+                    (common / 'drivers').rename(root / 'external-drivers')
+                    (common / 'drivers').symlink_to(root / 'external-drivers', target_is_directory=True)
+                else:
+                    source.unlink()
+                    if kind == 'symlink-file':
+                        (root / 'external.c').write_text('old\n')
+                        source.symlink_to(root / 'external.c')
+                    elif kind == 'directory':
+                        source.mkdir()
+                    else:
+                        os.mkfifo(source)
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_nonregular_patch_modes_are_rejected(self):
+        refresh = module('refresh_recipe')
+        for mode in [b'new file mode 120000\n', b'old mode 100644\nnew mode 160000\n',
+                     b'index 0000000..1234567 120000\n']:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                replay = port / 'common-patches/upstream-platform-remove.patch'
+                replay.write_bytes(replay.read_bytes().replace(b'--- a/drivers/core.c', mode + b'--- a/drivers/core.c'))
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_manifest_inventory_mismatch_unsafe_path_and_duplicates_are_rejected(self):
+        refresh = module('refresh_recipe')
+        for kind in ['extra', 'missing', 'unsafe', 'duplicate']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common, _, replay = self.setup_mixed_fixture(root)
+                manifest_path = port / 'common-patches/manifest.json'
+                manifest = json.loads(manifest_path.read_text())
+                if kind == 'extra':
+                    manifest['files']['drivers/omitted.c'] = {}
+                elif kind == 'missing':
+                    del manifest['files']['certs/accepted.pem']
+                elif kind == 'unsafe':
+                    manifest['files']['../escape.c'] = {}
+                else:
+                    (port / 'common-patches/required.patch').write_bytes(
+                        replay + replay[replay.index(b'--- /dev/null'):replay.index(b'--- /dev/null', replay.index(b'--- /dev/null') + 1)])
+                manifest_path.write_text(json.dumps(manifest))
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_late_diagnostic_conflict_or_inventory_mismatch_does_not_mutate_recipe(self):
+        refresh = module('refresh_recipe')
+        for kind in ['conflict', 'inventory']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common, _, _ = self.setup_mixed_fixture(root)
+                if kind == 'conflict':
+                    (common / 'drivers/diag.c').write_text('conflicting diagnostic\n')
+                else:
+                    (port / 'validation/clock_suspend_resume/source-validation.json').write_text(
+                        json.dumps({'files': {'drivers/other.c': {}}}))
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_recipe_input_and_output_symlinks_reject_before_any_write(self):
+        refresh = module('refresh_recipe')
+        for name in ['common-patches/manifest.json', 'common-patches/effective.patch',
+                     'validation/clock_suspend_resume/common-qdss-diagnostic.patch',
+                     'validation/clock_suspend_resume/source-validation.json',
+                     'validation/clock_suspend_resume/candidate/drivers/diag.c']:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                target = port / name
+                external = root / 'external'
+                if target.exists():
+                    target.rename(external)
+                else:
+                    external.write_text('untouched\n')
+                target.symlink_to(external)
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_recipe_output_parent_and_derived_root_ancestor_symlinks_reject(self):
+        refresh = module('refresh_recipe')
+        for name in ['validation/clock_suspend_resume/candidate/drivers', 'validation']:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                port, common = self.setup_fixture(root)
+                target = port / name
+                target.rename(root / 'external')
+                target.symlink_to(root / 'external', target_is_directory=True)
+                self.assert_rejected_without_changes(refresh, port, common, root)
+
+    def test_truncated_hunk_is_rejected_without_recipe_changes(self):
+        refresh = module('refresh_recipe')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            port, common, _, replay = self.setup_mixed_fixture(root)
+            (port / 'common-patches/required.patch').write_bytes(replay.rsplit(b'\n', 2)[0] + b'\n')
+            self.assert_rejected_without_changes(refresh, port, common, root)
 
 
 class SnapshotTests(unittest.TestCase):
