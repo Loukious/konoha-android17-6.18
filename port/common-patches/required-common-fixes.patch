@@ -1,21 +1,7 @@
-Subject: [PATCH v3 1/2] coresight: Fix clock refcount imbalance on platform remove
-
-Backport of Jie Gan's July 10 v3 series, patch 1/2:
-https://lists.openwall.net/linux-kernel/2026/07/10/62
-
-Resume platform devices before teardown to balance the devm-managed clock
-release. Disable runtime PM, set suspended and drop the remove usage vote.
-The companion TNOC platform-remove patch is inapplicable to 6.18's AMBA-only
-TNOC driver; its source is preserved separately as upstream evidence.
-
-Fixes: 1abc1b212eff ("coresight: Appropriately disable programming clocks")
-Signed-off-by: Jie Gan <jie.gan@oss.qualcomm.com>
----
 diff --git a/drivers/hwtracing/coresight/coresight-catu.c b/drivers/hwtracing/coresight/coresight-catu.c
-index ad8dafea7d2f..b72fa7f4bdeb 100644
 --- a/drivers/hwtracing/coresight/coresight-catu.c
 +++ b/drivers/hwtracing/coresight/coresight-catu.c
-@@ -646,8 +646,16 @@ static void catu_platform_remove(struct platform_device *pdev)
+@@ -648,8 +648,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -33,10 +19,9 @@ index ad8dafea7d2f..b72fa7f4bdeb 100644
  
  #ifdef CONFIG_PM
 diff --git a/drivers/hwtracing/coresight/coresight-cpu-debug.c b/drivers/hwtracing/coresight/coresight-cpu-debug.c
-index 3a806c1d50ea..87b39874461e 100644
 --- a/drivers/hwtracing/coresight/coresight-cpu-debug.c
 +++ b/drivers/hwtracing/coresight/coresight-cpu-debug.c
-@@ -710,8 +710,16 @@ static void debug_platform_remove(struct platform_device *pdev)
+@@ -714,8 +714,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -54,10 +39,9 @@ index 3a806c1d50ea..87b39874461e 100644
  
  #ifdef CONFIG_ACPI
 diff --git a/drivers/hwtracing/coresight/coresight-ctcu-core.c b/drivers/hwtracing/coresight/coresight-ctcu-core.c
-index 9043cad42f01..e0e33e3ca5bf 100644
 --- a/drivers/hwtracing/coresight/coresight-ctcu-core.c
 +++ b/drivers/hwtracing/coresight/coresight-ctcu-core.c
-@@ -265,8 +265,16 @@ static void ctcu_platform_remove(struct platform_device *pdev)
+@@ -269,8 +269,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -75,10 +59,9 @@ index 9043cad42f01..e0e33e3ca5bf 100644
  
  #ifdef CONFIG_PM
 diff --git a/drivers/hwtracing/coresight/coresight-etm4x-core.c b/drivers/hwtracing/coresight/coresight-etm4x-core.c
-index 14bb31bd6a0b..dd5d26717f15 100644
 --- a/drivers/hwtracing/coresight/coresight-etm4x-core.c
 +++ b/drivers/hwtracing/coresight/coresight-etm4x-core.c
-@@ -2414,9 +2414,18 @@ static void etm4_remove_platform_dev(struct platform_device *pdev)
+@@ -2450,9 +2450,18 @@
  {
  	struct etmv4_drvdata *drvdata = dev_get_drvdata(&pdev->dev);
  
@@ -100,10 +83,9 @@ index 14bb31bd6a0b..dd5d26717f15 100644
  
  static const struct amba_id etm4_ids[] = {
 diff --git a/drivers/hwtracing/coresight/coresight-funnel.c b/drivers/hwtracing/coresight/coresight-funnel.c
-index 0abc11f0690c..d69cd66e8394 100644
 --- a/drivers/hwtracing/coresight/coresight-funnel.c
 +++ b/drivers/hwtracing/coresight/coresight-funnel.c
-@@ -333,8 +333,16 @@ static void funnel_platform_remove(struct platform_device *pdev)
+@@ -335,8 +335,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -121,10 +103,9 @@ index 0abc11f0690c..d69cd66e8394 100644
  
  static const struct of_device_id funnel_match[] = {
 diff --git a/drivers/hwtracing/coresight/coresight-replicator.c b/drivers/hwtracing/coresight/coresight-replicator.c
-index 2f382de357ee..1df01deb2f69 100644
 --- a/drivers/hwtracing/coresight/coresight-replicator.c
 +++ b/drivers/hwtracing/coresight/coresight-replicator.c
-@@ -312,8 +312,16 @@ static void replicator_platform_remove(struct platform_device *pdev)
+@@ -314,8 +314,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -142,10 +123,9 @@ index 2f382de357ee..1df01deb2f69 100644
  
  #ifdef CONFIG_PM
 diff --git a/drivers/hwtracing/coresight/coresight-stm.c b/drivers/hwtracing/coresight/coresight-stm.c
-index 4e860519a73f..a75b1c56a867 100644
 --- a/drivers/hwtracing/coresight/coresight-stm.c
 +++ b/drivers/hwtracing/coresight/coresight-stm.c
-@@ -1025,8 +1025,16 @@ static void stm_platform_remove(struct platform_device *pdev)
+@@ -1027,8 +1027,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -163,10 +143,9 @@ index 4e860519a73f..a75b1c56a867 100644
  
  #ifdef CONFIG_ACPI
 diff --git a/drivers/hwtracing/coresight/coresight-tmc-core.c b/drivers/hwtracing/coresight/coresight-tmc-core.c
-index bc5a133ada3e..ed40bfea32f9 100644
 --- a/drivers/hwtracing/coresight/coresight-tmc-core.c
 +++ b/drivers/hwtracing/coresight/coresight-tmc-core.c
-@@ -988,8 +988,16 @@ static void tmc_platform_remove(struct platform_device *pdev)
+@@ -993,8 +993,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -184,10 +163,9 @@ index bc5a133ada3e..ed40bfea32f9 100644
  
  #ifdef CONFIG_PM
 diff --git a/drivers/hwtracing/coresight/coresight-tpiu.c b/drivers/hwtracing/coresight/coresight-tpiu.c
-index 7b029d2eb389..775507d0bb36 100644
 --- a/drivers/hwtracing/coresight/coresight-tpiu.c
 +++ b/drivers/hwtracing/coresight/coresight-tpiu.c
-@@ -285,8 +285,16 @@ static void tpiu_platform_remove(struct platform_device *pdev)
+@@ -287,8 +287,16 @@
  	if (WARN_ON(!drvdata))
  		return;
  
@@ -204,7 +182,6 @@ index 7b029d2eb389..775507d0bb36 100644
  }
  
  #ifdef CONFIG_ACPI
-
 diff --git a/drivers/thermal/thermal_core.c b/drivers/thermal/thermal_core.c
 --- a/drivers/thermal/thermal_core.c
 +++ b/drivers/thermal/thermal_core.c
@@ -250,7 +227,6 @@ diff --git a/include/linux/thermal.h b/include/linux/thermal.h
  int thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp);
  int thermal_zone_get_slope(struct thermal_zone_device *tz);
  int thermal_zone_get_offset(struct thermal_zone_device *tz);
-
 diff --git a/include/linux/coresight.h b/include/linux/coresight.h
 --- a/include/linux/coresight.h
 +++ b/include/linux/coresight.h
@@ -264,9 +240,7 @@ diff --git a/include/linux/coresight.h b/include/linux/coresight.h
  };
  
  /**
-
 diff --git a/drivers/hwtracing/coresight/coresight-core.c b/drivers/hwtracing/coresight/coresight-core.c
-index 3267192f0c1c..f0b4892a3c16 100644
 --- a/drivers/hwtracing/coresight/coresight-core.c
 +++ b/drivers/hwtracing/coresight/coresight-core.c
 @@ -22,6 +22,7 @@
@@ -277,7 +251,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
  
  #include "coresight-etm-perf.h"
  #include "coresight-priv.h"
-@@ -53,20 +54,47 @@ struct coresight_node {
+@@ -53,19 +54,46 @@
  const u32 coresight_barrier_pkt[4] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
  EXPORT_SYMBOL_GPL(coresight_barrier_pkt);
  
@@ -300,7 +274,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
 +	synchronize_srcu(&cti_assoc_srcu);
  }
  EXPORT_SYMBOL_GPL(coresight_remove_cti_ops);
- 
++
 +static void coresight_cti_add(struct coresight_device *csdev)
 +{
 +	const struct cti_assoc_op *ops;
@@ -324,11 +298,10 @@ index 3267192f0c1c..f0b4892a3c16 100644
 +		ops->remove(csdev);
 +	srcu_read_unlock(&cti_assoc_srcu, index);
 +}
-+
+ 
  void coresight_set_percpu_sink(int cpu, struct coresight_device *csdev)
  {
- 	per_cpu(csdev_sink, cpu) = csdev;
-@@ -1403,8 +1431,7 @@ struct coresight_device *coresight_register(struct coresight_desc *desc)
+@@ -1403,8 +1431,7 @@
  	mutex_unlock(&coresight_mutex);
  	/* Success */
  	if (!ret) {
@@ -338,7 +311,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
  		return csdev;
  	}
  
-@@ -1425,8 +1452,7 @@ void coresight_unregister(struct coresight_device *csdev)
+@@ -1425,8 +1452,7 @@
  {
  	etm_perf_del_symlink_sink(csdev);
  	/* Remove references of that device in the topology */
@@ -348,9 +321,84 @@ index 3267192f0c1c..f0b4892a3c16 100644
  	coresight_remove_conns(csdev);
  	coresight_clear_default_sink(csdev);
  	coresight_release_platform_data(csdev, csdev->dev.parent, csdev->pdata);
+diff --git a/arch/arm64/configs/gki_defconfig b/arch/arm64/configs/gki_defconfig
 --- a/arch/arm64/configs/gki_defconfig
 +++ b/arch/arm64/configs/gki_defconfig
-@@ -792,6 +792,7 @@
+@@ -153,6 +153,7 @@
+ CONFIG_NET=y
+ CONFIG_NET_APF=y
+ CONFIG_PACKET=y
++CONFIG_PACKET_DIAG=m
+ # CONFIG_AF_UNIX_OOB is not set
+ CONFIG_XFRM_USER=y
+ CONFIG_XFRM_INTERFACE=y
+@@ -313,10 +314,13 @@
+ CONFIG_VIRTIO_VSOCKETS=m
+ CONFIG_CGROUP_NET_PRIO=y
+ CONFIG_CAN=m
++CONFIG_CAN_J1939=m
++CONFIG_CAN_ISOTP=m
+ CONFIG_BT=m
+ CONFIG_BT_RFCOMM=m
+ CONFIG_BT_RFCOMM_TTY=y
+ CONFIG_BT_HIDP=m
++CONFIG_BT_HCIBTUSB=m
+ CONFIG_BT_HCIBTSDIO=m
+ CONFIG_BT_HCIUART=m
+ CONFIG_BT_HCIUART_LL=y
+@@ -392,7 +396,19 @@
+ CONFIG_LED_TRIGGER_PHY=y
+ CONFIG_AX88796B_PHY=y
+ CONFIG_CAN_VCAN=m
++CONFIG_CAN_VXCAN=m
++CONFIG_CAN_CAN327=m
+ CONFIG_CAN_SLCAN=m
++CONFIG_CAN_8DEV_USB=m
++CONFIG_CAN_EMS_USB=m
++CONFIG_CAN_ESD_USB=m
++CONFIG_CAN_ETAS_ES58X=m
++CONFIG_CAN_F81604=m
++CONFIG_CAN_GS_USB=m
++CONFIG_CAN_KVASER_USB=m
++CONFIG_CAN_MCBA_USB=m
++CONFIG_CAN_PEAK_USB=m
++CONFIG_CAN_UCAN=m
+ CONFIG_PPP=m
+ CONFIG_PPP_BSDCOMP=m
+ CONFIG_PPP_DEFLATE=m
+@@ -405,7 +421,7 @@
+ CONFIG_USB_USBNET=m
+ CONFIG_USB_NET_CDC_EEM=m
+ # CONFIG_USB_NET_NET1080 is not set
+-# CONFIG_USB_NET_CDC_SUBSET is not set
++CONFIG_USB_NET_RNDIS_HOST=m
+ # CONFIG_USB_NET_ZAURUS is not set
+ CONFIG_USB_NET_AQC111=m
+ # CONFIG_WLAN_VENDOR_ADMTEK is not set
+@@ -578,7 +594,12 @@
+ CONFIG_USB_UAS=y
+ CONFIG_USB_DWC3=y
+ CONFIG_USB_SERIAL=m
++CONFIG_USB_SERIAL_GENERIC=y
++CONFIG_USB_SERIAL_CH341=m
++CONFIG_USB_SERIAL_CP210X=m
+ CONFIG_USB_SERIAL_FTDI_SIO=m
++CONFIG_USB_SERIAL_PL2303=m
++CONFIG_USB_SERIAL_OPTION=m
+ CONFIG_USB_GADGET=y
+ CONFIG_USB_CONFIGFS=y
+ CONFIG_ANDROID_USB_CONFIGFS_UEVENT=y
+@@ -713,6 +734,9 @@
+ CONFIG_EROFS_FS=y
+ CONFIG_EROFS_FS_ZIP_ZSTD=y
+ CONFIG_EROFS_FS_PCPU_KTHREAD=y
++CONFIG_NFS_FS=m
++CONFIG_NFS_V4=m
++CONFIG_CIFS=m
+ CONFIG_NLS_CODEPAGE_437=y
+ CONFIG_NLS_CODEPAGE_737=y
+ CONFIG_NLS_CODEPAGE_775=y
+@@ -792,6 +816,7 @@
  CONFIG_CRYPTO_ANSI_CPRNG=y
  CONFIG_CRYPTO_GHASH_ARM64_CE=y
  CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
@@ -358,6 +406,8 @@ index 3267192f0c1c..f0b4892a3c16 100644
  CONFIG_TRACE_MMIO_ACCESS=y
  CONFIG_XZ_DEC=y
  CONFIG_SWIOTLB_DYNAMIC=y
+diff --git a/certs/onyx-accepted-gki.pem b/certs/onyx-accepted-gki.pem
+new file mode 100644
 --- /dev/null
 +++ b/certs/onyx-accepted-gki.pem
 @@ -0,0 +1,30 @@
@@ -391,6 +441,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
 +L81CTdvaYMBsN2YF2Bksh81djNO2UWtLN2qbnK9mwXiWL8QE0rdAgzto8qwERN8w
 +XvU0QGdgSgSkCg6aQW4bLMS82HoypM6X3IJMww==
 +-----END CERTIFICATE-----
+diff --git a/certs/system_certificates.S b/certs/system_certificates.S
 --- a/certs/system_certificates.S
 +++ b/certs/system_certificates.S
 @@ -10,7 +10,6 @@
@@ -401,6 +452,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
  __module_cert_end:
  	.incbin "certs/x509_certificate_list"
  __cert_list_end:
+diff --git a/drivers/tty/hvc/hvc_console.c b/drivers/tty/hvc/hvc_console.c
 --- a/drivers/tty/hvc/hvc_console.c
 +++ b/drivers/tty/hvc/hvc_console.c
 @@ -27,6 +27,10 @@
@@ -965,6 +1017,7 @@ index 3267192f0c1c..f0b4892a3c16 100644
  /* Driver initialization: called as soon as someone uses hvc_alloc(). */
  static int hvc_init(void)
  {
+diff --git a/drivers/virt/gunyah/rsc_mgr.c b/drivers/virt/gunyah/rsc_mgr.c
 --- a/drivers/virt/gunyah/rsc_mgr.c
 +++ b/drivers/virt/gunyah/rsc_mgr.c
 @@ -40,6 +40,7 @@
@@ -1022,6 +1075,8 @@ index 3267192f0c1c..f0b4892a3c16 100644
  
  		kfree(message->payload);
  		kfree(message);
+diff --git a/include/linux/hvc_backend.h b/include/linux/hvc_backend.h
+new file mode 100644
 --- /dev/null
 +++ b/include/linux/hvc_backend.h
 @@ -0,0 +1,39 @@
@@ -1064,3 +1119,58 @@ index 3267192f0c1c..f0b4892a3c16 100644
 +void hvc_backend_poll(struct hvc_backend *backend);
 +
 +#endif
+diff --git a/bazel/modules_private.bzl b/bazel/modules_private.bzl
+--- a/bazel/modules_private.bzl
++++ b/bazel/modules_private.bzl
+@@ -99,13 +99,50 @@
+ _ARM64_GKI_MODULES_LIST = [
+     # keep sorted
+     "arch/arm64/geniezone/gzvm.ko",
++    "drivers/bluetooth/btintel.ko",
++    "drivers/bluetooth/btrtl.ko",
++    "drivers/bluetooth/btusb.ko",
+     "drivers/char/hw_random/cctrng.ko",
+-    "drivers/hwtracing/coresight/coresight.ko",
+     "drivers/hwtracing/coresight/coresight-etm4x.ko",
+     "drivers/hwtracing/coresight/coresight-funnel.ko",
+     "drivers/hwtracing/coresight/coresight-replicator.ko",
+     "drivers/hwtracing/coresight/coresight-trbe.ko",
++    "drivers/hwtracing/coresight/coresight.ko",
++    "drivers/net/can/can327.ko",
++    "drivers/net/can/usb/ems_usb.ko",
++    "drivers/net/can/usb/esd_usb.ko",
++    "drivers/net/can/usb/etas_es58x/etas_es58x.ko",
++    "drivers/net/can/usb/f81604.ko",
++    "drivers/net/can/usb/gs_usb.ko",
++    "drivers/net/can/usb/kvaser_usb/kvaser_usb.ko",
++    "drivers/net/can/usb/mcba_usb.ko",
++    "drivers/net/can/usb/peak_usb/peak_usb.ko",
++    "drivers/net/can/usb/ucan.ko",
++    "drivers/net/can/usb/usb_8dev.ko",
++    "drivers/net/can/vxcan.ko",
++    "drivers/net/usb/cdc_subset.ko",
++    "drivers/net/usb/rndis_host.ko",
+     "drivers/perf/dwc_pcie_pmu.ko",
++    "drivers/usb/serial/ch341.ko",
++    "drivers/usb/serial/cp210x.ko",
++    "drivers/usb/serial/option.ko",
++    "drivers/usb/serial/pl2303.ko",
++    "drivers/usb/serial/usb_wwan.ko",
++    "fs/lockd/lockd.ko",
++    "fs/nfs/nfs.ko",
++    "fs/nfs/nfsv3.ko",
++    "fs/nfs/nfsv4.ko",
++    "fs/nfs_common/grace.ko",
++    "fs/nls/nls_ucs2_utils.ko",
++    "fs/smb/client/cifs.ko",
++    "fs/smb/common/cifs_md4.ko",
++    "net/can/can-isotp.ko",
++    "net/can/j1939/can-j1939.ko",
++    "net/dns_resolver/dns_resolver.ko",
++    "net/packet/af_packet_diag.ko",
++    "net/sunrpc/auth_gss/auth_rpcgss.ko",
++    "net/sunrpc/auth_gss/rpcsec_gss_krb5.ko",
++    "net/sunrpc/sunrpc.ko",
+ ]
+ 
+ _X86_GKI_MODULES_LIST = [

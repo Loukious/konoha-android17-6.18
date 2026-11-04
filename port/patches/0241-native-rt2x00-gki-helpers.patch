@@ -1,0 +1,119 @@
+--- a/drivers/net/wireless/ralink/rt2x00/rt2x00leds.c
++++ b/drivers/net/wireless/ralink/rt2x00/rt2x00leds.c
+@@ -15,6 +15,7 @@
+ 
+ #include "rt2x00.h"
+ #include "rt2x00lib.h"
++#include "native_led_helpers.h"
+ 
+ void rt2x00leds_led_quality(struct rt2x00_dev *rt2x00dev, int rssi)
+ {
+@@ -196,7 +197,7 @@
+ 
+ static inline void rt2x00leds_suspend_led(struct rt2x00_led *led)
+ {
+-	led_classdev_suspend(&led->led_dev);
++	konoha_led_classdev_suspend(&led->led_dev);
+ 
+ 	/* This shouldn't be needed, but just to be safe */
+ 	led->led_dev.brightness_set(&led->led_dev, LED_OFF);
+@@ -215,7 +216,7 @@
+ 
+ static inline void rt2x00leds_resume_led(struct rt2x00_led *led)
+ {
+-	led_classdev_resume(&led->led_dev);
++	konoha_led_classdev_resume(&led->led_dev);
+ 
+ 	/* Device might have enabled the LEDS during resume */
+ 	led->led_dev.brightness_set(&led->led_dev, LED_OFF);
+--- a/drivers/net/wireless/ralink/rt2x00/rt2800lib.c
++++ b/drivers/net/wireless/ralink/rt2x00/rt2800lib.c
+@@ -6269,6 +6269,7 @@
+ 		reg = rt2800_register_read(rt2x00dev, US_CYC_CNT);
+ 		rt2x00_set_field32(&reg, US_CYC_CNT_CLOCK_CYCLE, 125);
+ 		rt2800_register_write(rt2x00dev, US_CYC_CNT, reg);
++#if IS_ENABLED(CONFIG_RT2800SOC)
+ 	} else if (rt2x00_is_soc(rt2x00dev)) {
+ 		struct clk *clk = clk_get_sys("bus", NULL);
+ 		int rate;
+@@ -6290,6 +6291,7 @@
+ 		reg = rt2800_register_read(rt2x00dev, US_CYC_CNT);
+ 		rt2x00_set_field32(&reg, US_CYC_CNT_CLOCK_CYCLE, rate);
+ 		rt2800_register_write(rt2x00dev, US_CYC_CNT, reg);
++#endif
+ 	}
+ 
+ 	reg = rt2800_register_read(rt2x00dev, HT_FBK_CFG0);
+--- /dev/null
++++ b/drivers/net/wireless/ralink/rt2x00/native_led_helpers.h
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef KONOHA_RT2X00_NATIVE_LED_HELPERS_H
++#define KONOHA_RT2X00_NATIVE_LED_HELPERS_H
++
++#include <linux/errno.h>
++#include <linux/leds.h>
++#include <linux/workqueue.h>
++
++/*
++ * Exact pinned common 6.18 LED suspend/resume closure under module-local names.
++ * GKI KMI trimming omits these exported helpers. Existing LED class state,
++ * callbacks and brightness work remain owned by the original LED provider.
++ */
++static inline int konoha_led_set_brightness_direct(struct led_classdev *led_cdev, unsigned int value)
++{
++	if (!led_cdev->brightness_set)
++		return -ENOTSUPP;
++
++	led_cdev->brightness_set(led_cdev, value);
++
++	return 0;
++}
++
++static inline void konoha_led_set_brightness_nopm(struct led_classdev *led_cdev, unsigned int value)
++{
++	/* Use brightness_set op if available, it is guaranteed not to sleep */
++	if (!konoha_led_set_brightness_direct(led_cdev, value))
++		return;
++
++	/*
++	 * Brightness setting can sleep, delegate it to a work queue task.
++	 * value 0 / LED_OFF is special, since it also disables hw-blinking
++	 * (sw-blink disable is handled in led_set_brightness()).
++	 * To avoid a hw-blink-disable getting lost when a second brightness
++	 * change is done immediately afterwards (before the work runs),
++	 * it uses a separate work_flag.
++	 */
++	led_cdev->delayed_set_value = value;
++	/* Ensure delayed_set_value is seen before work_flags modification */
++	smp_mb__before_atomic();
++
++	if (value)
++		set_bit(LED_SET_BRIGHTNESS, &led_cdev->work_flags);
++	else {
++		clear_bit(LED_SET_BRIGHTNESS, &led_cdev->work_flags);
++		clear_bit(LED_SET_BLINK, &led_cdev->work_flags);
++		set_bit(LED_SET_BRIGHTNESS_OFF, &led_cdev->work_flags);
++	}
++
++	queue_work(led_cdev->wq, &led_cdev->set_brightness_work);
++}
++
++static inline void konoha_led_classdev_suspend(struct led_classdev *led_cdev)
++{
++	led_cdev->flags |= LED_SUSPENDED;
++	konoha_led_set_brightness_nopm(led_cdev, 0);
++	flush_work(&led_cdev->set_brightness_work);
++}
++
++static inline void konoha_led_classdev_resume(struct led_classdev *led_cdev)
++{
++	konoha_led_set_brightness_nopm(led_cdev, led_cdev->brightness);
++
++	if (led_cdev->flash_resume)
++		led_cdev->flash_resume(led_cdev);
++
++	led_cdev->flags &= ~LED_SUSPENDED;
++}
++
++#endif

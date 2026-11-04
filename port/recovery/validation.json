@@ -1,0 +1,15 @@
+{
+  "status": "PASS: offline source toolkit checks; recovery runtime untested",
+  "checks": {
+    "generator": 7,
+    "actual_shell_scenarios": 30,
+    "native_guard_scenarios": 44,
+    "dm_parser_scenarios": 48,
+    "linux_uapi_assertions": 35
+  },
+  "limits": [
+    "Shell targets and guard service responses are mocked; native guard tests use actual host Linux syscalls.",
+    "DM parser tests use synthetic kernel replies; no live block devices or phone were accessed.",
+    "AArch64 static ELF and source/build identities verified; actual recovery execution, boot and peripherals remain untested."
+  ]
+}

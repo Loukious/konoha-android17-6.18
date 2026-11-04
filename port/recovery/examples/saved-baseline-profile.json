@@ -1,0 +1,59 @@
+{
+  "device": "onyx",
+  "images": {
+    "boot": {
+      "path": "partition-dumps/boot_a.img",
+      "size": 100663296,
+      "sha256": "ed96e89abe61e1a64249e55d9aecd20bdfccaad1afe08417f73f94711502b29a"
+    },
+    "vendor_boot": {
+      "path": "partition-dumps/vendor_boot_a.img",
+      "size": 100663296,
+      "sha256": "0c4ace28145734e4032b20483b13306ad424a0fc9d9cb86680989741e8569f31"
+    },
+    "dtbo": {
+      "path": "partition-dumps/dtbo_a.img",
+      "size": 25165824,
+      "sha256": "fc4da5b5b04160fc1760c425f684d584d2780f308c8ef200d62eaa8d9e6d9680"
+    },
+    "system_dlkm": {
+      "path": "partition-dumps/system_dlkm_a.img",
+      "size": 7532544,
+      "sha256": "0717ae341dc5b98852545260c279559c118c05c3fd3f1b4cc020abfdae6211ff"
+    },
+    "vendor_dlkm": {
+      "path": "partition-dumps/vendor_dlkm_a.img",
+      "size": 32894976,
+      "sha256": "2e0db619bc809234ae3373998686d16909ae2e2363dbfad906be57900443a6e3"
+    },
+    "init_boot": {
+      "path": "partition-dumps/init_boot_a.img",
+      "size": 8388608,
+      "sha256": "8a608a381a1955eda482a288df21d271829e2637bc8fe4335d06672dbc88c46a"
+    },
+    "vbmeta": {
+      "path": "partition-dumps/vbmeta_a.img",
+      "size": 131072,
+      "sha256": "e286b60e9cfc28afb28aa9dbf966bb4b28beda8f770f8058b0ca7b072fc4855d"
+    }
+  },
+  "loaders": {
+    "source": "serial-loaders",
+    "sha256": "0acd72aadf7e92229fccaa9d5d92bac3fa298901f54cf4902def8af228c016c4"
+  },
+  "prerequisite_files": [
+    {
+      "path": "/vendor/etc/selinux/precompiled_sepolicy",
+      "sha256": "4bca7122293736ea3470e1f56004d491262e497a439722b6fad192219add6750"
+    }
+  ],
+  "omissions": {
+    "subsys_pil_tz": "Original native baseline lacks this stale optional dependency; pinned old parent softdep evidence retained in accepted bundle.",
+    "qcom_arm_smmu_mod": "Original native baseline lacks this stale optional dependency; pinned old parent softdep evidence retained in accepted bundle.",
+    "phy_msm_snps_hs": "Original native baseline lacks this stale optional dependency; pinned old parent softdep evidence retained in accepted bundle."
+  },
+  "module_layout": {
+    "source": "verified-prebuilt-onyx",
+    "sha256": "ebed5d99a682ffb25fa42fdd19876e8586f0691a5879e17b1a38d6e947fb68b0"
+  }
+}

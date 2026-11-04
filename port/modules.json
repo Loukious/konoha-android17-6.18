@@ -1563,5 +1563,41 @@
   {
     "target": "mtdoops",
     "output": "mtdoops.ko"
+  },
+  {
+    "target": "rtl8xxxu",
+    "output": "rtl8xxxu.ko"
+  },
+  {
+    "target": "rt2x00lib",
+    "output": "rt2x00lib.ko"
+  },
+  {
+    "target": "rt2x00usb",
+    "output": "rt2x00usb.ko"
+  },
+  {
+    "target": "rt2800lib",
+    "output": "rt2800lib.ko"
+  },
+  {
+    "target": "rt2800usb",
+    "output": "rt2800usb.ko"
+  },
+  {
+    "target": "ath",
+    "output": "ath.ko"
+  },
+  {
+    "target": "ath9k_hw",
+    "output": "ath9k_hw.ko"
+  },
+  {
+    "target": "ath9k_common",
+    "output": "ath9k_common.ko"
+  },
+  {
+    "target": "ath9k_htc",
+    "output": "ath9k_htc.ko"
   }
 ]

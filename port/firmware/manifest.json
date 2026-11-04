@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "common_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+  "blobs": [
+    {
+      "path": "ath9k_htc/htc_7010-1.4.0.fw",
+      "driver": "ath9k_htc",
+      "bytes": 72812,
+      "sha256": "737850aaf66ca13f82e0f5ca5e758f606f840c2f23c291350ab916bbf88e6f75",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/ath9k_htc/htc_7010-1.4.0.fw",
+      "license": "licenses/LICENCE.open-ath9k-htc-firmware",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/ath/ath9k/hif_usb.h"
+    },
+    {
+      "path": "ath9k_htc/htc_9271-1.4.0.fw",
+      "driver": "ath9k_htc",
+      "bytes": 51008,
+      "sha256": "78f7d592a95b419a02fde7440f30c606fc31a871cf0ce150ced40d4857173eb0",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/ath9k_htc/htc_9271-1.4.0.fw",
+      "license": "licenses/LICENCE.open-ath9k-htc-firmware",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/ath/ath9k/hif_usb.h"
+    },
+    {
+      "path": "rt2870.bin",
+      "driver": "rt2800usb",
+      "bytes": 8192,
+      "sha256": "251b8918391eac6415d60dca239e415aad0177e885376f2a17782e64fcbbe317",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rt2870.bin",
+      "license": "licenses/LICENCE.ralink-firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/ralink/rt2x00/rt2800usb.c"
+    },
+    {
+      "path": "rtlwifi/rtl8188eufw.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 13904,
+      "sha256": "1241ddbfc87f0495e0bf09d8b94c94680b60a3d8eeab89462b3c4d8d3e8a1ee0",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8188eufw.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8188fufw.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 21020,
+      "sha256": "e6189d6d7032b83f0ed4284629c43db66262449a866f33fd329e611239f62e1f",
+      "repository": "https://github.com/endlessm/linux-firmware",
+      "revision": "15fadb6da305801f74233d07602d174e58c4a611",
+      "url": "https://raw.githubusercontent.com/endlessm/linux-firmware/15fadb6da305801f74233d07602d174e58c4a611/rtlwifi/rtl8188fufw.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8192cufw_A.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 16116,
+      "sha256": "99c540f91f473829b67840395f74e9d8caeb06b9f0c430872473ff5357fa3bb1",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8192cufw_A.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8192cufw_B.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 16096,
+      "sha256": "dda481c472106625faef55ef984485a747641328c9befebe86121fd3a4a5dbcb",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8192cufw_B.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8192cufw_TMSC.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 16116,
+      "sha256": "da7c57ce4426864c7ff2e417373098046a9454f7b8108ed42210209bfa9d07bc",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8192cufw_TMSC.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8192eu_nic.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 31818,
+      "sha256": "c6e5beeeb2a716ce417a9ede5974d0876b18ebf0368c195da8a181f6ba6d9b4b",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8192eu_nic.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8192fufw.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 31136,
+      "sha256": "3001f8b50176ede76d0cde20c7c7ff84ebe12331049e65e1a1a768b1d45b74de",
+      "repository": "https://github.com/endlessm/linux-firmware",
+      "revision": "15fadb6da305801f74233d07602d174e58c4a611",
+      "url": "https://raw.githubusercontent.com/endlessm/linux-firmware/15fadb6da305801f74233d07602d174e58c4a611/rtlwifi/rtl8192fufw.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8710bufw_SMIC.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 23750,
+      "sha256": "5601323d5840f81aae228545ef6a7285afefcc0979c286a296e3ec731d67177d",
+      "repository": "https://github.com/endlessm/linux-firmware",
+      "revision": "15fadb6da305801f74233d07602d174e58c4a611",
+      "url": "https://raw.githubusercontent.com/endlessm/linux-firmware/15fadb6da305801f74233d07602d174e58c4a611/rtlwifi/rtl8710bufw_SMIC.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8710bufw_UMC.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 22654,
+      "sha256": "ca3701b33c715136d818fd7fc95ef851c30f2fd9d5e265781094c7234fc7da01",
+      "repository": "https://github.com/endlessm/linux-firmware",
+      "revision": "15fadb6da305801f74233d07602d174e58c4a611",
+      "url": "https://raw.githubusercontent.com/endlessm/linux-firmware/15fadb6da305801f74233d07602d174e58c4a611/rtlwifi/rtl8710bufw_UMC.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8723aufw_A.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 22172,
+      "sha256": "d63e39f41dd726b3a833e64fea44696c7b74ad595d31dcaae509b17d247f125c",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8723aufw_A.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8723aufw_B.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 24118,
+      "sha256": "850374b96076ab4b854ee9dc42ef57f9bd6b24493b74ba6b609c690d17f1c552",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8723aufw_B.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8723aufw_B_NoBT.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 19200,
+      "sha256": "a24af5491dbfa3937633049fc66576ed478dec60e7676263f00a2ce9dd22c25b",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8723aufw_B_NoBT.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    },
+    {
+      "path": "rtlwifi/rtl8723bu_nic.bin",
+      "driver": "rtl8xxxu",
+      "bytes": 32108,
+      "sha256": "a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969",
+      "repository": "https://github.com/wkennington/linux-firmware",
+      "revision": "711d3297bac870af42088a467459a0634c1970ca",
+      "url": "https://raw.githubusercontent.com/wkennington/linux-firmware/711d3297bac870af42088a467459a0634c1970ca/rtlwifi/rtl8723bu_nic.bin",
+      "license": "licenses/LICENCE.rtlwifi_firmware.txt",
+      "source_request_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+      "request_source_path": "drivers/net/wireless/realtek/rtl8xxxu/core.c"
+    }
+  ],
+  "excluded_requests": [
+    {
+      "path": "rtlwifi/rtl8723bu_bt.bin",
+      "reason": "Private enable_bluetooth state remains false: no setter or exposed module parameter in pinned native driver."
+    }
+  ],
+  "optional_ath_names_not_included": [
+    "ath9k_htc/htc_7010-1.dev.0.fw",
+    "ath9k_htc/htc_9271-1.dev.0.fw",
+    "htc_7010.fw",
+    "htc_9271.fw"
+  ],
+  "ath_selected_version": "1.4.0",
+  "ath_corresponding_source": {
+    "repository": "https://github.com/qca/open-ath9k-htc-firmware",
+    "release_tag": "1.4.0",
+    "revision": "146bff1075a9f62c5d64c984bf6db502f8cd2671",
+    "url": "https://codeload.github.com/qca/open-ath9k-htc-firmware/tar.gz/146bff1075a9f62c5d64c984bf6db502f8cd2671",
+    "bytes": 5323061,
+    "sha256": "fcf700cdc4670285b427f6de76749ec6304c3b318209a54df8d2d7110f4e6a2a"
+  },
+  "hardware_checked": false
+}

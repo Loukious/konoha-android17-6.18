@@ -1,6 +1,6 @@
 {
-  "patch": "0002-required-common-fixes-with-hvc.patch",
-  "patch_sha256": "ed4082ec51592b96f857c05d821ca45731010d96ec9dcb34b7cbead69ab67ff7",
+  "patch": "0003-required-common-fixes-with-nethunter-can.patch",
+  "patch_sha256": "862c70b7d27bf5e1d81ed55befaabe3c59c26b041daa41d09fdfd460ce20d1c4",
   "upstream": "https://lists.openwall.net/linux-kernel/2026/07/10/62",
   "files": {
     "drivers/hwtracing/coresight/coresight-catu.c": {
@@ -57,7 +57,7 @@
     },
     "arch/arm64/configs/gki_defconfig": {
       "before_sha256": "4237bcef4a241e4bf8448ee3030fae0d7a21529ab9766719a2c5ce100aec9898",
-      "candidate_sha256": "21ceae0240dd9d685c8824bc7da0378592df32550189dcda462de21124c06232"
+      "candidate_sha256": "52a0a31e60cbcbe7b94292e7cd512d3a4df7aeba386d883be0cf42cbe4d54ba2"
     },
     "certs/onyx-accepted-gki.pem": {
       "before_sha256": null,
@@ -78,6 +78,10 @@
     "include/linux/hvc_backend.h": {
       "before_sha256": null,
       "candidate_sha256": "5acdf31e54db1c5a2c4e9b194dfaa87b7e916e31c2aee57166b932de906132c8"
+    },
+    "bazel/modules_private.bzl": {
+      "before_sha256": "727614cd0b4f6fca9749ae72076b1170d4ac72965a9df7d1ed5ebe4da15c92e2",
+      "candidate_sha256": "e474d19be2167f98d7e44cf1a96a3e6ae9fab88b2ca0af0b871cf5b77bda6264"
     }
   },
   "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",
@@ -90,7 +94,8 @@
     "Owned native HVC backend publication, callback SRCU lifetime, retained TTY indices and generation keys",
     "Validate Gunyah console notification header/tail against real received size before unsized notifier dispatch",
     "Trust the pinned accepted GKI public certificate so preserved modules retain protected-export authorization after kernel rebuild",
-    "Remove interior certificate-list alignment so the native X.509 loader reaches the added public certificate"
+    "Remove interior certificate-list alignment so the native X.509 loader reaches the added public certificate",
+    "Native CAN USB/virtual/ISO-TP/J1939, USB serial generic/adapters, Bluetooth USB, network filesystems and host-network diagnostics with exact ARM64 module outputs"
   ],
   "integrated_upstream": [],
   "components": [
@@ -103,6 +108,11 @@
       "patch": "hvc-core.patch",
       "sha256": "828433c0da7232604bdda398ae6ec06c90415ef2890abc7050adf069cd3bf489",
       "role": "Owned HVC lifecycle, console notification bounds and pinned accepted GKI public trust"
+    },
+    {
+      "patch": "nethunter-can-native.patch",
+      "sha256": "5ffa842f1ed321cf1f97bdfbc7a8da276a822eeb23498e263443549482bb658b",
+      "role": "Native GKI NetHunter peripherals/filesystems and common USB/virtual CAN"
     }
   ]
 }

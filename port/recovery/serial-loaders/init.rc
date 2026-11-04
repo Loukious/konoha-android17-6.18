@@ -1,0 +1,15 @@
+# Selected only by this diagnostic vendor_boot bootconfig.
+on early-init
+    mkdir /dev/konoha-serial-modules 0755 root root
+    mount none /metadata/ota/konoha-serial-20261101-v2 /dev/konoha-serial-modules bind
+    # Clear nosuid on the cloned mount, without changing /metadata flags.
+    mount none /dev/konoha-serial-modules /dev/konoha-serial-modules remount bind ro
+    write /dev/kmsg "Konoha serial: early-init mount prepared"
+
+import /metadata/ota/konoha-serial-20261101-v2/services.rc
+import /system/etc/init/hw/init.rc
+import /system/etc/init
+import /system_ext/etc/init
+import /vendor/etc/init
+import /odm/etc/init
+import /product/etc/init

@@ -1,0 +1,18 @@
+# Imported before standard boot configs; their two native definitions are ignored duplicates.
+service gki.modprobe /dev/konoha-serial-modules/system_dlkm_modprobe.sh
+    class main
+    user root
+    group root system
+    disabled
+    stdio_to_kmsg
+    seclabel u:r:vendor_modprobe:s0
+    oneshot
+
+service vendor.modprobe /dev/konoha-serial-modules/vendor_modprobe.sh
+    class main
+    user root
+    group root system
+    disabled
+    stdio_to_kmsg
+    seclabel u:r:vendor_modprobe:s0
+    oneshot

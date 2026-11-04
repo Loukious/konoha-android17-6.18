@@ -1,0 +1,12 @@
+--- a/drivers/net/wireless/realtek/rtl8xxxu/core.c
++++ b/drivers/net/wireless/realtek/rtl8xxxu/core.c
+@@ -1909,7 +1909,8 @@
+ 				       priv->efuse_wifi.raw, EFUSE_MAP_LEN);
+ }
+ 
+-static const struct debugfs_short_fops fops_efuse = {
++static const struct file_operations fops_efuse = {
++	.owner = THIS_MODULE,
+ 	.read = read_file_efuse,
+ };
+ 

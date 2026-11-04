@@ -180,6 +180,11 @@ def main():
         config = kernel_dir.parent.parent / "onyx" / (target + "_config") / "out_dir/.config"
         shutil.copyfile(config, artifacts / "platform" / (target + ".config"))
     (artifacts / "gki/kernel.release").write_text(release + "\n")
+    shutil.copytree(HERE / "firmware", artifacts / "firmware")
+    from verify_nethunter import verify as verify_nethunter
+    nethunter_validation = verify_nethunter(artifacts, HERE)
+    (artifacts / "nethunter-host-validation.json").write_text(
+        json.dumps(nethunter_validation, indent=2) + "\n")
     subprocess.run([sys.executable, str(HERE / "build_devicetrees.py"), str(workspace),
                     "--output", str(artifacts / "devicetrees")], check=True)
     dt_report = json.loads((artifacts / "devicetrees/report.json").read_text())
@@ -190,8 +195,13 @@ def main():
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
                  "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
                  "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py", "verify_cti_assoc.py", "verify_qcom_sysfs.py", "verify_coresight_cti.py", "verify_memlat.py",
-                 "build_devicetrees.py", "devicetrees.json", "kmi-symbols"]:
+                 "build_devicetrees.py", "devicetrees.json", "kmi-symbols",
+                 "nethunter-native-modules.json", "verify_nethunter.py"]:
         shutil.copyfile(HERE / name, inputs / name)
+    shutil.copytree(HERE / "firmware", inputs / "firmware")
+    if (HERE / "recovery").is_dir():
+        shutil.copytree(HERE / "recovery", inputs / "recovery",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copytree(HERE / "patches", inputs / "patches")
     shutil.copytree(HERE / "common-patches", inputs / "common-patches")
     shutil.copytree(HERE / "kernelsu", inputs / "kernelsu")
@@ -228,6 +238,7 @@ def main():
             "hardware_validated": False,
         },
         "module_verification": verification,
+        "nethunter_host_validation": nethunter_validation,
         "mi_thermal_host_validation": thermal_validation,
         "device_services_host_validation": services_validation,
         "platform_providers_host_validation": platform_validation,

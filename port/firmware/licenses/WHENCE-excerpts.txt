@@ -1,0 +1,211 @@
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: ath9k_htc - Atheros HTC devices (USB)
+
+File: ar9271.fw
+File: ar7010.fw
+File: ar7010_1_1.fw
+File: htc_9271.fw
+Version: 1.3.1
+File: htc_7010.fw
+Version: 1.3.1
+
+Licence: Redistributable. See LICENCE.atheros_firmware for details
+
+File: ath9k_htc/htc_7010-1.4.0.fw
+Version: 1.4.0
+File: ath9k_htc/htc_9271-1.4.0.fw
+Version: 1.4.0
+
+Licence: Free software. See LICENCE.open-ath9k-htc-firmware for details
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: rt2800usb - Ralink RT2870, RT3070, RT3071, RT3072, RT5370 wireless MACs
+
+File: rt2870.bin
+Version: 36
+
+Licence: Redistributable. See LICENCE.ralink-firmware.txt for details
+
+Binary file supplied originally by Shiang Tu <shiang_tu@ralinktech.com>, latest
+from http://www.mediatek.com/en/downloads1/downloads/
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: rtl8192cu - Realtek 802.11n WLAN driver for RTL8192CU
+
+File: rtlwifi/rtl8192cufw.bin
+File: rtlwifi/rtl8192cufw_A.bin
+File: rtlwifi/rtl8192cufw_B.bin
+File: rtlwifi/rtl8192cufw_TMSC.bin
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: r8723au - Realtek 802.11n WLAN driver for RTL8723AU
+
+Info: Taken from Realtek driver rtl8723A_WiFi_linux_v4.1.3_6044.20121224
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8723aufw_A.bin
+File: rtlwifi/rtl8723aufw_B.bin
+File: rtlwifi/rtl8723aufw_B_NoBT.bin
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: rtl8188eu - Realtek 802.11n WLAN driver for RTL8188EU
+
+Info: Taken from Realtek version RTL8188EUS_linux_v4.1.4_6773.20130222
+File: rtlwifi/rtl8188eufw.bin
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 711d3297bac870af42088a467459a0634c1970ca
+Driver: rtl8xxxu - Realtek 802.11n WLAN driver for RTL8XXX USB devices
+
+Info: rtl8723au taken from Realtek driver
+      rtl8723A_WiFi_linux_v4.1.3_6044.20121224
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8723aufw_A.bin
+File: rtlwifi/rtl8723aufw_B.bin
+File: rtlwifi/rtl8723aufw_B_NoBT.bin
+
+Info: rtl8723bu taken from Realtek driver
+      rtl8723BU_WiFi_linux_v4.3.16_14189.20150519_BTCOEX20150119-5844
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8723bu_nic.bin
+File: rtlwifi/rtl8723bu_wowlan.bin
+File: rtlwifi/rtl8723bu_ap_wowlan.bin
+
+Info: rtl8192eu taken from Realtek driver
+      rtl8192EU_linux_v4.3.1.1_11320.20140505
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8192eu_nic.bin
+File: rtlwifi/rtl8192eu_wowlan.bin
+File: rtlwifi/rtl8192eu_ap_wowlan.bin
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 15fadb6da305801f74233d07602d174e58c4a611
+Driver: ath9k_htc - Atheros HTC devices (USB)
+
+File: ar9271.fw
+File: ar7010.fw
+File: ar7010_1_1.fw
+File: htc_9271.fw
+Version: 1.3.1
+File: htc_7010.fw
+Version: 1.3.1
+
+Licence: Redistributable. See LICENCE.atheros_firmware for details
+
+File: ath9k_htc/htc_7010-1.4.0.fw
+Version: 1.4.0
+File: ath9k_htc/htc_9271-1.4.0.fw
+Version: 1.4.0
+
+Licence: Free software. See LICENCE.open-ath9k-htc-firmware for details
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 15fadb6da305801f74233d07602d174e58c4a611
+Driver: rt2800usb - Ralink RT2870, RT3070, RT3071, RT3072, RT5370 wireless MACs
+
+File: rt2870.bin
+Version: 36
+
+Licence: Redistributable. See LICENCE.ralink-firmware.txt for details
+
+Binary file supplied originally by Shiang Tu <shiang_tu@ralinktech.com>, latest
+from http://www.mediatek.com/en/downloads1/downloads/
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 15fadb6da305801f74233d07602d174e58c4a611
+Driver: rtl8192cu - Realtek 802.11n WLAN driver for RTL8192CU
+
+File: rtlwifi/rtl8192cufw.bin
+File: rtlwifi/rtl8192cufw_A.bin
+File: rtlwifi/rtl8192cufw_B.bin
+File: rtlwifi/rtl8192cufw_TMSC.bin
+Info: From Vendor's rtl8188C_8192C_usb_linux_v4.0.1_6911.20130308 driver
+      All files extracted from driver/hal/rtl8192c/usb/Hal8192CUHWImg.c
+      Relevant variables (CONFIG_BT_COEXISTENCE not set):
+        - rtlwifi/rtl8192cufw_A.bin: Rtl8192CUFwUMCACutImgArray
+        - rtlwifi/rtl8192cufw_B.bin: Rtl8192CUFwUMCBCutImgArray
+        - rtlwifi/rtl8192cufw_TMSC.bin: Rtl8192CUFwTSMCImgArray
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.
+
+--------------------------------------------------------------------------
+
+linux-firmware revision 15fadb6da305801f74233d07602d174e58c4a611
+Driver: rtl8xxxu - Realtek 802.11n WLAN driver for RTL8XXX USB devices
+
+Info: rtl8723au taken from Realtek driver
+      rtl8723A_WiFi_linux_v4.1.3_6044.20121224
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8723aufw_A.bin
+File: rtlwifi/rtl8723aufw_B.bin
+File: rtlwifi/rtl8723aufw_B_NoBT.bin
+
+Info: rtl8723bu taken from Realtek driver
+      rtl8723BU_WiFi_linux_v4.3.16_14189.20150519_BTCOEX20150119-5844
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8723bu_nic.bin
+File: rtlwifi/rtl8723bu_wowlan.bin
+File: rtlwifi/rtl8723bu_ap_wowlan.bin
+
+Info: rtl8192eu taken from Realtek driver
+      rtl8192EU_WiFi_linux_v5.11.2.1-18-g8e7df912b.20210527_COEX20171113-0047
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8192eu_nic.bin
+Version: 35.7
+File: rtlwifi/rtl8192eu_wowlan.bin
+Version: 35.7
+File: rtlwifi/rtl8192eu_ap_wowlan.bin
+Version: 18.0
+
+Info: rtl8188fu taken from Realtek driver
+      RTL8188FU_Linux_v4.3.23.6_20964.20170110
+      Firmware was embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8188fufw.bin
+
+File: rtlwifi/rtl8710bufw_SMIC.bin
+Version: 16.0
+File: rtlwifi/rtl8710bufw_UMC.bin
+Version: 16.0
+
+Info: rtl8188eu taken from Realtek driver version
+      v5.2.2.4_25483.20171222.
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8188eufw.bin
+Version: 28.0
+
+Info: rtl8192fu taken from Realtek driver version
+      v5.15.2-53-g9bfbc74cf.20230615_COEX20220422-2b07.
+      Firmware is embedded in the driver as data statements. This info
+      has been extracted into a binary file.
+File: rtlwifi/rtl8192fufw.bin
+Version: 7.3
+
+Licence: Redistributable. See LICENCE.rtlwifi_firmware.txt for details.

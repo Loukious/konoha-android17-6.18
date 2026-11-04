@@ -1,0 +1,132 @@
+diff --git a/arch/arm64/configs/gki_defconfig b/arch/arm64/configs/gki_defconfig
+--- a/arch/arm64/configs/gki_defconfig
++++ b/arch/arm64/configs/gki_defconfig
+@@ -153,6 +153,7 @@
+ CONFIG_NET=y
+ CONFIG_NET_APF=y
+ CONFIG_PACKET=y
++CONFIG_PACKET_DIAG=m
+ # CONFIG_AF_UNIX_OOB is not set
+ CONFIG_XFRM_USER=y
+ CONFIG_XFRM_INTERFACE=y
+@@ -313,10 +314,13 @@
+ CONFIG_VIRTIO_VSOCKETS=m
+ CONFIG_CGROUP_NET_PRIO=y
+ CONFIG_CAN=m
++CONFIG_CAN_J1939=m
++CONFIG_CAN_ISOTP=m
+ CONFIG_BT=m
+ CONFIG_BT_RFCOMM=m
+ CONFIG_BT_RFCOMM_TTY=y
+ CONFIG_BT_HIDP=m
++CONFIG_BT_HCIBTUSB=m
+ CONFIG_BT_HCIBTSDIO=m
+ CONFIG_BT_HCIUART=m
+ CONFIG_BT_HCIUART_LL=y
+@@ -392,7 +396,19 @@
+ CONFIG_LED_TRIGGER_PHY=y
+ CONFIG_AX88796B_PHY=y
+ CONFIG_CAN_VCAN=m
++CONFIG_CAN_VXCAN=m
++CONFIG_CAN_CAN327=m
+ CONFIG_CAN_SLCAN=m
++CONFIG_CAN_8DEV_USB=m
++CONFIG_CAN_EMS_USB=m
++CONFIG_CAN_ESD_USB=m
++CONFIG_CAN_ETAS_ES58X=m
++CONFIG_CAN_F81604=m
++CONFIG_CAN_GS_USB=m
++CONFIG_CAN_KVASER_USB=m
++CONFIG_CAN_MCBA_USB=m
++CONFIG_CAN_PEAK_USB=m
++CONFIG_CAN_UCAN=m
+ CONFIG_PPP=m
+ CONFIG_PPP_BSDCOMP=m
+ CONFIG_PPP_DEFLATE=m
+@@ -405,7 +421,7 @@
+ CONFIG_USB_USBNET=m
+ CONFIG_USB_NET_CDC_EEM=m
+ # CONFIG_USB_NET_NET1080 is not set
+-# CONFIG_USB_NET_CDC_SUBSET is not set
++CONFIG_USB_NET_RNDIS_HOST=m
+ # CONFIG_USB_NET_ZAURUS is not set
+ CONFIG_USB_NET_AQC111=m
+ # CONFIG_WLAN_VENDOR_ADMTEK is not set
+@@ -578,7 +594,12 @@
+ CONFIG_USB_UAS=y
+ CONFIG_USB_DWC3=y
+ CONFIG_USB_SERIAL=m
++CONFIG_USB_SERIAL_GENERIC=y
++CONFIG_USB_SERIAL_CH341=m
++CONFIG_USB_SERIAL_CP210X=m
+ CONFIG_USB_SERIAL_FTDI_SIO=m
++CONFIG_USB_SERIAL_PL2303=m
++CONFIG_USB_SERIAL_OPTION=m
+ CONFIG_USB_GADGET=y
+ CONFIG_USB_CONFIGFS=y
+ CONFIG_ANDROID_USB_CONFIGFS_UEVENT=y
+@@ -713,6 +734,9 @@
+ CONFIG_EROFS_FS=y
+ CONFIG_EROFS_FS_ZIP_ZSTD=y
+ CONFIG_EROFS_FS_PCPU_KTHREAD=y
++CONFIG_NFS_FS=m
++CONFIG_NFS_V4=m
++CONFIG_CIFS=m
+ CONFIG_NLS_CODEPAGE_437=y
+ CONFIG_NLS_CODEPAGE_737=y
+ CONFIG_NLS_CODEPAGE_775=y
+diff --git a/bazel/modules_private.bzl b/bazel/modules_private.bzl
+--- a/bazel/modules_private.bzl
++++ b/bazel/modules_private.bzl
+@@ -99,13 +99,50 @@
+ _ARM64_GKI_MODULES_LIST = [
+     # keep sorted
+     "arch/arm64/geniezone/gzvm.ko",
++    "drivers/bluetooth/btintel.ko",
++    "drivers/bluetooth/btrtl.ko",
++    "drivers/bluetooth/btusb.ko",
+     "drivers/char/hw_random/cctrng.ko",
+-    "drivers/hwtracing/coresight/coresight.ko",
+     "drivers/hwtracing/coresight/coresight-etm4x.ko",
+     "drivers/hwtracing/coresight/coresight-funnel.ko",
+     "drivers/hwtracing/coresight/coresight-replicator.ko",
+     "drivers/hwtracing/coresight/coresight-trbe.ko",
++    "drivers/hwtracing/coresight/coresight.ko",
++    "drivers/net/can/can327.ko",
++    "drivers/net/can/usb/ems_usb.ko",
++    "drivers/net/can/usb/esd_usb.ko",
++    "drivers/net/can/usb/etas_es58x/etas_es58x.ko",
++    "drivers/net/can/usb/f81604.ko",
++    "drivers/net/can/usb/gs_usb.ko",
++    "drivers/net/can/usb/kvaser_usb/kvaser_usb.ko",
++    "drivers/net/can/usb/mcba_usb.ko",
++    "drivers/net/can/usb/peak_usb/peak_usb.ko",
++    "drivers/net/can/usb/ucan.ko",
++    "drivers/net/can/usb/usb_8dev.ko",
++    "drivers/net/can/vxcan.ko",
++    "drivers/net/usb/cdc_subset.ko",
++    "drivers/net/usb/rndis_host.ko",
+     "drivers/perf/dwc_pcie_pmu.ko",
++    "drivers/usb/serial/ch341.ko",
++    "drivers/usb/serial/cp210x.ko",
++    "drivers/usb/serial/option.ko",
++    "drivers/usb/serial/pl2303.ko",
++    "drivers/usb/serial/usb_wwan.ko",
++    "fs/lockd/lockd.ko",
++    "fs/nfs/nfs.ko",
++    "fs/nfs/nfsv3.ko",
++    "fs/nfs/nfsv4.ko",
++    "fs/nfs_common/grace.ko",
++    "fs/nls/nls_ucs2_utils.ko",
++    "fs/smb/client/cifs.ko",
++    "fs/smb/common/cifs_md4.ko",
++    "net/can/can-isotp.ko",
++    "net/can/j1939/can-j1939.ko",
++    "net/dns_resolver/dns_resolver.ko",
++    "net/packet/af_packet_diag.ko",
++    "net/sunrpc/auth_gss/auth_rpcgss.ko",
++    "net/sunrpc/auth_gss/rpcsec_gss_krb5.ko",
++    "net/sunrpc/sunrpc.ko",
+ ]
+ 
+ _X86_GKI_MODULES_LIST = [

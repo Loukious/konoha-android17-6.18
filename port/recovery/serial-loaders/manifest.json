@@ -1,0 +1,40 @@
+{
+  "purpose": "Device-specific serial module diagnostic; not a standalone ZIP",
+  "device_directory": "/metadata/ota/konoha-serial-20261101-v2",
+  "mountpoint": "/dev/konoha-serial-modules",
+  "sources": {
+    "vendor_modprobe.sh": {
+      "path": "vendor/bin/vendor_modprobe.sh",
+      "sha256": "0d773f29a657de1dfabbbc8139cb04468656e6a5755f6e68d08d9815ba74b141"
+    },
+    "system_dlkm_modprobe.sh": {
+      "path": "vendor/bin/system_dlkm_modprobe.sh",
+      "sha256": "d1fdc96dad8a82b04824fe009a1f9aa98dcac6372f61cd3bd6a4d837d5730242"
+    }
+  },
+  "files": {
+    "init.rc": {
+      "sha256": "241184fa567c3f4440f41c0d3a225f8ba72d448fa0c63884ca79e889d9ff195c",
+      "mode": 420,
+      "label": "u:object_r:system_file:s0"
+    },
+    "services.rc": {
+      "sha256": "b71c0b5f83031fd2104874e1701bfcc0593a99cfdf592f8447fffc53e8a56719",
+      "mode": 420,
+      "label": "u:object_r:system_file:s0"
+    },
+    "vendor_modprobe.sh": {
+      "sha256": "547c47b15b55c19e3e4ddf1195c22e6808bdfd810a9a81cf72af7eb9a776f30a",
+      "mode": 493,
+      "label": "u:object_r:vendor_modinstall-sh_exec:s0"
+    },
+    "system_dlkm_modprobe.sh": {
+      "sha256": "005d494ac662487099443b181e092acca01e7011cb69fd5414254f289e26eda8",
+      "mode": 493,
+      "label": "u:object_r:vendor_modinstall-sh_exec:s0"
+    }
+  },
+  "directory_label": "u:object_r:vendor_file:s0",
+  "invariants": "Same lists, flags, blocklists, first-module fallback, readiness property and return statuses; only concurrency and stderr checkpoints change.",
+  "source_manifest_sha256": "a7031c61417f58f8fd9c22b8c34ba553d7733474958442b20d0e81270a19b96a"
+}

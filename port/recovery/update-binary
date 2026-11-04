@@ -1,0 +1,18 @@
+#!/system/bin/sh
+# Standard recovery update-binary interface. No partition operations occur here.
+set -eu
+OUTFD=$2
+ZIPFILE=$3
+export OUTFD
+WORKDIR=$(mktemp -d /tmp/konoha-install.XXXXXX)
+export WORKDIR
+trap 'rm -rf "$WORKDIR"' EXIT
+unzip -p "$ZIPFILE" tools/busybox > "$WORKDIR/busybox"
+chmod 0755 "$WORKDIR/busybox"
+"$WORKDIR/busybox" unzip -q "$ZIPFILE" -d "$WORKDIR/package"
+cd "$WORKDIR/package"
+"$WORKDIR/busybox" sha256sum -c SHA256SUMS >/dev/null
+export KONOHA_PACKAGE="$WORKDIR/package"
+export KONOHA_BUSYBOX="$WORKDIR/busybox"
+export KONOHA_GUARD_ACTIVE=1
+"$WORKDIR/package/tools/recovery-guard" run "$WORKDIR/busybox" "$WORKDIR/package/install.sh"

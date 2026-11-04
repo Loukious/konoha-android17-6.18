@@ -1,0 +1,36 @@
+--- a/drivers/net/wireless/ath/ath9k/hif_usb.c
++++ b/drivers/net/wireless/ath/ath9k/hif_usb.c
+@@ -16,6 +16,7 @@
+ 
+ #include <linux/unaligned.h>
+ #include "htc.h"
++#include "native_usb_helpers.h"
+ 
+ MODULE_FIRMWARE(HTC_7010_MODULE_FW);
+ MODULE_FIRMWARE(HTC_9271_MODULE_FW);
+@@ -1418,7 +1419,7 @@
+ 	if (!buf)
+ 		return;
+ 
+-	ret = usb_interrupt_msg(udev, usb_sndintpipe(udev, USB_REG_OUT_PIPE),
++	ret = nethunter_usb_interrupt_msg(udev, usb_sndintpipe(udev, USB_REG_OUT_PIPE),
+ 			   buf, 4, NULL, USB_MSG_TIMEOUT);
+ 	if (ret)
+ 		dev_err(&udev->dev, "ath9k_htc: USB reboot failed\n");
+--- /dev/null
++++ b/drivers/net/wireless/ath/ath9k/native_usb_helpers.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef NETHUNTER_NATIVE_USB_HELPERS_H
++#define NETHUNTER_NATIVE_USB_HELPERS_H
++#include <linux/usb.h>
++
++/* Exact forwarding semantics from pinned drivers/usb/core/message.c.
++ * Keep the caller's interrupt pipe; only the unexported wrapper is local.
++ */
++static inline int nethunter_usb_interrupt_msg(struct usb_device *usb_dev,
++        unsigned int pipe, void *data, int len, int *actual_length, int timeout)
++{
++    return usb_bulk_msg(usb_dev, pipe, data, len, actual_length, timeout);
++}
++#endif
