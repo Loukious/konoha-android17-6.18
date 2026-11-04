@@ -35,7 +35,7 @@ Hosted execution and each newer LTS build are validated separately in Actions.
 
 ## Automatic release validation — 2026-11-04
 
-The updated automation passes 64 host tests, actionlint 1.7.12, Python compilation,
+The updated automation passes 68 host tests, actionlint 1.7.12, Python compilation,
 Bash syntax and Git whitespace checks. Actual temporary Git repositories exercise
 GKI updates, KernelSU dev updates, accepted-source edits, unchanged refs, missing
 release state and failed remote lookup; detection never changes accepted state.
@@ -63,4 +63,17 @@ artifact check; no source, firmware, phone or GitHub release was changed locally
 Existing hosted build 41636617465 completed its full build and upload successfully,
 and tracker 41831501184 correctly skipped unchanged upstream inputs. Those runs
 predate release publication. The new release path still requires its first hosted
-end-to-end build after the CI commit is pushed.
+end-to-end build.
+
+Hosted run 41885999581 passed automation validation but stopped before source
+sync: its COW root reported 33 GiB free after the original cleanup, below the
+55 GiB gate. Bootstrap now requires a disposable GitHub-hosted Linux environment
+and removes the unused hosted tool cache plus explicit SDK/toolchain directories.
+System Python, apt, gh and runner Node externals are preserved. Before/after disk
+usage is logged; insufficient space also records block devices and top-level
+directory usage. The 55 GiB gate remains unchanged.
+
+Four additional bootstrap tests execute only inert command mocks, covering the
+environment guard, cleanup targets, preserved tools, disk-gate failure and exact
+55 GiB boundary. No local system cleanup was performed. Reclaimed hosted space
+and complete compilation still require the next hosted run.

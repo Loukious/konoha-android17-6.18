@@ -1,7 +1,29 @@
 #!/usr/bin/env bash
 # Adapted from konoha-kernel-gki's Ubuntu 24.04 build workflow.
 set -euo pipefail
-sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted || ${RUNNER_OS:-} != Linux ]]; then
+  echo 'Cleanup requires a disposable GitHub-hosted Linux runner.' >&2
+  exit 1
+fi
+echo 'Hosted-runner disk before cleanup:'
+df -h "$GITHUB_WORKSPACE"
+task_disk_before=$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -1)
+# Kleaf supplies pinned Clang/Rust/JDK inputs. None of these preinstalled SDKs
+# are used by this build. Keep apt, system Python, gh and runner Node externals.
+task_unused_tools=(
+  /opt/hostedtoolcache
+  /usr/share/dotnet /usr/local/lib/android /opt/android /opt/ghc
+  /usr/share/swift /usr/local/swift /opt/swift
+  /opt/microsoft/powershell /usr/local/share/powershell
+  /usr/lib/jvm /usr/local/lib/jvm /opt/az /usr/share/az
+  /opt/julia /usr/local/lib/julia /usr/local/julia*
+  /opt/graalvm /usr/local/graalvm* "$HOME/.ghcup"
+)
+sudo rm -rf -- "${task_unused_tools[@]}"
+echo 'Hosted-runner disk after cleanup:'
+df -h "$GITHUB_WORKSPACE"
+task_disk_after=$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -1)
+echo "Cleanup free bytes: before=$task_disk_before after=$task_disk_after reclaimed=$((task_disk_after - task_disk_before))"
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends bc bison build-essential curl flex \
   git libelf-dev libssl-dev lz4 lzop rsync unzip xz-utils zip zstd python3 kmod jq
@@ -15,6 +37,8 @@ available=$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -1)
 if (( available < 55 * 1024 * 1024 * 1024 )); then
   echo 'At least 55 GiB free disk is required after hosted-runner cleanup.' >&2
   df -h
+  lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINTS
+  sudo du -x -B1 -d1 /usr /opt /home /mnt 2>/dev/null | sort -n | tail -25
   exit 1
 fi
 # Bound allocation and fail visibly; do not retry forever on a full disk.
