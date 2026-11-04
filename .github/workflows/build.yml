@@ -1,5 +1,5 @@
 name: Build Android 17 6.18 GKI and Onyx modules
-run-name: Build ${{ inputs.source_ref || 'android17-6.18' }}${{ inputs.kernelsu_revision && format(' / KSU {0}', inputs.kernelsu_revision) || '' }}${{ inputs.diagnostic && ' (QDSS diagnostic)' || '' }}
+run-name: Build ${{ inputs.source_ref || 'android17-6.18' }}${{ inputs.source_revision && format(' @ {0}', inputs.source_revision) || '' }}${{ inputs.kernelsu_revision && format(' / KSU {0}', inputs.kernelsu_revision) || '' }}${{ inputs.diagnostic && ' (QDSS diagnostic)' || '' }}
 
 on:
   push:
@@ -18,6 +18,10 @@ on:
         description: Tracker's detected dev HEAD (build still fetches latest dev; leave blank for manual builds)
         type: string
         default: ''
+      source_revision:
+        description: Exact source commit detected by the tracker (leave blank for manual builds)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -25,7 +29,7 @@ permissions:
 
 concurrency:
   group: build-${{ inputs.source_ref || 'android17-6.18' }}-${{ inputs.diagnostic || false }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -45,7 +49,7 @@ jobs:
       - name: Checkout selected source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || 'android17-6.18' }}
+          ref: ${{ inputs.source_revision || inputs.source_ref || 'android17-6.18' }}
           path: source
       - name: Resolve source commit
         id: source
@@ -112,38 +116,45 @@ jobs:
           BUILD_STATUS: ${{ job.status }}
         run: python3 ci/post_status.py "$REVISION" "$BUILD_STATUS"
 
-  record:
+  release:
     needs: build
-    if: github.ref == 'refs/heads/ci' && (inputs.source_ref == '' || inputs.source_ref == 'android17-6.18') && inputs.diagnostic != true
+    if: github.ref == 'refs/heads/ci' && (inputs.source_ref == '' || inputs.source_ref == 'android17-6.18' || startsWith(inputs.source_ref, 'upstream/')) && inputs.diagnostic != true
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Record verified accepted source and KernelSU revisions
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KERNEL_REVISION: ${{ needs.build.outputs.kernel_revision }}
-          KERNELSU_REVISION: ${{ needs.build.outputs.kernelsu_revision }}
-          SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
-        run: python3 ci/record_success.py "$KERNEL_REVISION" "$KERNELSU_REVISION" "$SOURCE_REVISION"
-
-  promote:
-    needs: build
-    if: github.ref == 'refs/heads/ci' && startsWith(inputs.source_ref, 'upstream/') && inputs.diagnostic != true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
+      actions: read
       contents: write
       pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KERNEL_REVISION: ${{ needs.build.outputs.kernel_revision }}
+      KERNELSU_REVISION: ${{ needs.build.outputs.kernelsu_revision }}
+      SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
     steps:
       - uses: actions/checkout@v4
-      - name: Promote the verified update and record exact accepted revisions
+      - name: Download the verified build bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: Konoha-Android17-6.18-${{ github.run_number }}
+          path: artifacts
+      - name: Checkout the exact built source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.source_revision }}
+          path: source
+      - name: Promote the verified update without recording unreleased inputs
+        id: promote
+        if: startsWith(inputs.source_ref, 'upstream/')
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ inputs.source_ref }}
-          SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
-          KERNEL_REVISION: ${{ needs.build.outputs.kernel_revision }}
-          KERNELSU_REVISION: ${{ needs.build.outputs.kernelsu_revision }}
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python3 ci/promote_update.py "$SOURCE_BRANCH" "$SOURCE_REVISION" "$KERNEL_REVISION" "$KERNELSU_REVISION" "$BUILD_URL"
+        run: python3 ci/promote_update.py "$SOURCE_BRANCH" "$SOURCE_REVISION" "$KERNEL_REVISION" "$KERNELSU_REVISION" "$BUILD_URL" --no-record
+      - name: Publish all verified release assets
+        id: release
+        if: "!startsWith(inputs.source_ref, 'upstream/') || steps.promote.outputs.promoted == 'true'"
+        run: python3 ci/publish_release.py artifacts "$SOURCE_REVISION" "$KERNEL_REVISION" "$KERNELSU_REVISION"
+      - name: Record released source and KernelSU revisions
+        if: "!startsWith(inputs.source_ref, 'upstream/') || steps.promote.outputs.promoted == 'true'"
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: python3 ci/record_success.py "$KERNEL_REVISION" "$KERNELSU_REVISION" "$SOURCE_REVISION" --release-tag "$RELEASE_TAG"

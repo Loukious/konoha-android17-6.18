@@ -8,6 +8,8 @@ import re
 import subprocess
 import tempfile
 
+from dispatch_build import should_dispatch
+
 CI_ROOT = Path(__file__).resolve().parents[1]
 ROOT = Path(os.environ.get('KONOHA_SOURCE_ROOT', CI_ROOT))
 TRACK = json.loads((CI_ROOT / 'ci/upstream.json').read_text())
@@ -69,9 +71,9 @@ def publish(revision, kernelsu=None):
                             '--limit', '100', '--json', 'displayTitle,status,conclusion,url']))
     title = 'Build ' + branch + (' / KSU ' + kernelsu if kernelsu else '')
     builds = [build for build in builds if build['displayTitle'] == title]
-    if builds:
-        return {'status': 'candidate and build already exist', 'branch': branch,
-                'url': url, 'build': builds[0]}
+    if not should_dispatch(builds):
+        return {'status': 'candidate build active, successful, or retry limit reached', 'branch': branch,
+                'url': url, 'builds': builds}
     # GITHUB_TOKEN pushes do not trigger another workflow; dispatch explicitly.
     dispatch = ['gh', 'workflow', 'run', 'build.yml', '--ref', TRACK['ci_branch'], '-f', 'source_ref=' + branch]
     if kernelsu:

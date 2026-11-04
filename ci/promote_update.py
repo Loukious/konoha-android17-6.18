@@ -22,7 +22,7 @@ def record_result(repository, kernel, kernelsu, source):
     return record(repository, kernel, kernelsu, source)
 
 
-def promote(repository, branch, source, kernel, kernelsu, run_url):
+def promote(repository, branch, source, kernel, kernelsu, run_url, record_state=True):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Invalid repository')
     if not re.fullmatch(r'upstream/android17-6\.18-[0-9a-f]{12}-[0-9a-f]{12}', branch):
@@ -40,6 +40,16 @@ def promote(repository, branch, source, kernel, kernelsu, run_url):
     checks = [entry for entry in status if entry['context'] == 'Konoha / GKI and modules']
     if not checks or checks[0]['state'] != 'success' or checks[0]['target_url'] != run_url:
         raise ValueError('Source commit lacks this build\'s successful verification status')
+    content = api(prefix + '/contents/port/sources.json?ref=' + source)
+    pins = json.loads(base64.b64decode(content['content']))
+    if pins['common']['revision'] != kernel:
+        raise ValueError('Built kernel does not match candidate source pins')
+    if not re.fullmatch(r'6\.18\.\d+', pins['common']['kernel']):
+        raise ValueError('Candidate is outside Linux 6.18')
+    base = api(prefix + '/git/ref/heads/' + TRACK['source_branch'])['object']['sha']
+    if base == source:
+        return {'status': 'Verified candidate already accepted; release can recover',
+                'source_revision': source, 'kernel': pins['common']['kernel'], 'promoted': True}
     owner = repository.split('/')[0]
     proposals = api(prefix + '/pulls?state=open&head=' + quote(owner + ':' + branch, safe='')
                     + '&base=' + quote(TRACK['source_branch'], safe=''))
@@ -48,14 +58,7 @@ def promote(repository, branch, source, kernel, kernelsu, run_url):
     proposal = proposals[0]
     if proposal['head']['sha'] != source:
         return {'status': 'Candidate changed after build; a new build is required'}
-    content = api(prefix + '/contents/port/sources.json?ref=' + source)
-    pins = json.loads(base64.b64decode(content['content']))
-    if pins['common']['revision'] != kernel:
-        raise ValueError('Built kernel does not match candidate source pins')
-    if not re.fullmatch(r'6\.18\.\d+', pins['common']['kernel']):
-        raise ValueError('Candidate is outside Linux 6.18')
     target = 'refs/heads/' + TRACK['source_branch']
-    base = api(prefix + '/git/ref/heads/' + TRACK['source_branch'])['object']['sha']
     comparison = api(prefix + '/compare/' + base + '...' + source)
     if comparison['status'] != 'ahead':
         return {'status': 'Source branch changed after candidate replay; a new candidate is required'}
@@ -71,11 +74,12 @@ def promote(repository, branch, source, kernel, kernelsu, run_url):
         if current != base:
             return {'status': 'Source advanced during promotion; preserving its changes'}
         raise RuntimeError(result.stderr)
-    state = record_result(repository, kernel, kernelsu, source)
+    # Release publication records state only after all release assets exist.
+    state = record_result(repository, kernel, kernelsu, source) if record_state else None
     updated = api(prefix + '/pulls/' + str(proposal['number']))
     return {'status': ('Verified source fast-forwarded; update PR merged' if updated.get('merged')
                        else 'Verified source fast-forwarded; update PR closure pending'),
-            'source_revision': source, 'kernel': pins['common']['kernel'],
+            'source_revision': source, 'kernel': pins['common']['kernel'], 'promoted': True,
             'url': proposal['html_url'], 'build_state': state}
 
 
@@ -86,6 +90,11 @@ if __name__ == '__main__':
     p.add_argument('kernel')
     p.add_argument('kernelsu')
     p.add_argument('run_url')
+    p.add_argument('--no-record', action='store_true', help='record inputs only after release publication')
     a = p.parse_args()
-    print(json.dumps(promote(os.environ['GITHUB_REPOSITORY'], a.branch, a.source,
-                             a.kernel, a.kernelsu, a.run_url), indent=2))
+    result = promote(os.environ['GITHUB_REPOSITORY'], a.branch, a.source,
+                     a.kernel, a.kernelsu, a.run_url, record_state=not a.no_record)
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+            stream.write('promoted=' + str(result.get('promoted', False)).lower() + '\n')
+    print(json.dumps(result, indent=2))

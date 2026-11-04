@@ -13,9 +13,13 @@ import tempfile
 TRACK = json.loads((Path(__file__).resolve().parent / 'upstream.json').read_text())
 
 
-def record(repository, kernel, kernelsu, source=None):
+def record(repository, kernel, kernelsu, source=None, release_tag=None):
     if not all(re.fullmatch('[0-9a-f]{40}', value) for value in (kernel, kernelsu)):
         raise ValueError('Successful build must have exact source revisions')
+    if release_tag is not None and (
+            not re.fullmatch(r'gki-6\.18\.\d+-s[0-9a-f]{12}-k[0-9a-f]{12}', release_tag)
+            or source is None or not release_tag.endswith('-s' + source[:12] + '-k' + kernelsu[:12])):
+        raise ValueError('Published release tag differs from the successful input revisions')
     # Newer automation may land during a long build. Never overwrite its state
     # with the successful result of an older recipe/workflow checkout.
     expected = os.environ.get('GITHUB_SHA')
@@ -36,8 +40,10 @@ def record(repository, kernel, kernelsu, source=None):
     if previous.returncode and '404' not in previous.stderr:
         raise RuntimeError(previous.stderr)
     metadata = json.loads(previous.stdout) if previous.returncode == 0 else {}
-    state = json.dumps({'common_revision': kernel, 'kernelsu_revision': kernelsu,
-                        'source_revision': source}, indent=2) + '\n'
+    values = {'common_revision': kernel, 'kernelsu_revision': kernelsu, 'source_revision': source}
+    if release_tag is not None:
+        values['release_tag'] = release_tag
+    state = json.dumps(values, indent=2) + '\n'
     if metadata and base64.b64decode(metadata['content']).decode() == state:
         return
     payload = {'message': 'Record successful kernel and KernelSU dev build [skip ci]',
@@ -56,5 +62,6 @@ if __name__ == '__main__':
     p.add_argument('kernel')
     p.add_argument('kernelsu')
     p.add_argument('source')
+    p.add_argument('--release-tag')
     a = p.parse_args()
-    record(os.environ['GITHUB_REPOSITORY'], a.kernel, a.kernelsu, a.source)
+    record(os.environ['GITHUB_REPOSITORY'], a.kernel, a.kernelsu, a.source, a.release_tag)

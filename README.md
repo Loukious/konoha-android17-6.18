@@ -44,7 +44,7 @@ On the source branch:
   complete device-tree corrections, module options and expected output set.
 
 On the CI branch, `ci/` and `.github/workflows/` provide upstream detection,
-patch replay, hosted builds, artifact checks and source-update pull requests.
+patch replay, hosted builds, artifact checks, automatic source promotion and releases.
 
 The stable 6.6 repository and development logs are maintained separately.
 Vendor sources keep their original copyright and license notices; see COPYING.
@@ -65,9 +65,14 @@ tested source commit, merging the update PR. A concurrent change to the source
 branch stops promotion until a new candidate has been rebuilt. The source
 branch remains pinned and reproducible. A KernelSU-only update rebuilds the
 accepted kernel without changing its GKI source. Successful accepted-source
-builds record their exact revisions, so unchanged upstream inputs do not
-cause daily rebuilds. The daily tracker also rebuilds manual source-branch
-changes. Candidate source edits can be tested through the manual workflow.
+builds publish their verified artifacts before recording their exact revisions,
+so unchanged released inputs do not cause daily rebuilds. The daily tracker also
+rebuilds manual source-branch changes, checking out the exact detected commit.
+Active and successful builds for the same detected inputs are deduplicated.
+Failed or cancelled builds can retry up to three times; further automatic attempts
+require changed inputs. Manual workflow runs remain available for source repairs.
+KernelSU is fetched from dev at build time; the release records the revision
+actually built if dev advances between detection and compilation.
 
 Builds use standard `ubuntu-24.04` GitHub-hosted runners, adapted from
 `Loukious/konoha-kernel-gki`'s workflow: build dependencies, swap, artifact and
@@ -78,19 +83,40 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
-Every build includes GKI, all 318 modules, both supported device-tree variants,
+Every build includes GKI, every module in `port/modules.json`, both supported device-tree variants,
 KernelSU dev's exact source archive, classic/extended symbol CRC verification,
 input hashes and logs. Download `konoha-gki-and-modules.tar.gz`, `kernel-abi/`
-and `SHA256SUMS` from the build's artifacts. These are build outputs, not a
+and `SHA256SUMS` from the build's artifacts or its GitHub release. These are build outputs, not a
 universal flashable ZIP: matched boot/DLKM images depend on the ROM's ramdisks,
-module load lists, filesystem labels and partition layout. CI does not flash
-devices or automatically publish a tested release.
+module load lists, filesystem labels and partition layout. CI does not flash devices.
+
+Successful ordinary builds of accepted source automatically create a GitHub
+release. A successful upstream candidate is first fast-forwarded to the exact
+tested commit, then released; promotion does not wait for a manual PR merge.
+The release job independently rechecks the downloaded archive, complete named
+module inventory, hashes, matching ABI/vermagic, KernelSU configuration/source,
+both device trees and exact source/GKI/KernelSU revisions. Failed builds, changed
+source heads and diagnostic or other manual candidate refs are excluded.
+
+Tags have the form `gki-6.18.N-s<SOURCE12>-k<KSU12>` and point to the built
+source commit. All assets upload to a draft first; CI verifies the uploaded
+inventory, sizes and available server SHA256 digests before publishing. Upload
+failure leaves an unpublished draft that a subsequent successful build can
+recover. Existing complete releases are preserved. `release.json` binds the
+assets to the exact build run and attempt. These automatic releases establish
+build verification; hardware validation remains a separate step.
+
+The tracker also detects older build state without a published-release tag and
+dispatches one migration build. Accepted input state is written only after the
+release is published or an existing complete release is confirmed.
 
 ## Manual workflow
 
 Select **Build Android 17 6.18 GKI and Onyx modules** on the `ci` branch.
 `source_ref` defaults to `android17-6.18`; select an update branch, tag or
 complete commit to build a candidate. The `diagnostic` option adds QDSS logging.
+Leave `source_revision` and `kernelsu_revision` blank for manual builds; the
+tracker supplies them to identify exact detected inputs and suppress duplicates.
 
 ## Local build
 

@@ -1,46 +1,57 @@
 #!/usr/bin/env python3
-"""Export a verified build, complete modules and matching ABI for Actions."""
+"""Export a verified build and bind its release bundle to exact input revisions."""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import subprocess
 import tarfile
 
-p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('workspace', type=Path)
-p.add_argument('output', type=Path)
-a = p.parse_args()
-builds = sorted(d for d in (a.workspace / 'artifacts').iterdir() if (d / 'report.json').is_file())
-artifact = builds[-1]
-report = json.loads((artifact / 'report.json').read_text())
-source_root = Path(os.environ.get('KONOHA_SOURCE_ROOT', Path(__file__).resolve().parents[1]))
-expected = json.loads((source_root / 'port/modules.json').read_text())
-if len(report['module_verification']) != len(expected):
-    raise ValueError('Incomplete module build')
-for name, digest in report['sha256'].items():
-    if hashlib.sha256((artifact / name).read_bytes()).hexdigest() != digest:
-        raise ValueError(f'Build artifact changed: {name}')
-a.output.mkdir(parents=True, exist_ok=False)
-for name in ['report.json', 'build.log']:
-    shutil.copyfile(artifact / name, a.output / name)
-with tarfile.open(a.output / 'konoha-gki-and-modules.tar.gz', 'w:gz') as tar:
-    tar.add(artifact, arcname=artifact.name)
-abi = a.output / 'kernel-abi'
-abi.mkdir()
-for name in ['kernel_aarch64_Module.symvers', 'kernel.release', 'kernel_aarch64_dot_config']:
-    source = artifact / 'gki' / name
-    if not source.is_file():
-        raise ValueError(f'Missing ABI artifact: {name}')
-    shutil.copyfile(source, abi / ('Module.symvers' if name.endswith('_Module.symvers') else name))
-manifest = {p.relative_to(a.output).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(a.output.rglob('*')) if p.is_file()}
-(a.output / 'SHA256SUMS').write_text(''.join(f'{digest}  {name}\n' for name, digest in manifest.items()))
-if os.environ.get('GITHUB_OUTPUT'):
-    pins = json.loads((artifact / 'inputs/sources.json').read_text())
-    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-        f.write('kernel_revision=' + pins['common']['revision'] + '\n')
-        f.write('kernelsu_revision=' + report['kernelsu_next']['revision'] + '\n')
-print(json.dumps({'kernel_release': report['kernel_release'], 'modules': len(expected),
-                  'kernelsu_dev': report['kernelsu_next']['revision']}, indent=2))
+from verify_artifacts import digest, verify
+
+
+def export(workspace, output, source_root, source_revision, run_id, run_attempt):
+    if not re.fullmatch('[0-9a-f]{40}', source_revision):
+        raise ValueError('Export requires an exact source commit')
+    builds = sorted(d for d in (workspace / 'artifacts').iterdir() if (d / 'report.json').is_file())
+    if len(builds) != 1:
+        raise ValueError('Expected one complete build in a fresh CI workspace')
+    artifact = builds[0]
+    report, pins, count = verify(artifact, source_root)
+    output.mkdir(parents=True, exist_ok=False)
+    for name in ('report.json', 'build.log'):
+        shutil.copyfile(artifact / name, output / name)
+    with tarfile.open(output / 'konoha-gki-and-modules.tar.gz', 'w:gz') as tar:
+        tar.add(artifact, arcname=artifact.name)
+    abi = output / 'kernel-abi'
+    abi.mkdir()
+    for name in ('kernel_aarch64_Module.symvers', 'kernel.release', 'kernel_aarch64_dot_config'):
+        shutil.copyfile(artifact / 'gki' / name, abi / ('Module.symvers' if name.endswith('_Module.symvers') else name))
+    identity = {
+        'source_revision': source_revision, 'common_revision': pins['common']['revision'],
+        'kernelsu_revision': report['kernelsu_next']['revision'], 'kernel_release': report['kernel_release'],
+        'modules': count, 'run_id': str(run_id), 'run_attempt': str(run_attempt),
+        'artifact_root': artifact.name,
+        'sha256': {p.relative_to(output).as_posix(): digest(p) for p in sorted(output.rglob('*')) if p.is_file()},
+    }
+    (output / 'release.json').write_text(json.dumps(identity, indent=2) + '\n')
+    manifest = {p.relative_to(output).as_posix(): digest(p) for p in sorted(output.rglob('*')) if p.is_file()}
+    (output / 'SHA256SUMS').write_text(''.join(f'{checksum}  {name}\n' for name, checksum in manifest.items()))
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            for key in ('kernel_revision', 'kernelsu_revision'):
+                f.write(key + '=' + identity['common_revision' if key == 'kernel_revision' else key] + '\n')
+    return identity
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('workspace', type=Path)
+    parser.add_argument('output', type=Path)
+    args = parser.parse_args()
+    source = Path(os.environ.get('KONOHA_SOURCE_ROOT', Path(__file__).resolve().parents[1]))
+    revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+    print(json.dumps(export(args.workspace, args.output, source, revision,
+                            os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']), indent=2))

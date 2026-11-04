@@ -32,3 +32,31 @@ The accepted 6.18.33 baseline passed local GKI/module/DT builds and bounded
 device startup and camera tests. Its camera/SYNX patches classify expected
 notifications and polls; they do not repair the unresolved synchronization issue.
 Hosted execution and each newer LTS build are validated separately in Actions.
+
+## Automatic release validation — 2026-11-04
+
+The updated automation passes 58 host tests, actionlint 1.7.12, Python compilation,
+Bash syntax and Git whitespace checks. Actual temporary Git repositories exercise
+GKI updates, KernelSU dev updates, accepted-source edits, unchanged refs, missing
+release state and failed remote lookup; detection never changes accepted state.
+Candidate and accepted-source dispatch tests cover duplicate suppression and a
+three-attempt limit for failed or cancelled builds.
+
+Export/release tests exercise complete archive round trips and reject same-count
+wrong module sets, duplicates, missing hashes, changed binaries, wrong vermagic,
+missing import verification, mismatched pins/ABI/run identities, unsafe archive
+paths, failed device-tree verification and diagnostic builds. GitHub API/command
+fixtures verify draft creation, exact commit targets, successful full uploads,
+publication only after inventory/hash checks, existing-release preservation,
+failed-build/stale-source rejection and incomplete/failed-upload recovery.
+An already-promoted candidate can recover publication without another source push.
+
+The new inventory verifier also passed against the actual frozen accepted
+6.18.38 artifact with all 391 platform modules, both DT variants and KernelSU
+Next revision `a6c81fa4a8b7341d0bc5c3e4507531459df871ae`. This is a read-only
+artifact check; no source, firmware, phone or GitHub release was changed locally.
+
+Existing hosted build 41636617465 completed its full build and upload successfully,
+and tracker 41831501184 correctly skipped unchanged upstream inputs. Those runs
+predate release publication. The new release path still requires its first hosted
+end-to-end build after the CI commit is pushed.

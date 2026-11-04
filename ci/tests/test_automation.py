@@ -4,12 +4,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'ci'))
 
 
 def module(name):
@@ -249,10 +251,16 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(any(args[:3] == ['gh', 'pr', 'create'] for args in calls))
         self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
-    def test_existing_build_is_not_repeated_daily(self):
+    def test_failed_candidate_build_can_retry(self):
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
                                       [{'displayTitle': 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12,
                                         'status': 'completed', 'conclusion': 'failure', 'url': 'build'}])
+        self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
+
+    def test_three_failed_candidate_builds_require_repair(self):
+        build = {'displayTitle': 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12,
+                 'status': 'completed', 'conclusion': 'failure', 'url': 'build'}
+        result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}], [build] * 3)
         self.assertFalse(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
     def test_closed_candidate_is_not_reopened(self):
@@ -394,6 +402,13 @@ class PromotionTests(unittest.TestCase):
         result, commands, records = self.exercise(lambda r: r['comparison'].update(status='diverged'))
         self.assertIn('new candidate', result['status'])
         self.assertEqual(commands, [])
+
+    def test_already_promoted_candidate_can_recover_release_after_upload_failure(self):
+        result, commands, records = self.exercise(lambda r: r['base']['object'].update(sha='a' * 40))
+        self.assertTrue(result['promoted'])
+        self.assertIn('already accepted', result['status'])
+        self.assertEqual(commands, [])
+        self.assertEqual(records, [])
 
     def test_base_race_does_not_record_unpromoted_build(self):
         result, commands, records = self.exercise(push_failed=True)

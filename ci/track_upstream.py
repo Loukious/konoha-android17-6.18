@@ -41,6 +41,7 @@ def detect():
               'kernel_changed': latest != current,
               'source_revision': source_revision,
               'source_changed': source_revision != last.get('source_revision'),
+              'release_needed': not last.get('release_tag'),
               'kernelsu_changed': ksu != last.get('kernelsu_revision') or current != last.get('common_revision')}
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
