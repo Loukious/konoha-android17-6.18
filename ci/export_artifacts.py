@@ -33,6 +33,7 @@ def export(workspace, output, source_root, source_revision, run_id, run_attempt)
         'source_revision': source_revision, 'common_revision': pins['common']['revision'],
         'kernelsu_revision': report['kernelsu_next']['revision'], 'kernel_release': report['kernel_release'],
         'modules': count, 'run_id': str(run_id), 'run_attempt': str(run_attempt),
+        'artifact_name': f'Konoha-Android17-6.18-{run_id}-{run_attempt}',
         'artifact_root': artifact.name,
         'sha256': {p.relative_to(output).as_posix(): digest(p) for p in sorted(output.rglob('*')) if p.is_file()},
     }
@@ -43,6 +44,8 @@ def export(workspace, output, source_root, source_revision, run_id, run_attempt)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             for key in ('kernel_revision', 'kernelsu_revision'):
                 f.write(key + '=' + identity['common_revision' if key == 'kernel_revision' else key] + '\n')
+            f.write('artifact_name=' + identity['artifact_name'] + '\n')
+            f.write('build_attempt=' + identity['run_attempt'] + '\n')
     return identity
 
 

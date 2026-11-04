@@ -22,7 +22,7 @@ def record_result(repository, kernel, kernelsu, source):
     return record(repository, kernel, kernelsu, source)
 
 
-def promote(repository, branch, source, kernel, kernelsu, run_url, record_state=True):
+def promote(repository, branch, source, kernel, kernelsu, run_url, record_state=True, build_attempt=None):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Invalid repository')
     if not re.fullmatch(r'upstream/android17-6\.18-[0-9a-f]{12}-[0-9a-f]{12}', branch):
@@ -33,7 +33,10 @@ def promote(repository, branch, source, kernel, kernelsu, run_url, record_state=
     if not match:
         raise ValueError('Build URL must identify this repository')
     prefix = 'repos/' + repository
-    jobs = api(prefix + '/actions/runs/' + match[1] + '/jobs')['jobs']
+    if build_attempt is not None and not str(build_attempt).isdigit():
+        raise ValueError('Invalid verified build attempt')
+    attempt_path = '/attempts/' + str(build_attempt) if build_attempt is not None else ''
+    jobs = api(prefix + '/actions/runs/' + match[1] + attempt_path + '/jobs')['jobs']
     if not any(job['name'] == 'build' and job['conclusion'] == 'success' for job in jobs):
         raise ValueError('Full build job has not succeeded')
     status = api(prefix + '/commits/' + source + '/status')['statuses']
@@ -91,9 +94,12 @@ if __name__ == '__main__':
     p.add_argument('kernelsu')
     p.add_argument('run_url')
     p.add_argument('--no-record', action='store_true', help='record inputs only after release publication')
+    p.add_argument('--build-attempt', default=os.environ.get('BUILD_RUN_ATTEMPT'),
+                   help='original verified build attempt, including release-only reruns')
     a = p.parse_args()
     result = promote(os.environ['GITHUB_REPOSITORY'], a.branch, a.source,
-                     a.kernel, a.kernelsu, a.run_url, record_state=not a.no_record)
+                     a.kernel, a.kernelsu, a.run_url, record_state=not a.no_record,
+                     build_attempt=a.build_attempt)
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
             stream.write('promoted=' + str(result.get('promoted', False)).lower() + '\n')

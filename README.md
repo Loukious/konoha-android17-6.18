@@ -4,15 +4,15 @@ This repository contains the complete POCO F7 (Onyx/SM8735) module port and a
 reproducible GKI build recipe. It tracks Google's `android17-6.18-lts` branch
 and fetches the official **KernelSU Next `dev` branch on every build**.
 
-The initial accepted source is Linux **6.18.33**, with **318 platform modules**
-and **179 port patches**, imported from the working Konoha 6.18 development
-workspace. It includes the Bluetooth power-ownership corrections, the measured
-Onyx PMIC inventory overlay, and the July CoreSight platform-removal correction.
-It also includes WLAN sensor/cooling ownership fixes and the narrowly scoped
-camera/SYNX logging corrections. This 6.18.33 baseline is installed and passed
-startup checks, front/rear photos and short 1080p recordings. Camera synchronization
-recovery itself is unchanged; separate SOF-skip diagnostics remain. New
-LTS/KernelSU builds require device validation.
+The current accepted port uses Linux **6.18.38**, with **391 platform modules**
+and **5,042 materialized module/build files**, imported from the working Konoha
+6.18 development workspace. The matched package on the current phone contains
+**471 total modules**, including ROM/GKI modules outside the platform catalog.
+Startup and bounded functional checks were performed on this Onyx phone.
+Both Tuna device-tree variants are checked offline; other phones, SoCs and
+motherboard revisions are not established as compatible. China-only notification
+LED support is outside this port's active scope. New LTS/KernelSU builds require
+their own device validation.
 
 ## Branch layout
 
@@ -31,7 +31,7 @@ On the source branch:
 - `common/` contains the complete pinned upstream GKI with the required common
   fixes applied. CI independently recreates and verifies every source file,
   executable bit and symlink before building.
-- `modules/` contains all 4,862 materialized, modified source/build files used
+- `modules/` contains all 5,042 materialized, modified source/build files used
   by the module port, including WLAN, IPA, Bluetooth, graphics, audio, camera,
   charging, PMIC/SPMI, clocks, USB and the remaining device driver groups.
 - `port/imports.json` records the exact original repositories, commits and Git
@@ -95,7 +95,7 @@ release. A successful upstream candidate is first fast-forwarded to the exact
 tested commit, then released; promotion does not wait for a manual PR merge.
 The release job independently rechecks the downloaded archive, complete named
 module inventory, hashes, matching ABI/vermagic, KernelSU configuration/source,
-both device trees and exact source/GKI/KernelSU revisions. Failed builds, changed
+  both device trees and exact source/GKI/KernelSU revisions. Failed builds, changed
 source heads and diagnostic or other manual candidate refs are excluded.
 
 Tags have the form `gki-6.18.N-s<SOURCE12>-k<KSU12>` and point to the built
@@ -103,7 +103,12 @@ source commit. All assets upload to a draft first; CI verifies the uploaded
 inventory, sizes and available server SHA256 digests before publishing. Upload
 failure leaves an unpublished draft that a subsequent successful build can
 recover. Existing complete releases are preserved. `release.json` binds the
-assets to the exact build run and attempt. These automatic releases establish
+assets to the exact build run and attempt. Artifact names include the build
+attempt, so a complete rerun can upload fresh outputs and a release-only rerun
+reuses the original successful build's artifact and verification. Promotion and
+release share one serial job group; the accepted head is checked again immediately
+before publication, preventing an older upload from becoming Latest afterward.
+These automatic releases establish
 build verification; hardware validation remains a separate step.
 
 The tracker also detects older build state without a published-release tag and

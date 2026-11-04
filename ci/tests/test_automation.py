@@ -330,6 +330,16 @@ class CommonSourceTests(unittest.TestCase):
 
 
 class PromotionTests(unittest.TestCase):
+    def test_release_only_rerun_checks_original_successful_build_attempt(self):
+        promoter = module('promote_update')
+        branch = 'upstream/android17-6.18-' + 'e' * 12 + '-' + 'f' * 12
+        with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2', 'BUILD_RUN_ATTEMPT': '1'}), \
+                patch.object(promoter, 'api', return_value={'jobs': []}) as api:
+            with self.assertRaisesRegex(ValueError, 'not succeeded'):
+                promoter.promote('owner/repo', branch, 'a' * 40, 'b' * 40, 'c' * 40,
+                                 'https://github.com/owner/repo/actions/runs/123', build_attempt='1')
+        api.assert_called_once_with('repos/owner/repo/actions/runs/123/attempts/1/jobs')
+
     def exercise(self, change=None, push_failed=False):
         promoter = module('promote_update')
         source, kernel, ksu, base = 'a' * 40, 'b' * 40, 'c' * 40, 'd' * 40

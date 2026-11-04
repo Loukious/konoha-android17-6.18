@@ -34,7 +34,8 @@ def api(path, optional=False):
 def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attempt):
     identity = json.loads((bundle / 'release.json').read_text())
     expected = {'source_revision': source, 'common_revision': kernel, 'kernelsu_revision': kernelsu,
-                'run_id': str(run_id), 'run_attempt': str(attempt)}
+                'run_id': str(run_id), 'run_attempt': str(attempt),
+                'artifact_name': f'Konoha-Android17-6.18-{run_id}-{attempt}'}
     if any(identity.get(key) != value for key, value in expected.items()):
         raise ValueError('Release bundle belongs to different build inputs or run')
     actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob('*') if p.is_file()}
@@ -140,12 +141,17 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
             local = next(path for path in assets if path.name == asset['name'])
             if asset['size'] != local.stat().st_size or asset.get('digest') not in (None, 'sha256:' + digest(local)):
                 raise ValueError('Uploaded release asset differs: ' + asset['name'])
+        # A source push may land during a long upload. Publishing an older
+        # draft as Latest must not supersede a newer accepted-source release.
+        accepted = api(prefix + '/git/ref/heads/' + TRACK['source_branch'])['object']['sha']
+        if accepted != source:
+            raise ValueError('Source branch advanced during upload; leaving the release unpublished')
         run(['gh', 'release', 'edit', tag, '--repo', repository, '--draft=false', '--latest', '--notes-file', str(path)])
     return {'status': 'verified build released', 'tag': tag,
             'url': f'https://github.com/{repository}/releases/tag/{tag}'}
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bundle', type=Path)
     parser.add_argument('source')
@@ -154,8 +160,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     result = publish(os.environ['GITHUB_REPOSITORY'], args.bundle,
                      Path(os.environ['KONOHA_SOURCE_ROOT']), args.source, args.kernel, args.kernelsu,
-                     os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'])
+                     os.environ['GITHUB_RUN_ID'], os.environ['BUILD_RUN_ATTEMPT'])
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
             stream.write('release_tag=' + result['tag'] + '\n')
     print(json.dumps(result, indent=2))
+
+
+if __name__ == '__main__':
+    main()

@@ -35,7 +35,7 @@ Hosted execution and each newer LTS build are validated separately in Actions.
 
 ## Automatic release validation — 2026-11-04
 
-The updated automation passes 58 host tests, actionlint 1.7.12, Python compilation,
+The updated automation passes 64 host tests, actionlint 1.7.12, Python compilation,
 Bash syntax and Git whitespace checks. Actual temporary Git repositories exercise
 GKI updates, KernelSU dev updates, accepted-source edits, unchanged refs, missing
 release state and failed remote lookup; detection never changes accepted state.
@@ -50,6 +50,10 @@ fixtures verify draft creation, exact commit targets, successful full uploads,
 publication only after inventory/hash checks, existing-release preservation,
 failed-build/stale-source rejection and incomplete/failed-upload recovery.
 An already-promoted candidate can recover publication without another source push.
+Regression cases additionally cover a head advance during upload, publication
+rejection before Latest can change, the shared serial promotion/release group,
+attempt-specific upload names, and release-only reruns that reuse and verify the
+original successful build attempt rather than the current release-job attempt.
 
 The new inventory verifier also passed against the actual frozen accepted
 6.18.38 artifact with all 391 platform modules, both DT variants and KernelSU

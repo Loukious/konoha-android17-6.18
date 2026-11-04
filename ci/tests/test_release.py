@@ -87,6 +87,20 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(identity['modules'], 2)
         self.assertEqual(identity['source_revision'], SOURCE)
 
+    def test_full_rerun_produces_distinct_artifact_name_and_attempt_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, workspace, artifact, report = fixture(root)
+            outputs = root / 'outputs'
+            with patch.dict(os.environ, {'GITHUB_OUTPUT': str(outputs)}):
+                first = export_artifacts.export(workspace, root / 'bundle1', source, SOURCE, '123', '1')
+                second = export_artifacts.export(workspace, root / 'bundle2', source, SOURCE, '123', '2')
+            self.assertNotEqual(first['artifact_name'], second['artifact_name'])
+            self.assertIn('artifact_name=Konoha-Android17-6.18-123-1', outputs.read_text())
+            self.assertIn('artifact_name=Konoha-Android17-6.18-123-2', outputs.read_text())
+            self.assertIn('build_attempt=1', outputs.read_text())
+            self.assertIn('build_attempt=2', outputs.read_text())
+
     def test_same_count_wrong_module_set_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'inventory'):
             self.exercise(lambda s, a, r: r['module_verification'][1].update(module='wrong.ko'))
@@ -164,7 +178,8 @@ class ArtifactTests(unittest.TestCase):
 
 
 class ReleaseTests(unittest.TestCase):
-    def exercise(self, failed_build=False, stale_source=False, upload_failure=False, incomplete=False, existing=False):
+    def exercise(self, failed_build=False, stale_source=False, upload_failure=False, incomplete=False, existing=False,
+                 advance_during_upload=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, workspace, artifact, report = fixture(root)
@@ -174,13 +189,17 @@ class ReleaseTests(unittest.TestCase):
             assets = [{'name': p.name, 'size': p.stat().st_size,
                        'digest': 'sha256:' + verify_artifacts.digest(p)} for p in paths]
             commands = []
+            head_reads = 0
             def api(path, optional=False):
+                nonlocal head_reads
                 if path.endswith('/attempts/1'):
                     return {'head_branch': 'ci', 'path': '.github/workflows/build.yml'}
                 if path.endswith('/jobs'):
                     return {'jobs': [{'name': 'build', 'conclusion': 'failure' if failed_build else 'success'}]}
                 if '/git/ref/heads/' in path:
-                    return {'object': {'sha': 'd' * 40 if stale_source else SOURCE}}
+                    head_reads += 1
+                    changed = stale_source or (advance_during_upload and head_reads > 1)
+                    return {'object': {'sha': 'd' * 40 if changed else SOURCE}}
                 if '/releases/tags/' in path:
                     if optional and not existing:
                         return None
@@ -218,6 +237,28 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('not promoted', result['error'])
         self.assertEqual(commands, [])
 
+    def test_head_advance_during_upload_cannot_publish_an_older_latest_release(self):
+        result, commands = self.exercise(advance_during_upload=True)
+        self.assertIn('advanced during upload', result['error'])
+        self.assertEqual([args[2] for args in commands], ['create', 'upload'])
+        self.assertFalse(any('--latest' in args for args in commands))
+
+    def test_release_only_rerun_uses_original_verified_build_attempt(self):
+        environment = {'GITHUB_REPOSITORY': 'owner/repo', 'KONOHA_SOURCE_ROOT': '/fixture/source',
+                       'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'BUILD_RUN_ATTEMPT': '1'}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(sys, 'argv', ['publish_release.py', 'bundle', SOURCE, KERNEL, KSU]), \
+                patch.object(publish_release, 'publish', return_value={'tag': 'verified-tag'}) as publish, \
+                patch('builtins.print'):
+            publish_release.main()
+        self.assertEqual(publish.call_args.args[-2:], ('123', '1'))
+
+    def test_attempt_one_bundle_releases_while_current_run_attempt_is_two(self):
+        with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2', 'BUILD_RUN_ATTEMPT': '1'}):
+            result, commands = self.exercise()
+        self.assertEqual(result['status'], 'verified build released')
+        self.assertIn('--draft=false', commands[-1])
+
     def test_upload_failure_does_not_publish_draft(self):
         result, commands = self.exercise(upload_failure=True)
         self.assertIn('error', result)
@@ -250,6 +291,17 @@ class DispatchTests(unittest.TestCase):
             dispatch_build.dispatch(SOURCE, KSU)
         self.assertIn('source_revision=' + SOURCE, run.call_args.args[0])
         self.assertIn('kernelsu_revision=' + KSU, run.call_args.args[0])
+
+
+class WorkflowWiringTests(unittest.TestCase):
+    def test_release_and_promotion_share_one_serial_job_and_bound_artifact_outputs(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/build.yml').read_text()
+        release_job = workflow.split('\n  release:\n', 1)[1]
+        self.assertIn('concurrency:\n      group: release-android17-6.18\n      cancel-in-progress: false', release_job)
+        self.assertIn('BUILD_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}', release_job)
+        self.assertIn('name: ${{ needs.build.outputs.artifact_name }}', release_job)
+        self.assertIn('name: ${{ steps.export.outputs.artifact_name }}', workflow)
+        self.assertIn('build_attempt: ${{ steps.export.outputs.build_attempt }}', workflow)
 
 
 class RealGitDetectionTests(unittest.TestCase):
