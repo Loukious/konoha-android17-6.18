@@ -45,3 +45,12 @@ At 13:53 UTC, v10 captured the actual kernel fault: NULL-pointer dereference at 
 WLAN fix installed at 14:03 UTC: all six partition hashes and kernel plus nine module identities match. WLAN build ID 6156508deb8c7a7c2ca5a780a8494dc936933d56. Boot f2e3caf9-2423-4d93-801e-1f0927f1b27e remained unchanged through both AP tests. Active SoftApManager StartedState is verified independently of history/graveyard. Wi-Fi-off AP reports non-DFS 2462 MHz; connected-STA AP reports 5260 MHz. No kernel NULL/oops/panic in the retained log. The shell AP command does not establish internet forwarding; user Settings test pending. See wlan-wiphy-lock-install-validation.json and wlan-wiphy-lock-ap-runtime-validation.json.
 
 User confirms hotspot stays on through the normal Settings toggle. Follow-up logs retain the same boot ID with SELinux enforcing, and no NULL fault or panic. The captured hotspot-startup reboot is resolved; attached-client internet forwarding and longer endurance are separate checks.
+
+
+A historical controlled mode 0 STA 5260 MHz / SAP 2462 MHz test with native
+Android tethering passed attached-client internet checks. The user selected the
+ROM-side INI fix, saved as patch 0017, for a future ROM build. That ROM patch is
+not installed; the temporary override has been removed and remains unapplied.
+See the [current public runtime summary](../onyx-runtime-summary-20261104.md)
+and [channel-policy notes](../../port/wlan-concurrent-channels.md). Raw runtime
+receipts remain local.

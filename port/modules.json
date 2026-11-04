@@ -1491,5 +1491,77 @@
   {
     "target": "qcom_cpuss_sleep_stats",
     "output": "qcom_cpuss_sleep_stats.ko"
+  },
+  {
+    "target": "qcom_lpm",
+    "output": "qcom_lpm.ko"
+  },
+  {
+    "target": "mem_hooks",
+    "output": "mem-hooks.ko"
+  },
+  {
+    "target": "gh_rm_booster",
+    "output": "gh_rm_booster.ko"
+  },
+  {
+    "target": "tmecom_intf",
+    "output": "tmecom-intf.ko"
+  },
+  {
+    "target": "gh_panic_notifier",
+    "output": "gh_panic_notifier.ko"
+  },
+  {
+    "target": "qcom_edac",
+    "output": "qcom_edac.ko"
+  },
+  {
+    "target": "qcom_cpufreq_hw_debug",
+    "output": "qcom-cpufreq-hw-debug.ko"
+  },
+  {
+    "target": "charger_ulog_glink",
+    "output": "charger-ulog-glink.ko"
+  },
+  {
+    "target": "sysmon_subsystem_stats",
+    "output": "sysmon_subsystem_stats.ko"
+  },
+  {
+    "target": "sys_pm_vx",
+    "output": "sys_pm_vx.ko"
+  },
+  {
+    "target": "qcom_i2c_pmic",
+    "output": "qcom-i2c-pmic.ko"
+  },
+  {
+    "target": "qti_battery_debug",
+    "output": "qti_battery_debug.ko"
+  },
+  {
+    "target": "hung_task_enh",
+    "output": "hung_task_enh.ko"
+  },
+  {
+    "target": "qcom_iommu_debug",
+    "output": "qcom_iommu_debug.ko"
+  },
+  {
+    "target": "hvc_gunyah",
+    "output": "hvc_gunyah.ko"
+  },
+  {
+    "target": "mtd",
+    "output": "mtd.ko"
+  },
+  {
+    "target": "block2mtd",
+    "output": "block2mtd.ko"
+  },
+  {
+    "target": "mtdoops",
+    "output": "mtdoops.ko"
   }
 ]

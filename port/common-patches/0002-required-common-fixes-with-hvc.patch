@@ -1,0 +1,1066 @@
+Subject: [PATCH v3 1/2] coresight: Fix clock refcount imbalance on platform remove
+
+Backport of Jie Gan's July 10 v3 series, patch 1/2:
+https://lists.openwall.net/linux-kernel/2026/07/10/62
+
+Resume platform devices before teardown to balance the devm-managed clock
+release. Disable runtime PM, set suspended and drop the remove usage vote.
+The companion TNOC platform-remove patch is inapplicable to 6.18's AMBA-only
+TNOC driver; its source is preserved separately as upstream evidence.
+
+Fixes: 1abc1b212eff ("coresight: Appropriately disable programming clocks")
+Signed-off-by: Jie Gan <jie.gan@oss.qualcomm.com>
+---
+diff --git a/drivers/hwtracing/coresight/coresight-catu.c b/drivers/hwtracing/coresight/coresight-catu.c
+index ad8dafea7d2f..b72fa7f4bdeb 100644
+--- a/drivers/hwtracing/coresight/coresight-catu.c
++++ b/drivers/hwtracing/coresight/coresight-catu.c
+@@ -646,8 +646,16 @@ static void catu_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	__catu_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_PM
+diff --git a/drivers/hwtracing/coresight/coresight-cpu-debug.c b/drivers/hwtracing/coresight/coresight-cpu-debug.c
+index 3a806c1d50ea..87b39874461e 100644
+--- a/drivers/hwtracing/coresight/coresight-cpu-debug.c
++++ b/drivers/hwtracing/coresight/coresight-cpu-debug.c
+@@ -710,8 +710,16 @@ static void debug_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	__debug_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_ACPI
+diff --git a/drivers/hwtracing/coresight/coresight-ctcu-core.c b/drivers/hwtracing/coresight/coresight-ctcu-core.c
+index 9043cad42f01..e0e33e3ca5bf 100644
+--- a/drivers/hwtracing/coresight/coresight-ctcu-core.c
++++ b/drivers/hwtracing/coresight/coresight-ctcu-core.c
+@@ -265,8 +265,16 @@ static void ctcu_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	ctcu_remove(pdev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_PM
+diff --git a/drivers/hwtracing/coresight/coresight-etm4x-core.c b/drivers/hwtracing/coresight/coresight-etm4x-core.c
+index 14bb31bd6a0b..dd5d26717f15 100644
+--- a/drivers/hwtracing/coresight/coresight-etm4x-core.c
++++ b/drivers/hwtracing/coresight/coresight-etm4x-core.c
+@@ -2414,9 +2414,18 @@ static void etm4_remove_platform_dev(struct platform_device *pdev)
+ {
+ 	struct etmv4_drvdata *drvdata = dev_get_drvdata(&pdev->dev);
+ 
+-	if (drvdata)
+-		etm4_remove_dev(drvdata);
++	if (WARN_ON(!drvdata))
++		return;
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
++	etm4_remove_dev(drvdata);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ static const struct amba_id etm4_ids[] = {
+diff --git a/drivers/hwtracing/coresight/coresight-funnel.c b/drivers/hwtracing/coresight/coresight-funnel.c
+index 0abc11f0690c..d69cd66e8394 100644
+--- a/drivers/hwtracing/coresight/coresight-funnel.c
++++ b/drivers/hwtracing/coresight/coresight-funnel.c
+@@ -333,8 +333,16 @@ static void funnel_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	funnel_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ static const struct of_device_id funnel_match[] = {
+diff --git a/drivers/hwtracing/coresight/coresight-replicator.c b/drivers/hwtracing/coresight/coresight-replicator.c
+index 2f382de357ee..1df01deb2f69 100644
+--- a/drivers/hwtracing/coresight/coresight-replicator.c
++++ b/drivers/hwtracing/coresight/coresight-replicator.c
+@@ -312,8 +312,16 @@ static void replicator_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	replicator_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_PM
+diff --git a/drivers/hwtracing/coresight/coresight-stm.c b/drivers/hwtracing/coresight/coresight-stm.c
+index 4e860519a73f..a75b1c56a867 100644
+--- a/drivers/hwtracing/coresight/coresight-stm.c
++++ b/drivers/hwtracing/coresight/coresight-stm.c
+@@ -1025,8 +1025,16 @@ static void stm_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	__stm_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_ACPI
+diff --git a/drivers/hwtracing/coresight/coresight-tmc-core.c b/drivers/hwtracing/coresight/coresight-tmc-core.c
+index bc5a133ada3e..ed40bfea32f9 100644
+--- a/drivers/hwtracing/coresight/coresight-tmc-core.c
++++ b/drivers/hwtracing/coresight/coresight-tmc-core.c
+@@ -988,8 +988,16 @@ static void tmc_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	__tmc_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_PM
+diff --git a/drivers/hwtracing/coresight/coresight-tpiu.c b/drivers/hwtracing/coresight/coresight-tpiu.c
+index 7b029d2eb389..775507d0bb36 100644
+--- a/drivers/hwtracing/coresight/coresight-tpiu.c
++++ b/drivers/hwtracing/coresight/coresight-tpiu.c
+@@ -285,8 +285,16 @@ static void tpiu_platform_remove(struct platform_device *pdev)
+ 	if (WARN_ON(!drvdata))
+ 		return;
+ 
++	/*
++	 * Resume the device so its clocks are enabled again, balancing the
++	 * clk_disable_unprepare() that devm runs when the driver detaches.
++	 * Then mark it suspended and drop the usage count taken here.
++	 */
++	pm_runtime_get_sync(&pdev->dev);
+ 	__tpiu_remove(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
++	pm_runtime_set_suspended(&pdev->dev);
++	pm_runtime_put_noidle(&pdev->dev);
+ }
+ 
+ #ifdef CONFIG_ACPI
+
+diff --git a/drivers/thermal/thermal_core.c b/drivers/thermal/thermal_core.c
+--- a/drivers/thermal/thermal_core.c
++++ b/drivers/thermal/thermal_core.c
+@@ -981,6 +981,29 @@
+ }
+ 
+ static struct class *thermal_class;
++
++/**
++ * thermal_device_register - register a vendor thermal policy interface
++ * @name: device name in the thermal class, excluding core-reserved prefixes
++ * @groups: NULL-terminated sysfs attribute groups
++ *
++ * The caller owns the returned device and must call device_unregister() after
++ * withdrawing its callbacks. This exposes no private class or kernfs layout.
++ * Return: a device pointer or an ERR_PTR() on failure.
++ */
++struct device *thermal_device_register(const char *name,
++			       const struct attribute_group **groups)
++{
++	if (!name || !name[0] || strchr(name, '/') ||
++	    !strncmp(name, "thermal_zone", strlen("thermal_zone")) ||
++	    !strncmp(name, "cooling_device", strlen("cooling_device")))
++		return ERR_PTR(-EINVAL);
++	if (!thermal_class)
++		return ERR_PTR(-EPROBE_DEFER);
++	return device_create_with_groups(thermal_class, NULL, 0, NULL, groups,
++					 "%s", name);
++}
++EXPORT_SYMBOL_GPL(thermal_device_register);
+ 
+ static inline
+ void print_bind_err_msg(struct thermal_zone_device *tz,
+diff --git a/include/linux/thermal.h b/include/linux/thermal.h
+--- a/include/linux/thermal.h
++++ b/include/linux/thermal.h
+@@ -272,6 +272,8 @@
+ void thermal_cooling_device_update(struct thermal_cooling_device *);
+ void thermal_cooling_device_unregister(struct thermal_cooling_device *);
+ struct thermal_zone_device *thermal_zone_get_zone_by_name(const char *name);
++struct device *thermal_device_register(const char *name,
++				       const struct attribute_group **groups);
+ int thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp);
+ int thermal_zone_get_slope(struct thermal_zone_device *tz);
+ int thermal_zone_get_offset(struct thermal_zone_device *tz);
+
+diff --git a/include/linux/coresight.h b/include/linux/coresight.h
+--- a/include/linux/coresight.h
++++ b/include/linux/coresight.h
+@@ -74,6 +74,9 @@
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_CATU,
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_ECT_CTI,
+ 	CORESIGHT_DEV_SUBTYPE_HELPER_CTCU,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_QMI,
++	CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_TGU,
+ };
+ 
+ /**
+
+diff --git a/drivers/hwtracing/coresight/coresight-core.c b/drivers/hwtracing/coresight/coresight-core.c
+index 3267192f0c1c..f0b4892a3c16 100644
+--- a/drivers/hwtracing/coresight/coresight-core.c
++++ b/drivers/hwtracing/coresight/coresight-core.c
+@@ -22,6 +22,7 @@
+ #include <linux/delay.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/panic_notifier.h>
++#include <linux/srcu.h>
+ 
+ #include "coresight-etm-perf.h"
+ #include "coresight-priv.h"
+@@ -53,20 +54,47 @@ struct coresight_node {
+ const u32 coresight_barrier_pkt[4] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
+ EXPORT_SYMBOL_GPL(coresight_barrier_pkt);
+ 
+-static const struct cti_assoc_op *cti_assoc_ops;
++DEFINE_STATIC_SRCU(cti_assoc_srcu);
++static const struct cti_assoc_op __rcu *cti_assoc_ops;
+ 
+ void coresight_set_cti_ops(const struct cti_assoc_op *cti_op)
+ {
+-	cti_assoc_ops = cti_op;
++	rcu_assign_pointer(cti_assoc_ops, cti_op);
+ }
+ EXPORT_SYMBOL_GPL(coresight_set_cti_ops);
+ 
+ void coresight_remove_cti_ops(void)
+ {
+-	cti_assoc_ops = NULL;
++	rcu_assign_pointer(cti_assoc_ops, NULL);
++	/* Callbacks may sleep while updating the graph. Drain them before unload. */
++	synchronize_srcu(&cti_assoc_srcu);
+ }
+ EXPORT_SYMBOL_GPL(coresight_remove_cti_ops);
+ 
++static void coresight_cti_add(struct coresight_device *csdev)
++{
++	const struct cti_assoc_op *ops;
++	int index;
++
++	index = srcu_read_lock(&cti_assoc_srcu);
++	ops = srcu_dereference(cti_assoc_ops, &cti_assoc_srcu);
++	if (ops && ops->add)
++		ops->add(csdev);
++	srcu_read_unlock(&cti_assoc_srcu, index);
++}
++
++static void coresight_cti_remove(struct coresight_device *csdev)
++{
++	const struct cti_assoc_op *ops;
++	int index;
++
++	index = srcu_read_lock(&cti_assoc_srcu);
++	ops = srcu_dereference(cti_assoc_ops, &cti_assoc_srcu);
++	if (ops && ops->remove)
++		ops->remove(csdev);
++	srcu_read_unlock(&cti_assoc_srcu, index);
++}
++
+ void coresight_set_percpu_sink(int cpu, struct coresight_device *csdev)
+ {
+ 	per_cpu(csdev_sink, cpu) = csdev;
+@@ -1403,8 +1431,7 @@ struct coresight_device *coresight_register(struct coresight_desc *desc)
+ 	mutex_unlock(&coresight_mutex);
+ 	/* Success */
+ 	if (!ret) {
+-		if (cti_assoc_ops && cti_assoc_ops->add)
+-			cti_assoc_ops->add(csdev);
++		coresight_cti_add(csdev);
+ 		return csdev;
+ 	}
+ 
+@@ -1425,8 +1452,7 @@ void coresight_unregister(struct coresight_device *csdev)
+ {
+ 	etm_perf_del_symlink_sink(csdev);
+ 	/* Remove references of that device in the topology */
+-	if (cti_assoc_ops && cti_assoc_ops->remove)
+-		cti_assoc_ops->remove(csdev);
++	coresight_cti_remove(csdev);
+ 	coresight_remove_conns(csdev);
+ 	coresight_clear_default_sink(csdev);
+ 	coresight_release_platform_data(csdev, csdev->dev.parent, csdev->pdata);
+--- a/arch/arm64/configs/gki_defconfig
++++ b/arch/arm64/configs/gki_defconfig
+@@ -792,6 +792,7 @@
+ CONFIG_CRYPTO_ANSI_CPRNG=y
+ CONFIG_CRYPTO_GHASH_ARM64_CE=y
+ CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
++CONFIG_SYSTEM_TRUSTED_KEYS="certs/onyx-accepted-gki.pem"
+ CONFIG_TRACE_MMIO_ACCESS=y
+ CONFIG_XZ_DEC=y
+ CONFIG_SWIOTLB_DYNAMIC=y
+--- /dev/null
++++ b/certs/onyx-accepted-gki.pem
+@@ -0,0 +1,30 @@
++-----BEGIN CERTIFICATE-----
++MIIFKDCCAxCgAwIBAgIUR7OHS4e6E2HC6No3Ppj7UmDUeSkwDQYJKoZIhvcNAQEF
++BQAwLjEsMCoGA1UEAwwjQnVpbGQgdGltZSBhdXRvZ2VuZXJhdGVkIGtlcm5lbCBr
++ZXkwIBcNMjYxMTAzMTUxOTA3WhgPMjEyNjEwMTAxNTE5MDdaMC4xLDAqBgNVBAMM
++I0J1aWxkIHRpbWUgYXV0b2dlbmVyYXRlZCBrZXJuZWwga2V5MIICIjANBgkqhkiG
++9w0BAQEFAAOCAg8AMIICCgKCAgEAvizeC9cJAVHWiuNm+kDZ0gqDEopuUpJBG973
++W/Ch8As7KPxvXOxG8GEAdfLTGTbFA9a+MJGVvToj4kfD1iIociF6iZcUG0IbBYjy
++Y5dYXCkVCGxyRMV0iVBY7uPmt0kwaCpxK1ITMrZZf7x6QWavXltbi3L5TKHDj8MZ
++vRSAOVcvlvryFneXJeMHVsHP4pCtflRo6aXOEsp/2xNsIbqHt6d/OV0FdLnAq1gT
++/SF8CTomF9ykO/YoJSyTlbxBWzgbuGkUUDh4aoiI/ZFsQbyxB41zhrAvIPA1eEMg
++CHDWONObVmoJpzRCDyqImc8FNLGoxXiqiZQ9otmGt6FDlLuJpPiJtKkMJsSPVYrT
++lezY0N2XBnoYAEEw/9eWZCNzXKAmdgMoNwrfowveffx5mzTC8HBgG/vpFs3IzTwa
++OxdjFa0oILl0lvmJMnYbV/68TVt3mf4FxbOeVB+FLjAFakJltC8D6c2gWJ/RflZd
++xoQHnhrEQ3TCgvI06G2b8jvMW5eC0GePSgeXDFxLpufiCWJaVUnHvla0aO0iAE0l
++xbqJgEyOiKu4ASn7tQHSTdF+HJ5dBfrMKlAWFI6vOUA82I3d9ojrtfoci9Pub+fZ
++C1rPL3LkZQh/bsiAFxDNNQzXiv0R0KbrHlStDP7NzBJF1kIQYXXKCW3m48LPu6p4
++QEjlKl0CAwEAAaM8MDowDAYDVR0TAQH/BAIwADALBgNVHQ8EBAMCB4AwHQYDVR0O
++BBYEFHm5LPPFg4Yh6pz8GV71XsWXiGmTMA0GCSqGSIb3DQEBBQUAA4ICAQANBemR
++dW22auS8XSZpCxkVRXnrkcjg4hMaRaZV5GbhvNCt4PRxkdckF/6U65bC93CRVY3S
++Tq0FJ8w1baaudrowCKvx8278ah71fTDqOJYi60aEXG4nvqwxRHu85iMNwAVqdeIZ
++YjEmI2Hq9yQuLok1USiyrmNiwIXeA8PVTeFWt4eg7NYxWILEFnxiqGrf45YPwwCr
++sOhmS7rfnJRhJUFJ0WoyP0S609jSRI45QNyeIgoO9mOYZucSbFSKuUI5Z2X+PNwT
++CAR0YIuDL/x4zO2+8nC4Kl9lxFC18OeQ7cipsSMw6/zivDzrWrOTCAu7NKhaAlFN
++d/JV/hHFBMIPQ6xUE/d5zwUUE6x3B9xWB2JF7fWm2JhLACVIUDmAC6xTGkHu6qW7
++eiR9yp8gRuBVyP6Y4R+9OK+cJZB457QRXHQRzF8W8Lfzgg/Ae4/Gatim0vDTEzFb
++Er4GtijvqOGy4PdlUI2jsGgt/vqzhG0S2dBpdXh519SPcxNUOxrYKNG5lYT9oifX
++JA5if8Lp0iDMgqLYbR4rWftK8M0RezK/jRzy1GiTOS9QAuC2yL8r16xQ1vz0a9cI
++L81CTdvaYMBsN2YF2Bksh81djNO2UWtLN2qbnK9mwXiWL8QE0rdAgzto8qwERN8w
++XvU0QGdgSgSkCg6aQW4bLMS82HoypM6X3IJMww==
++-----END CERTIFICATE-----
+--- a/certs/system_certificates.S
++++ b/certs/system_certificates.S
+@@ -10,7 +10,6 @@
+ __cert_list_start:
+ __module_cert_start:
+ 	.incbin "certs/signing_key.x509"
+-	.balign 8 /* hack to pad in case of short serial number */
+ __module_cert_end:
+ 	.incbin "certs/x509_certificate_list"
+ __cert_list_end:
+--- a/drivers/tty/hvc/hvc_console.c
++++ b/drivers/tty/hvc/hvc_console.c
+@@ -27,6 +27,10 @@
+ #include <linux/freezer.h>
+ #include <linux/slab.h>
+ #include <linux/serial_core.h>
++#include <linux/hvc_backend.h>
++#include <linux/idr.h>
++#include <linux/module.h>
++#include <linux/srcu.h>
+ 
+ #include <linux/uaccess.h>
+ 
+@@ -57,8 +61,8 @@
+ /* Picks up late kicks after list walk but before schedule() */
+ static int hvc_kicked;
+ 
+-/* hvc_init is triggered from hvc_alloc, i.e. only when actually used */
+-static atomic_t hvc_needs_init __read_mostly = ATOMIC_INIT(-1);
++/* Legacy and owned backends share lazy initialization, including failed retries. */
++static DEFINE_MUTEX(hvc_init_mutex);
+ 
+ static int hvc_init(void);
+ 
+@@ -75,12 +79,211 @@
+  */
+ static DEFINE_MUTEX(hvc_structs_mutex);
+ 
+-/*
+- * This value is used to assign a tty->index value to a hvc_struct based
+- * upon order of exposure via hvc_probe(), when we can not match it to
+- * a console candidate registered with hvc_instantiate().
+- */
+-static int last_hvc = -1;
++enum hvc_backend_state {
++	HVC_BACKEND_PRIVATE,
++	HVC_BACKEND_LIVE,
++	HVC_BACKEND_RETIRING,
++	HVC_BACKEND_RETIRED,
++};
++
++/*
++ * Keep metadata, generation key, and tty index until the last port reference
++ * disappears. hp->ops always points into the core, including after removal.
++ * Existing hvc_struct/hv_ops layouts and legacy exported APIs stay unchanged.
++ */
++struct hvc_backend {
++	struct list_head all_node;
++	struct list_head live_node;
++	struct hvc_struct *hp;
++	const struct hvc_backend_ops *ops;
++	struct module *owner;
++	void *data;
++	u32 key;
++	enum hvc_backend_state state;
++};
++
++static LIST_HEAD(hvc_backend_all);
++static LIST_HEAD(hvc_backend_live);
++static DEFINE_IDA(hvc_backend_keys);
++DEFINE_STATIC_SRCU(hvc_backend_srcu);
++
++static struct hvc_backend *hvc_backend_get(u32 key, bool closing, int *idx)
++{
++	struct hvc_backend *backend;
++
++	*idx = srcu_read_lock(&hvc_backend_srcu);
++	list_for_each_entry_rcu(backend, &hvc_backend_live, live_node,
++			       srcu_read_lock_held(&hvc_backend_srcu)) {
++		enum hvc_backend_state state = READ_ONCE(backend->state);
++
++		if (backend->key == key &&
++		    (state == HVC_BACKEND_LIVE ||
++		     (closing && state == HVC_BACKEND_RETIRING)) &&
++		    try_module_get(backend->owner))
++			return backend;
++	}
++	srcu_read_unlock(&hvc_backend_srcu, *idx);
++	return NULL;
++}
++
++static void hvc_backend_put(struct hvc_backend *backend, int idx)
++{
++	module_put(backend->owner);
++	srcu_read_unlock(&hvc_backend_srcu, idx);
++}
++
++static ssize_t hvc_backend_get_chars(u32 key, u8 *buf, size_t count)
++{
++	struct hvc_backend *backend;
++	ssize_t ret;
++	int idx;
++
++	backend = hvc_backend_get(key, false, &idx);
++	if (!backend)
++		return -EPIPE;
++	ret = backend->ops->get_chars(backend->data, buf, count);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static ssize_t hvc_backend_put_chars(u32 key, const u8 *buf, size_t count)
++{
++	struct hvc_backend *backend;
++	ssize_t ret;
++	int idx;
++
++	backend = hvc_backend_get(key, false, &idx);
++	if (!backend)
++		return -EPIPE;
++	ret = backend->ops->put_chars(backend->data, buf, count);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static int hvc_backend_flush(u32 key, bool wait)
++{
++	struct hvc_backend *backend;
++	int idx, ret = 0;
++
++	backend = hvc_backend_get(key, false, &idx);
++	if (!backend)
++		return -ENODEV;
++	if (backend->ops->flush)
++		ret = backend->ops->flush(backend->data, wait);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static int hvc_backend_open(struct hvc_struct *hp, int unused)
++{
++	struct hvc_backend *backend;
++	int idx, ret = 0;
++
++	backend = hvc_backend_get(hp->vtermno, false, &idx);
++	if (!backend)
++		return -ENODEV;
++	if (backend->ops->open)
++		ret = backend->ops->open(backend->data);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static void hvc_backend_close(struct hvc_struct *hp, int unused)
++{
++	struct hvc_backend *backend;
++	int idx;
++
++	backend = hvc_backend_get(hp->vtermno, true, &idx);
++	if (!backend)
++		return;
++	if (backend->ops->close)
++		backend->ops->close(backend->data);
++	hvc_backend_put(backend, idx);
++}
++
++static void hvc_backend_hangup(struct hvc_struct *hp, int unused)
++{
++	struct hvc_backend *backend;
++	int idx;
++
++	backend = hvc_backend_get(hp->vtermno, true, &idx);
++	if (!backend)
++		return;
++	if (backend->ops->hangup)
++		backend->ops->hangup(backend->data);
++	else if (backend->ops->close)
++		backend->ops->close(backend->data);
++	hvc_backend_put(backend, idx);
++}
++
++static int hvc_backend_tiocmget(struct hvc_struct *hp)
++{
++	struct hvc_backend *backend;
++	int idx, ret = -EINVAL;
++
++	backend = hvc_backend_get(hp->vtermno, false, &idx);
++	if (!backend)
++		return -ENODEV;
++	if (backend->ops->tiocmget)
++		ret = backend->ops->tiocmget(backend->data);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static int hvc_backend_tiocmset(struct hvc_struct *hp, unsigned int set,
++			       unsigned int clear)
++{
++	struct hvc_backend *backend;
++	int idx, ret = -EINVAL;
++
++	backend = hvc_backend_get(hp->vtermno, false, &idx);
++	if (!backend)
++		return -ENODEV;
++	if (backend->ops->tiocmset)
++		ret = backend->ops->tiocmset(backend->data, set, clear);
++	hvc_backend_put(backend, idx);
++	return ret;
++}
++
++static void hvc_backend_dtr_rts(struct hvc_struct *hp, bool active)
++{
++	struct hvc_backend *backend;
++	int idx;
++
++	backend = hvc_backend_get(hp->vtermno, !active, &idx);
++	if (!backend)
++		return;
++	if (backend->ops->dtr_rts)
++		backend->ops->dtr_rts(backend->data, active);
++	hvc_backend_put(backend, idx);
++}
++
++static const struct hv_ops hvc_backend_forward_ops = {
++	.get_chars = hvc_backend_get_chars,
++	.put_chars = hvc_backend_put_chars,
++	.flush = hvc_backend_flush,
++	.notifier_add = hvc_backend_open,
++	.notifier_del = hvc_backend_close,
++	.notifier_hangup = hvc_backend_hangup,
++	.tiocmget = hvc_backend_tiocmget,
++	.tiocmset = hvc_backend_tiocmset,
++	.dtr_rts = hvc_backend_dtr_rts,
++};
++
++/* hvc_structs_mutex protects indices held by active and retained ports. */
++static bool hvc_index_in_use(int index)
++{
++	struct hvc_backend *backend;
++	struct hvc_struct *hp;
++
++	list_for_each_entry(hp, &hvc_structs, next)
++		if (hp->index == index)
++			return true;
++	list_for_each_entry(backend, &hvc_backend_all, all_node)
++		if (backend->hp->index == index)
++			return true;
++	return false;
++}
+ 
+ /*
+  * Do not call this function with either the hvc_structs_mutex or the hvc_struct
+@@ -249,13 +452,23 @@
+ static void hvc_port_destruct(struct tty_port *port)
+ {
+ 	struct hvc_struct *hp = container_of(port, struct hvc_struct, port);
++	struct hvc_backend *backend, *next;
+ 	unsigned long flags;
+ 
+ 	mutex_lock(&hvc_structs_mutex);
+ 
+ 	spin_lock_irqsave(&hp->lock, flags);
+-	list_del(&(hp->next));
++	list_del_init(&hp->next);
+ 	spin_unlock_irqrestore(&hp->lock, flags);
++	list_for_each_entry_safe(backend, next, &hvc_backend_all, all_node) {
++		if (backend->hp != hp)
++			continue;
++		WARN_ON(backend->state != HVC_BACKEND_RETIRED);
++		list_del(&backend->all_node);
++		ida_free(&hvc_backend_keys, backend->key);
++		kfree(backend);
++		break;
++	}
+ 
+ 	mutex_unlock(&hvc_structs_mutex);
+ 
+@@ -284,28 +497,26 @@
+  */
+ int hvc_instantiate(uint32_t vtermno, int index, const struct hv_ops *ops)
+ {
+-	struct hvc_struct *hp;
++	int ret = -1;
+ 
+ 	if (index < 0 || index >= MAX_NR_HVC_CONSOLES)
+ 		return -1;
+ 
+-	if (vtermnos[index] != -1)
+-		return -1;
+-
+-	/* make sure no tty has been registered in this index */
+-	hp = hvc_get_by_index(index);
+-	if (hp) {
+-		tty_port_put(&hp->port);
+-		return -1;
+-	}
+-
+-	vtermnos[index] = vtermno;
+-	cons_ops[index] = ops;
++	console_lock();
++	mutex_lock(&hvc_structs_mutex);
++	if (vtermnos[index] == (u32)-1 && !hvc_index_in_use(index)) {
++		cons_ops[index] = ops;
++		vtermnos[index] = vtermno;
++		ret = 0;
++	}
++	mutex_unlock(&hvc_structs_mutex);
++	console_unlock();
+ 
+ 	/* check if we need to re-register the kernel console */
+-	hvc_check_console(index);
+-
+-	return 0;
++	if (!ret)
++		hvc_check_console(index);
++
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(hvc_instantiate);
+ 
+@@ -908,25 +1119,36 @@
+ 	.destruct = hvc_port_destruct,
+ };
+ 
++static int hvc_ensure_init(void)
++{
++	int ret = 0;
++
++	mutex_lock(&hvc_init_mutex);
++	if (!hvc_driver)
++		ret = hvc_init();
++	mutex_unlock(&hvc_init_mutex);
++	return ret;
++}
++
+ struct hvc_struct *hvc_alloc(uint32_t vtermno, int data,
+ 			     const struct hv_ops *ops,
+ 			     int outbuf_size)
+ {
+ 	struct hvc_struct *hp;
+ 	int i;
++	int ret;
+ 
+ 	/* We wait until a driver actually comes along */
+-	if (atomic_inc_not_zero(&hvc_needs_init)) {
+-		int err = hvc_init();
+-		if (err)
+-			return ERR_PTR(err);
+-	}
++	ret = hvc_ensure_init();
++	if (ret)
++		return ERR_PTR(ret);
+ 
+ 	hp = kzalloc(struct_size(hp, outbuf, outbuf_size), GFP_KERNEL);
+ 	if (!hp)
+ 		return ERR_PTR(-ENOMEM);
+ 
+ 	hp->vtermno = vtermno;
++	hp->index = -1;
+ 	hp->data = data;
+ 	hp->ops = ops;
+ 	hp->outbuf_size = outbuf_size;
+@@ -936,6 +1158,8 @@
+ 
+ 	INIT_WORK(&hp->tty_resize, hvc_set_winsz);
+ 	spin_lock_init(&hp->lock);
++	INIT_LIST_HEAD(&hp->next);
++	console_lock();
+ 	mutex_lock(&hvc_structs_mutex);
+ 
+ 	/*
+@@ -944,18 +1168,20 @@
+ 	 */
+ 	for (i=0; i < MAX_NR_HVC_CONSOLES; i++)
+ 		if (vtermnos[i] == hp->vtermno &&
+-		    cons_ops[i] == hp->ops)
++		    cons_ops[i] == hp->ops && !hvc_index_in_use(i))
+ 			break;
+ 
+ 	if (i >= MAX_NR_HVC_CONSOLES) {
+-
+-		/* find 'empty' slot for console */
+-		for (i = 0; i < MAX_NR_HVC_CONSOLES && vtermnos[i] != -1; i++) {
++		for (i = 0; i < HVC_ALLOC_TTY_ADAPTERS; i++)
++			if (!hvc_index_in_use(i) &&
++			    (i >= MAX_NR_HVC_CONSOLES || vtermnos[i] == (u32)-1))
++				break;
++		if (i == HVC_ALLOC_TTY_ADAPTERS) {
++			mutex_unlock(&hvc_structs_mutex);
++			console_unlock();
++			tty_port_put(&hp->port);
++			return ERR_PTR(-ENOSPC);
+ 		}
+-
+-		/* no matching slot, just use a counter */
+-		if (i == MAX_NR_HVC_CONSOLES)
+-			i = ++last_hvc + MAX_NR_HVC_CONSOLES;
+ 	}
+ 
+ 	hp->index = i;
+@@ -966,6 +1192,7 @@
+ 
+ 	list_add_tail(&(hp->next), &hvc_structs);
+ 	mutex_unlock(&hvc_structs_mutex);
++	console_unlock();
+ 
+ 	/* check if we need to re-register the kernel console */
+ 	hvc_check_console(i);
+@@ -1011,6 +1238,165 @@
+ }
+ EXPORT_SYMBOL_GPL(hvc_remove);
+ 
++struct hvc_backend *hvc_backend_alloc(const struct hvc_backend_ops *ops,
++				     void *data, int outbuf_size,
++				     struct module *owner)
++{
++	struct hvc_backend *backend;
++	struct hvc_struct *hp;
++	int key, ret;
++
++	if (!ops || !ops->get_chars || !ops->put_chars || outbuf_size <= 0)
++		return ERR_PTR(-EINVAL);
++	ret = hvc_ensure_init();
++	if (ret)
++		return ERR_PTR(ret);
++	backend = kzalloc(sizeof(*backend), GFP_KERNEL);
++	if (!backend)
++		return ERR_PTR(-ENOMEM);
++	hp = kzalloc(struct_size(hp, outbuf, outbuf_size), GFP_KERNEL);
++	if (!hp) {
++		kfree(backend);
++		return ERR_PTR(-ENOMEM);
++	}
++	key = ida_alloc(&hvc_backend_keys, GFP_KERNEL);
++	if (key < 0) {
++		kfree(hp);
++		kfree(backend);
++		return ERR_PTR(key);
++	}
++	hp->vtermno = key;
++	hp->index = -1;
++	hp->ops = &hvc_backend_forward_ops;
++	hp->outbuf_size = outbuf_size;
++	tty_port_init(&hp->port);
++	hp->port.ops = &hvc_port_ops;
++	INIT_WORK(&hp->tty_resize, hvc_set_winsz);
++	spin_lock_init(&hp->lock);
++	INIT_LIST_HEAD(&hp->next);
++	backend->hp = hp;
++	backend->key = key;
++	backend->ops = ops;
++	backend->owner = owner;
++	backend->data = data;
++	backend->state = HVC_BACKEND_PRIVATE;
++	INIT_LIST_HEAD(&backend->live_node);
++	mutex_lock(&hvc_structs_mutex);
++	list_add_tail(&backend->all_node, &hvc_backend_all);
++	mutex_unlock(&hvc_structs_mutex);
++	return backend;
++}
++EXPORT_SYMBOL_GPL(hvc_backend_alloc);
++
++int hvc_backend_publish(struct hvc_backend **backends, unsigned int count)
++{
++	bool occupied[HVC_ALLOC_TTY_ADAPTERS] = { false };
++	int indices[HVC_ALLOC_TTY_ADAPTERS];
++	struct hvc_backend *backend;
++	struct hvc_struct *hp;
++	unsigned int i, j;
++	int ret = 0;
++
++	if (!backends || !count || count > HVC_ALLOC_TTY_ADAPTERS)
++		return -EINVAL;
++	/* Same order as retirement; never invoke backend callbacks under the mutex. */
++	console_lock();
++	mutex_lock(&hvc_structs_mutex);
++	for (i = 0; i < HVC_ALLOC_TTY_ADAPTERS; i++)
++		occupied[i] = hvc_index_in_use(i) ||
++			(i < MAX_NR_HVC_CONSOLES && vtermnos[i] != (u32)-1);
++	for (i = 0; i < count; i++) {
++		if (!backends[i] || backends[i]->state != HVC_BACKEND_PRIVATE) {
++			ret = -EINVAL;
++			goto out;
++		}
++		for (j = 0; j < i; j++)
++			if (backends[j] == backends[i]) {
++				ret = -EINVAL;
++				goto out;
++			}
++		for (j = 0; j < HVC_ALLOC_TTY_ADAPTERS; j++)
++			if (!occupied[j])
++				break;
++		if (j == HVC_ALLOC_TTY_ADAPTERS) {
++			ret = -ENOSPC;
++			goto out;
++		}
++		indices[i] = j;
++		occupied[j] = true;
++	}
++	/* Nothing below can fail after the first adapter is made visible. */
++	for (i = 0; i < count; i++) {
++		backend = backends[i];
++		hp = backend->hp;
++		hp->index = indices[i];
++		WRITE_ONCE(backend->state, HVC_BACKEND_LIVE);
++		list_add_tail_rcu(&backend->live_node, &hvc_backend_live);
++		if (hp->index < MAX_NR_HVC_CONSOLES) {
++			cons_ops[hp->index] = &hvc_backend_forward_ops;
++			vtermnos[hp->index] = backend->key;
++		}
++		list_add_tail(&hp->next, &hvc_structs);
++	}
++out:
++	mutex_unlock(&hvc_structs_mutex);
++	console_unlock();
++	if (!ret)
++		for (i = 0; i < count; i++)
++			hvc_check_console(indices[i]);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(hvc_backend_publish);
++
++void hvc_backend_remove(struct hvc_backend *backend)
++{
++	struct hvc_struct *hp = backend->hp;
++	struct tty_struct *tty;
++	bool published;
++
++	console_lock();
++	mutex_lock(&hvc_structs_mutex);
++	published = backend->state == HVC_BACKEND_LIVE;
++	WRITE_ONCE(backend->state, HVC_BACKEND_RETIRING);
++	list_del_init(&hp->next);
++	if (hp->index >= 0 && hp->index < MAX_NR_HVC_CONSOLES &&
++	    cons_ops[hp->index] == &hvc_backend_forward_ops &&
++	    vtermnos[hp->index] == backend->key) {
++		cons_ops[hp->index] = NULL;
++		vtermnos[hp->index] = -1;
++	}
++	mutex_unlock(&hvc_structs_mutex);
++	console_unlock();
++
++	tty = tty_port_tty_get(&hp->port);
++	if (tty) {
++		tty_vhangup(tty);
++		tty_kref_put(tty);
++	}
++	if (published) {
++		mutex_lock(&hvc_structs_mutex);
++		list_del_rcu(&backend->live_node);
++		mutex_unlock(&hvc_structs_mutex);
++		synchronize_srcu(&hvc_backend_srcu);
++		INIT_LIST_HEAD(&backend->live_node);
++	}
++	backend->ops = NULL;
++	backend->data = NULL;
++	backend->owner = NULL;
++	WRITE_ONCE(backend->state, HVC_BACKEND_RETIRED);
++	cancel_work_sync(&hp->tty_resize);
++	/* Final metadata/key/index release follows the final TTY reference. */
++	tty_port_put(&hp->port);
++}
++EXPORT_SYMBOL_GPL(hvc_backend_remove);
++
++void hvc_backend_poll(struct hvc_backend *backend)
++{
++	if (READ_ONCE(backend->state) == HVC_BACKEND_LIVE && hvc_poll(backend->hp))
++		hvc_kick();
++}
++EXPORT_SYMBOL_GPL(hvc_backend_poll);
++
+ /* Driver initialization: called as soon as someone uses hvc_alloc(). */
+ static int hvc_init(void)
+ {
+--- a/drivers/virt/gunyah/rsc_mgr.c
++++ b/drivers/virt/gunyah/rsc_mgr.c
+@@ -40,6 +40,7 @@
+ 
+ #define GUNYAH_RM_MAX_NUM_FRAGMENTS		62
+ #define RM_RPC_FRAGMENTS_MASK		GENMASK(7, 2)
++#define GUNYAH_RM_NOTIF_VM_CONSOLE_CHARS	0x56100080
+ /* clang-format on */
+ 
+ struct gunyah_rm_log {
+@@ -59,6 +60,12 @@
+ struct gunyah_rm_rpc_reply_hdr {
+ 	struct gunyah_rm_rpc_hdr hdr;
+ 	__le32 err_code; /* GUNYAH_RM_ERROR_* */
++} __packed;
++
++struct gunyah_rm_console_chars {
++	__le16 vmid;
++	__le16 num_bytes;
++	u8 bytes[];
+ } __packed;
+ 
+ #define GUNYAH_RM_MSGQ_MSG_SIZE 240
+@@ -330,6 +337,18 @@
+ 	rm->active_rx_message = NULL;
+ }
+ 
++/* The notifier API passes only payload, so validate its variable tail here. */
++static bool gunyah_rm_notification_valid(const struct gunyah_rm_message *message)
++{
++	const struct gunyah_rm_console_chars *console = message->payload;
++
++	if (message->msg_id != GUNYAH_RM_NOTIF_VM_CONSOLE_CHARS)
++		return true;
++	if (!console || message->size < sizeof(*console))
++		return false;
++	return le16_to_cpu(console->num_bytes) <= message->size - sizeof(*console);
++}
++
+ static inline void gunyah_rm_try_complete_message(struct gunyah_rm *rm)
+ {
+ 	struct gunyah_rm_message *message = rm->active_rx_message;
+@@ -342,8 +361,12 @@
+ 		gunyah_rm_complete_reply(rm, message);
+ 		break;
+ 	case RM_RPC_TYPE_NOTIF:
+-		blocking_notifier_call_chain(&rm->nh, message->msg_id,
+-					     message->payload);
++		if (gunyah_rm_notification_valid(message))
++			blocking_notifier_call_chain(&rm->nh, message->msg_id,
++						     message->payload);
++		else
++			pr_warn_ratelimited("Invalid console notification length: %zu\n",
++					    message->size);
+ 
+ 		kfree(message->payload);
+ 		kfree(message);
+--- /dev/null
++++ b/include/linux/hvc_backend.h
+@@ -0,0 +1,39 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_HVC_BACKEND_H
++#define _LINUX_HVC_BACKEND_H
++
++#include <linux/types.h>
++
++struct hvc_backend;
++struct module;
++
++/* get/put, flush(false), and dtr_rts run in atomic context; others may sleep. */
++struct hvc_backend_ops {
++	ssize_t (*get_chars)(void *data, u8 *buf, size_t count);
++	ssize_t (*put_chars)(void *data, const u8 *buf, size_t count);
++	int (*flush)(void *data, bool wait);
++	int (*open)(void *data);
++	void (*close)(void *data);
++	void (*hangup)(void *data);
++	int (*tiocmget)(void *data);
++	int (*tiocmset)(void *data, unsigned int set, unsigned int clear);
++	void (*dtr_rts)(void *data, bool active);
++};
++
++/* Allocation does not expose a console or TTY. All fallible setup goes first. */
++struct hvc_backend *hvc_backend_alloc(const struct hvc_backend_ops *ops,
++				     void *data, int outbuf_size,
++				     struct module *owner);
++/* Publish the complete group atomically. No adapter is published on error. */
++int hvc_backend_publish(struct hvc_backend **backends, unsigned int count);
++/*
++ * Detach, hang up, and drain callbacks. After return ops/data may be freed;
++ * retained TTY descriptors only reference native-core operations. The caller
++ * must release its hardware state explicitly: module exit may already prevent
++ * callback owner acquisition, including the hangup callback.
++ */
++void hvc_backend_remove(struct hvc_backend *backend);
++/* Caller serializes polling against hvc_backend_remove(). */
++void hvc_backend_poll(struct hvc_backend *backend);
++
++#endif

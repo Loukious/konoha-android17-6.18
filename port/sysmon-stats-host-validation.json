@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "cases": 38271,
+  "driver_sha256": "9f928b7787f9d0eea5399a60e59a11ae2139229cd2d264b924cd74d7425d2089",
+  "header_sha256": "02c1a4767c2b62dc9423c2fc2d49924c0d657f4d3b5903118c064a410867c921",
+  "harness_sha256": "02c1b0562183bfc695c86e3d99e652f7a439f4612f65b7f89a25973ce547f35b",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "accept-short-feature-payload": "REJECTED",
+    "skip-known-record-duplicate-check": "REJECTED",
+    "drop-hmx-null-check": "REJECTED",
+    "write-firmware-sleep-counter": "REJECTED",
+    "wrap-residency-accumulation": "REJECTED"
+  },
+  "limits": [
+    "Complete actual native API/show/initialization C; SMEM, debugfs, clock and Linux module lifetime are simulated.",
+    "Firmware samples lack a sequence protocol and can span a concurrent DSP update.",
+    "Normal live reads and Linux lifetime remain separate validation gates; no intentional SSR or firmware mutation."
+  ]
+}

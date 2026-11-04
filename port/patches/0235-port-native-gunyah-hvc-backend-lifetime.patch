@@ -1,0 +1,785 @@
+--- a/drivers/tty/hvc/hvc_gunyah.c
++++ b/drivers/tty/hvc/hvc_gunyah.c
+@@ -6,394 +6,462 @@
+ 
+ #define pr_fmt(fmt) "hvc_gunyah: " fmt
+ 
+-#include <linux/console.h>
++#include <linux/err.h>
++#include <linux/hvc_backend.h>
+ #include <linux/init.h>
+ #include <linux/kfifo.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/notifier.h>
++#include <linux/printk.h>
+ #include <linux/spinlock.h>
+-#include <linux/printk.h>
++#include <linux/unaligned.h>
+ #include <linux/workqueue.h>
+ 
++#include <linux/gunyah/gh_common.h>
+ #include <linux/gunyah/gh_msgq.h>
+-#include <linux/gunyah/gh_common.h>
+ #include <linux/gunyah/gh_rm_drv.h>
+ #include <linux/gunyah/gh_vm.h>
+ 
+-#include "hvc_console.h"
+-
+-/*
+- * Note: hvc_alloc follows first-come, first-served for assigning
+- * numbers to registered hvc instances. Thus, the following assignments occur
+- * when both DCC and GUNYAH consoles are compiled:
+- *            | DCC connected | DCC not connected
+- *      (dcc) |      hvc0     | (not present)
+- *       SELF |      hvc1     | hvc0
+- * PRIMARY_VM |      hvc2     | hvc1
+- * TRUSTED_VM |      hvc3     | hvc2
+- * "DCC connected" means a DCC terminal is open with device
+- */
+-
+-#define HVC_GH_VTERM_COOKIE	0x474E5948
+-/* # of payload bytes that can fit in a 1-fragment CONSOLE_WRITE message */
+-#define GH_HVC_WRITE_MSG_SIZE	((1 * (GH_MSGQ_MAX_MSG_SIZE_BYTES - 8)) - 4)
++/* Payload bytes in a one-fragment native RM CONSOLE_WRITE message. */
++#define GH_HVC_WRITE_MSG_SIZE	(GH_MSGQ_MAX_MSG_SIZE_BYTES - 8 - 4)
++
++static bool read_only;
++module_param(read_only, bool, 0444);
++MODULE_PARM_DESC(read_only, "Reject console payload writes, including TTY echo");
+ 
+ struct gh_hvc_prv {
+-	struct hvc_struct *hvc;
++	/* Protected by gh_hvc_notify_lock; never an error pointer. */
++	struct hvc_backend *backend;
+ 	enum gh_vm_names vm_name;
+-	DECLARE_KFIFO(get_fifo, char, 1024);
+-	DECLARE_KFIFO(put_fifo, char, 1024);
++	spinlock_t fifo_lock;
++	DECLARE_KFIFO(get_fifo, u8, 1024);
++	DECLARE_KFIFO(put_fifo, u8, 1024);
++	bool online;
++	bool rx_enabled;
++	bool tx_enabled;
+ 	struct work_struct put_work;
++	/* Session callbacks may sleep; atomic get/put only take fifo_lock. */
++	struct mutex session_lock;
++	struct mutex rpc_lock;
++	/* Protected by rpc_lock, including the VMID of an opened console. */
++	bool opened;
++	gh_vmid_t vmid;
+ };
+ 
+-static DEFINE_SPINLOCK(fifo_lock);
+ static struct gh_hvc_prv gh_hvc_data[GH_VM_MAX];
+-
+-static inline int gh_vm_name_to_vtermno(enum gh_vm_names vmname)
+-{
+-	return vmname + HVC_GH_VTERM_COOKIE;
+-}
+-
+-static inline int vtermno_to_gh_vm_name(int vtermno)
+-{
+-	return vtermno - HVC_GH_VTERM_COOKIE;
+-}
+-
+-static int gh_hvc_notify_console_chars(struct notifier_block *this,
+-				       unsigned long cmd, void *data)
+-{
+-	struct gh_rm_notif_vm_console_chars *msg = data;
+-	enum gh_vm_names vm_name;
+-	int ret;
+-
+-	if (cmd != GH_RM_NOTIF_VM_CONSOLE_CHARS)
+-		return NOTIFY_DONE;
+-
+-	ret = gh_rm_get_vm_name(msg->vmid, &vm_name);
+-	if (ret) {
+-		pr_warn_ratelimited("don't know VMID %d ret: %d\n", msg->vmid,
+-				    ret);
+-		return NOTIFY_OK;
+-	}
+-
+-	ret = kfifo_in_spinlocked(&gh_hvc_data[vm_name].get_fifo,
+-				  msg->bytes, msg->num_bytes,
+-				  &fifo_lock);
+-
+-	if (ret < 0)
+-		pr_warn_ratelimited("dropped %d bytes from VM%d - error %d\n",
+-				    msg->num_bytes, vm_name, ret);
+-	else if (ret < msg->num_bytes)
+-		pr_warn_ratelimited("dropped %d bytes from VM%d - full fifo\n",
+-				    msg->num_bytes - ret, vm_name);
+-
+-	if (hvc_poll(gh_hvc_data[vm_name].hvc))
+-		hvc_kick();
+-
+-	return NOTIFY_OK;
+-}
+-
+-static void gh_hvc_put_work_fn(struct work_struct *ws)
+-{
+-	gh_vmid_t vmid;
+-	char buf[GH_HVC_WRITE_MSG_SIZE];
+-	int count, ret;
+-	struct gh_hvc_prv *prv = container_of(ws, struct gh_hvc_prv, put_work);
+-
+-	ret = ghd_rm_get_vmid(prv->vm_name, &vmid);
+-	if (ret) {
+-		pr_warn_once("%s: gh_rm_get_vmid failed for %d: %d\n",
+-			     __func__, prv->vm_name, ret);
++/* Serializes complete VM removal/recreation and module initialization/exit. */
++static DEFINE_MUTEX(gh_hvc_lifecycle_lock);
++/* Serializes external polling against pointer replacement and removal. */
++static DEFINE_MUTEX(gh_hvc_notify_lock);
++static bool gh_hvc_stopping;
++
++static bool gh_hvc_is_online(struct gh_hvc_prv *prv)
++{
++	unsigned long flags;
++	bool online;
++
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	online = prv->online;
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	return online;
++}
++
++static void gh_hvc_set_online(struct gh_hvc_prv *prv, bool online)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	prv->online = online;
++	prv->rx_enabled = false;
++	prv->tx_enabled = false;
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++}
++
++/* Caller holds rpc_lock. Stop between messages when a VM is retired. */
++static void gh_hvc_drain_put(struct gh_hvc_prv *prv)
++{
++	u8 buf[GH_HVC_WRITE_MSG_SIZE];
++	unsigned long flags;
++	unsigned int count;
++	int ret;
++
++	if (!prv->opened)
+ 		return;
+-	}
+-
+-	while (!kfifo_is_empty(&prv->put_fifo)) {
+-		count = kfifo_out_spinlocked(&prv->put_fifo, buf, sizeof(buf),
+-					     &fifo_lock);
+-		if (count <= 0)
+-			continue;
+-
+-		ret = gh_rm_console_write(vmid, buf, count);
++
++	for (;;) {
++		spin_lock_irqsave(&prv->fifo_lock, flags);
++		count = prv->online ? kfifo_out(&prv->put_fifo, buf,
++					       sizeof(buf)) : 0;
++		spin_unlock_irqrestore(&prv->fifo_lock, flags);
++		if (!count)
++			break;
++
++		ret = gh_rm_console_write(prv->vmid, (const char *)buf, count);
+ 		if (ret) {
+-			pr_warn_once("%s gh_rm_console_write failed for %d: %d\n",
+-				__func__, prv->vm_name, ret);
++			pr_warn_ratelimited("console write VM%d failed: %d\n",
++					    prv->vm_name, ret);
+ 			break;
+ 		}
+ 	}
+ }
+ 
+-static int gh_hvc_get_chars(uint32_t vtermno, char *buf, int count)
+-{
+-	int vm_name = vtermno_to_gh_vm_name(vtermno);
+-
+-	if (vm_name < 0 || vm_name >= GH_VM_MAX)
+-		return -EINVAL;
+-
+-	return kfifo_out_spinlocked(&gh_hvc_data[vm_name].get_fifo,
+-				    buf, count, &fifo_lock);
+-}
+-
+-static int gh_hvc_put_chars(uint32_t vtermno, const char *buf, int count)
+-{
+-	int ret, vm_name = vtermno_to_gh_vm_name(vtermno);
+-
+-	if (vm_name < 0 || vm_name >= GH_VM_MAX)
+-		return -EINVAL;
+-
+-	ret = kfifo_in_spinlocked(&gh_hvc_data[vm_name].put_fifo,
+-				   buf, count, &fifo_lock);
+-	if (ret > 0)
+-		schedule_work(&gh_hvc_data[vm_name].put_work);
+-	return ret;
+-}
+-
+-static int gh_hvc_flush(uint32_t vtermno, bool wait)
+-{
+-	int ret, vm_name = vtermno_to_gh_vm_name(vtermno);
++static void gh_hvc_put_work_fn(struct work_struct *work)
++{
++	struct gh_hvc_prv *prv = container_of(work, struct gh_hvc_prv, put_work);
++
++	mutex_lock(&prv->rpc_lock);
++	gh_hvc_drain_put(prv);
++	mutex_unlock(&prv->rpc_lock);
++}
++
++static ssize_t gh_hvc_get_chars(void *data, u8 *buf, size_t count)
++{
++	struct gh_hvc_prv *prv = data;
++	unsigned long flags;
++	ssize_t ret;
++
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	if (prv->online)
++		ret = kfifo_out(&prv->get_fifo, buf,
++			min_t(size_t, count, kfifo_size(&prv->get_fifo)));
++	else
++		ret = -ENODEV;
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	return ret;
++}
++
++static ssize_t gh_hvc_put_chars(void *data, const u8 *buf, size_t count)
++{
++	struct gh_hvc_prv *prv = data;
++	unsigned long flags;
++	ssize_t ret;
++
++	if (read_only)
++		return -EPERM;
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	if (!prv->online || !prv->tx_enabled) {
++		ret = -EIO;
++	} else {
++		ret = kfifo_in(&prv->put_fifo, buf,
++			min_t(size_t, count, kfifo_size(&prv->put_fifo)));
++		/* Keep work publication inside the teardown admission lock. */
++		if (ret)
++			schedule_work(&prv->put_work);
++	}
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	return ret;
++}
++
++static int gh_hvc_open(void *data)
++{
++	struct gh_hvc_prv *prv = data;
++	unsigned long flags;
+ 	gh_vmid_t vmid;
+-
+-	/* RM calls will all sleep. A flush without waiting isn't possible */
++	int ret;
++
++	mutex_lock(&prv->session_lock);
++	mutex_lock(&prv->rpc_lock);
++	if (!gh_hvc_is_online(prv)) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (prv->opened) {
++		ret = 0;
++		goto out;
++	}
++	ret = ghd_rm_get_vmid(prv->vm_name, &vmid);
++	if (ret)
++		goto out;
++
++	/* A notification may arrive before CONSOLE_OPEN returns. */
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	prv->rx_enabled = prv->online;
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	ret = gh_rm_console_open(vmid);
++	if (!ret && !gh_hvc_is_online(prv)) {
++		gh_rm_console_close(vmid);
++		ret = -ENODEV;
++	}
++	if (!ret) {
++		prv->vmid = vmid;
++		prv->opened = true;
++	}
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	prv->tx_enabled = !ret && prv->online;
++	prv->rx_enabled = !ret && prv->online;
++	if (ret)
++		kfifo_reset(&prv->get_fifo);
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++out:
++	mutex_unlock(&prv->rpc_lock);
++	mutex_unlock(&prv->session_lock);
++	return ret;
++}
++
++static int gh_hvc_flush(void *data, bool wait)
++{
++	struct gh_hvc_prv *prv = data;
++	int ret = 0;
++
++	/* Every RM console RPC sleeps. Atomic flush cannot issue one. */
+ 	if (!wait)
+ 		return 0;
+-	might_sleep();
+-
+-	if (vm_name < 0 || vm_name >= GH_VM_MAX)
+-		return -EINVAL;
+-
+-	ret = ghd_rm_get_vmid(vm_name, &vmid);
+-	if (ret)
+-		return ret;
+-
+-	if (cancel_work_sync(&gh_hvc_data[vm_name].put_work)) {
+-		/* flush the fifo */
+-		gh_hvc_put_work_fn(&gh_hvc_data[vm_name].put_work);
+-	}
+-
+-	return gh_rm_console_flush(vmid);
+-}
+-
+-static int gh_hvc_notify_add(struct hvc_struct *hp, int vm_name)
+-{
+-	int ret;
++
++	mutex_lock(&prv->session_lock);
++	flush_work(&prv->put_work);
++	mutex_lock(&prv->rpc_lock);
++	if (!gh_hvc_is_online(prv) || !prv->opened) {
++		ret = -ENODEV;
++	} else {
++		gh_hvc_drain_put(prv);
++		ret = gh_rm_console_flush(prv->vmid);
++	}
++	mutex_unlock(&prv->rpc_lock);
++	mutex_unlock(&prv->session_lock);
++	return ret;
++}
++
++static void gh_hvc_close(void *data)
++{
++	struct gh_hvc_prv *prv = data;
++	unsigned long flags;
++	int ret;
++
++	mutex_lock(&prv->session_lock);
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	prv->tx_enabled = false;
++	prv->rx_enabled = false;
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	/* No producer can queue work after admission was closed above. */
++	cancel_work_sync(&prv->put_work);
++	mutex_lock(&prv->rpc_lock);
++	if (prv->opened) {
++		gh_hvc_drain_put(prv);
++		ret = gh_rm_console_close(prv->vmid);
++		if (ret)
++			pr_warn_ratelimited("console close VM%d failed: %d\n",
++					    prv->vm_name, ret);
++		prv->opened = false;
++	}
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	kfifo_reset(&prv->get_fifo);
++	kfifo_reset(&prv->put_fifo);
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	mutex_unlock(&prv->rpc_lock);
++	mutex_unlock(&prv->session_lock);
++}
++
++static const struct hvc_backend_ops gh_hvc_ops = {
++	.get_chars = gh_hvc_get_chars,
++	.put_chars = gh_hvc_put_chars,
++	.flush = gh_hvc_flush,
++	.open = gh_hvc_open,
++	.close = gh_hvc_close,
++	.hangup = gh_hvc_close,
++};
++
++static int gh_hvc_notify_console_chars(struct notifier_block *nb,
++				       unsigned long cmd, void *data)
++{
++	const struct gh_rm_notif_vm_console_chars *msg = data;
++	struct gh_hvc_prv *prv;
++	enum gh_vm_names vm_name;
++	unsigned long flags;
++	unsigned int count, copied = 0;
+ 	gh_vmid_t vmid;
+-
+-#ifdef CONFIG_HVC_GUNYAH_CONSOLE
+-	/* tty layer is opening, but kernel has already opened for printk */
+-	if (vm_name == GH_SELF_VM)
+-		return 0;
+-#endif /* CONFIG_HVC_GUNYAH_CONSOLE */
+-
+-	ret = ghd_rm_get_vmid(vm_name, &vmid);
+-	if (ret) {
+-		pr_err("%s: gh_rm_get_vmid failed for %d: %d\n", __func__,
+-			vm_name, ret);
+-		return ret;
+-	}
+-
+-	return gh_rm_console_open(vmid);
+-}
+-
+-static void gh_hvc_notify_del(struct hvc_struct *hp, int vm_name)
+-{
+-	int ret;
+-	gh_vmid_t vmid;
+-
+-	if (vm_name < 0 || vm_name >= GH_VM_MAX)
+-		return;
+-
+-#ifdef CONFIG_HVC_GUNYAH_CONSOLE
+-	/* tty layer is closing, but kernel is still using for printk. */
+-	if (vm_name == GH_SELF_VM)
+-		return;
+-#endif /* CONFIG_HVC_GUNYAH_CONSOLE */
+-
+-	if (cancel_work_sync(&gh_hvc_data[vm_name].put_work)) {
+-		/* flush the fifo */
+-		gh_hvc_put_work_fn(&gh_hvc_data[vm_name].put_work);
+-	}
+-
+-	ret = ghd_rm_get_vmid(vm_name, &vmid);
+-	if (ret)
+-		return;
+-
+-	ret = gh_rm_console_close(vmid);
+-
+-	if (ret)
+-		pr_err("%s: failed close VM%d console - %d\n", __func__,
+-			vm_name, ret);
+-
+-	kfifo_reset(&gh_hvc_data[vm_name].get_fifo);
++	int ret;
++
++	if (cmd != GH_RM_NOTIF_VM_CONSOLE_CHARS || !msg)
++		return NOTIFY_DONE;
++	/* The native RM receive boundary validates the header and actual body. */
++	vmid = get_unaligned_le16(&msg->vmid);
++	count = get_unaligned_le16(&msg->num_bytes);
++	ret = gh_rm_get_vm_name(vmid, &vm_name);
++	if (ret || (unsigned int)vm_name >= GH_VM_MAX) {
++		pr_warn_ratelimited("unknown console VMID %u: %d\n", vmid, ret);
++		return NOTIFY_OK;
++	}
++
++	mutex_lock(&gh_hvc_notify_lock);
++	prv = &gh_hvc_data[vm_name];
++	spin_lock_irqsave(&prv->fifo_lock, flags);
++	if (prv->backend && prv->online && prv->rx_enabled)
++		copied = kfifo_in(&prv->get_fifo, msg->bytes, count);
++	spin_unlock_irqrestore(&prv->fifo_lock, flags);
++	if (copied) {
++		/* The notification lock keeps this pointer alive through polling. */
++		hvc_backend_poll(prv->backend);
++		if (copied < count)
++			pr_warn_ratelimited("dropped %u bytes from VM%d: full fifo\n",
++					    count - copied, vm_name);
++	}
++	mutex_unlock(&gh_hvc_notify_lock);
++	return NOTIFY_OK;
+ }
+ 
+ static struct notifier_block gh_hvc_nb = {
+ 	.notifier_call = gh_hvc_notify_console_chars,
+ };
+ 
+-static const struct hv_ops gh_hv_ops = {
+-	.get_chars = gh_hvc_get_chars,
+-	.put_chars = gh_hvc_put_chars,
+-	.flush = gh_hvc_flush,
+-	.notifier_add = gh_hvc_notify_add,
+-	.notifier_del = gh_hvc_notify_del,
+-	.notifier_hangup = gh_hvc_notify_del,
+-};
+-
+-#ifndef CONFIG_HVC_GUNYAH_CONSOLE
+-static int gh_hvc_vm_state(struct notifier_block *this,
+-				       unsigned long cmd, void *data)
++/* Caller holds lifecycle_lock. Never remove while holding notify/RPC locks. */
++static void gh_hvc_retire(struct gh_hvc_prv *prv)
++{
++	struct hvc_backend *backend;
++
++	gh_hvc_set_online(prv, false);
++	mutex_lock(&gh_hvc_notify_lock);
++	backend = prv->backend;
++	prv->backend = NULL;
++	mutex_unlock(&gh_hvc_notify_lock);
++	if (backend)
++		hvc_backend_remove(backend);
++	/* Module exit can prevent the core from acquiring our callback owner. */
++	gh_hvc_close(prv);
++}
++
++/* Caller holds lifecycle_lock, and the previous backend is fully retired. */
++static int gh_hvc_recreate(struct gh_hvc_prv *prv)
++{
++	struct hvc_backend *backend;
++	int ret;
++
++	backend = hvc_backend_alloc(&gh_hvc_ops, prv, 256, THIS_MODULE);
++	if (IS_ERR(backend))
++		return PTR_ERR(backend);
++
++	mutex_lock(&gh_hvc_notify_lock);
++	gh_hvc_set_online(prv, true);
++	ret = hvc_backend_publish(&backend, 1);
++	if (!ret)
++		prv->backend = backend;
++	else
++		gh_hvc_set_online(prv, false);
++	mutex_unlock(&gh_hvc_notify_lock);
++	if (ret)
++		hvc_backend_remove(backend);
++	return ret;
++}
++
++static int gh_hvc_vm_state(struct notifier_block *nb,
++			   unsigned long cmd, void *data)
+ {
+ 	struct gh_hvc_prv *prv;
+ 	enum gh_vm_names vm_name;
+-	gh_vmid_t vmid = *((gh_vmid_t *)data);
+-	int ret;
+-
++	gh_vmid_t vmid;
++	int ret;
++
++	if ((cmd != GH_VM_EXITED && cmd != GH_VM_BEFORE_POWERUP) || !data)
++		return NOTIFY_DONE;
++	vmid = *(gh_vmid_t *)data;
++	mutex_lock(&gh_hvc_lifecycle_lock);
++	if (gh_hvc_stopping)
++		goto out;
+ 	ret = gh_rm_get_vm_name(vmid, &vm_name);
+-	if (ret)
+-		return NOTIFY_DONE;
+-
++	if (ret || (unsigned int)vm_name >= GH_VM_MAX)
++		goto out;
++	prv = &gh_hvc_data[vm_name];
+ 	if (cmd == GH_VM_EXITED) {
+-		if (gh_hvc_data[vm_name].hvc) {
+-			hvc_remove(gh_hvc_data[vm_name].hvc);
+-			gh_hvc_data[vm_name].hvc = NULL;
+-		}
+-	} else if (cmd == GH_VM_BEFORE_POWERUP) {
+-		/*
+-		 * We have already setup the hvc at init for the first
+-		 * boot of the VM. Setup only for the consecutive boots.
+-		 */
+-		if (gh_hvc_data[vm_name].hvc)
+-			return NOTIFY_DONE;
+-
+-		prv = &gh_hvc_data[vm_name];
+-		prv->hvc = hvc_alloc(gh_vm_name_to_vtermno(vm_name), vm_name, &gh_hv_ops,
+-				     256);
+-		ret = PTR_ERR_OR_ZERO(prv->hvc);
+-		if (ret) {
+-			prv->hvc = NULL;
+-			pr_err("Failed to alloc hvc %d\n", ret);
+-		}
+-	}
+-
++		gh_hvc_retire(prv);
++	} else if (!prv->backend) {
++		/* The first VM boot uses the console allocated during module init. */
++		ret = gh_hvc_recreate(prv);
++		if (ret)
++			pr_err("failed to recreate VM%d console: %d\n", vm_name, ret);
++	}
++out:
++	mutex_unlock(&gh_hvc_lifecycle_lock);
+ 	return NOTIFY_DONE;
+ }
+ 
+ static struct notifier_block gh_hvc_vm_nb = {
+ 	.notifier_call = gh_hvc_vm_state,
+ };
+-#endif
+-
+-#ifdef CONFIG_HVC_GUNYAH_CONSOLE
+-static int __init hvc_gh_console_init(void)
+-{
+-	int ret;
+-
+-	/* Need to call RM CONSOLE_OPEN before console can be used */
+-	ret = gh_rm_console_open(0);
+-	if (ret)
+-		return ret;
+-
+-	ret = hvc_instantiate(gh_vm_name_to_vtermno(GH_SELF_VM), 0,
+-			      &gh_hv_ops);
+-
+-	return ret < 0 ? -ENODEV : 0;
+-}
+-#else
+-static int __init hvc_gh_console_init(void)
+-{
+-	int i = 1, j, ret = 0;
+-
+-	/*
+-	 * Initiate the self console to 0.
+-	 * If it fails, DCC must be connected, try 1.
+-	 */
+-	ret = hvc_instantiate(gh_vm_name_to_vtermno(GH_SELF_VM), 0,
+-			      &gh_hv_ops);
+-
+-	if (ret) {
+-		ret = hvc_instantiate(gh_vm_name_to_vtermno(GH_SELF_VM), 1,
+-			      &gh_hv_ops);
+-		if (ret)
+-			goto fail;
+-
+-		i++;
+-	}
+-
+-	for (j = 1; j < GH_VM_MAX; j++, i++) {
+-		ret = hvc_instantiate(gh_vm_name_to_vtermno(j), i,
+-			      &gh_hv_ops);
+-		if (ret)
+-			goto fail;
+-	}
+-
+-	return 0;
+-
+-fail:
+-	return -ENODEV;
+-}
+-#endif /* CONFIG_HVC_GUNYAH_CONSOLE */
+ 
+ static int __init hvc_gh_init(void)
+ {
+-	int i, ret = 0;
++	struct hvc_backend *backends[GH_VM_MAX] = { };
++	bool rm_registered = false, vm_registered = false;
+ 	struct gh_hvc_prv *prv;
+-
+-	/* Must initialize fifos and work before calling hvc_gh_console_init */
++	int i, ret;
++
++	mutex_lock(&gh_hvc_lifecycle_lock);
+ 	for (i = 0; i < GH_VM_MAX; i++) {
+ 		prv = &gh_hvc_data[i];
+ 		prv->vm_name = i;
++		spin_lock_init(&prv->fifo_lock);
++		mutex_init(&prv->session_lock);
++		mutex_init(&prv->rpc_lock);
+ 		INIT_KFIFO(prv->get_fifo);
+ 		INIT_KFIFO(prv->put_fifo);
+ 		INIT_WORK(&prv->put_work, gh_hvc_put_work_fn);
+ 	}
+-
+-	/* Must instantiate console before calling hvc_alloc */
+-	hvc_gh_console_init();
+-
++	/* Private allocation reserves no console slot or visible TTY. */
+ 	for (i = 0; i < GH_VM_MAX; i++) {
+-		prv = &gh_hvc_data[i];
+-		prv->hvc = hvc_alloc(gh_vm_name_to_vtermno(i), i, &gh_hv_ops,
+-				     256);
+-		ret = PTR_ERR_OR_ZERO(prv->hvc);
+-		if (ret)
+-			goto bail;
+-	}
+-
++		backends[i] = hvc_backend_alloc(&gh_hvc_ops, &gh_hvc_data[i],
++						256, THIS_MODULE);
++		if (IS_ERR(backends[i])) {
++			ret = PTR_ERR(backends[i]);
++			backends[i] = NULL;
++			goto fail;
++		}
++	}
+ 	ret = gh_rm_register_notifier(&gh_hvc_nb);
+ 	if (ret)
+-		goto bail;
+-
+-#ifndef CONFIG_HVC_GUNYAH_CONSOLE
++		goto fail;
++	rm_registered = true;
+ 	ret = gh_register_vm_notifier(&gh_hvc_vm_nb);
+-	if (ret) {
++	if (ret)
++		goto fail;
++	vm_registered = true;
++
++	mutex_lock(&gh_hvc_notify_lock);
++	for (i = 0; i < GH_VM_MAX; i++)
++		gh_hvc_set_online(&gh_hvc_data[i], true);
++	/* All fallible setup is complete before atomic group publication. */
++	ret = hvc_backend_publish(backends, GH_VM_MAX);
++	if (!ret)
++		for (i = 0; i < GH_VM_MAX; i++)
++			gh_hvc_data[i].backend = backends[i];
++	else
++		for (i = 0; i < GH_VM_MAX; i++)
++			gh_hvc_set_online(&gh_hvc_data[i], false);
++	mutex_unlock(&gh_hvc_notify_lock);
++	if (ret)
++		goto fail;
++	mutex_unlock(&gh_hvc_lifecycle_lock);
++	return 0;
++
++fail:
++	gh_hvc_stopping = true;
++	mutex_unlock(&gh_hvc_lifecycle_lock);
++	/* Draining notifiers may wait for either lifecycle or notification lock. */
++	if (vm_registered)
++		gh_unregister_vm_notifier(&gh_hvc_vm_nb);
++	if (rm_registered)
+ 		gh_rm_unregister_notifier(&gh_hvc_nb);
+-		goto bail;
+-	}
+-#endif /* !CONFIG_HVC_GUNYAH_CONSOLE */
+-
+-	return 0;
+-bail:
+-	for (--i; i >= 0; i--) {
+-		hvc_remove(gh_hvc_data[i].hvc);
+-		gh_hvc_data[i].hvc = NULL;
+-	}
+-	return 0;
+-}
+-late_initcall(hvc_gh_init);
+-
+-static __exit void hvc_gh_exit(void)
++	for (i = 0; i < GH_VM_MAX; i++)
++		if (backends[i])
++			hvc_backend_remove(backends[i]);
++	return ret;
++}
++module_init(hvc_gh_init);
++
++static void __exit hvc_gh_exit(void)
+ {
+ 	int i;
+ 
+-#ifndef CONFIG_HVC_GUNYAH_CONSOLE
++	mutex_lock(&gh_hvc_lifecycle_lock);
++	gh_hvc_stopping = true;
++	for (i = 0; i < GH_VM_MAX; i++)
++		gh_hvc_set_online(&gh_hvc_data[i], false);
++	mutex_unlock(&gh_hvc_lifecycle_lock);
+ 	gh_unregister_vm_notifier(&gh_hvc_vm_nb);
+-#endif /* !CONFIG_HVC_GUNYAH_CONSOLE */
+ 	gh_rm_unregister_notifier(&gh_hvc_nb);
+-
++	mutex_lock(&gh_hvc_lifecycle_lock);
+ 	for (i = 0; i < GH_VM_MAX; i++)
+-		if (gh_hvc_data[i].hvc) {
+-			hvc_remove(gh_hvc_data[i].hvc);
+-			gh_hvc_data[i].hvc = NULL;
+-		}
++		gh_hvc_retire(&gh_hvc_data[i]);
++	mutex_unlock(&gh_hvc_lifecycle_lock);
+ }
+ module_exit(hvc_gh_exit);
+ 

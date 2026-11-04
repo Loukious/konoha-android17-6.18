@@ -230,7 +230,7 @@ static int pmic_glink_debug_read_regs(struct pmic_glink_debug_dev *gd, u32 bus_i
 {
 	int ret, count;
 
-	if (!len || !buf || sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
+	if (!len || !buf || sid > 0x7f || len > ((0x80 - sid) * 0x10000UL - addr))
 		return -EINVAL;
 	mutex_lock(&gd->lock);
 	do {
@@ -261,7 +261,7 @@ static int pmic_glink_debug_write_regs(struct pmic_glink_debug_dev *gd, u32 bus_
 {
 	int ret, count;
 
-	if (!len || !buf || sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
+	if (!len || !buf || sid > 0x7f || len > ((0x80 - sid) * 0x10000UL - addr))
 		return -EINVAL;
 	mutex_lock(&gd->lock);
 	do {
@@ -299,6 +299,9 @@ static int spmi_glink_read_cmd(struct spmi_controller *ctrl, u8 opc, u8 sid,
 	struct spmi_glink_ctrl *spmi_gctrl = spmi_controller_get_drvdata(ctrl);
 	int ret;
 
+	if (sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
+		return -EINVAL;
+
 	ret = pmic_glink_debug_read_regs(spmi_gctrl->gd,
 			spmi_gctrl->bus_id, sid, addr, buf, len);
 	if (ret < 0)
@@ -314,6 +317,9 @@ static int spmi_glink_write_cmd(struct spmi_controller *ctrl, u8 opc, u8 sid,
 {
 	struct spmi_glink_ctrl *spmi_gctrl = spmi_controller_get_drvdata(ctrl);
 	int ret;
+
+	if (sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
+		return -EINVAL;
 
 	ret = pmic_glink_debug_write_regs(spmi_gctrl->gd,
 			spmi_gctrl->bus_id, sid, addr, buf, len);
@@ -343,7 +349,7 @@ static int i2c_glink_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int n
 	bus_id = i2c_gctrl->bus_id;
 
 	for (i = 0; i < num; i++) {
-		if (msgs[i].len < 2 || !msgs[i].buf || msgs[i].addr > 0xf || msgs[i].flags) {
+		if (msgs[i].len < 2 || !msgs[i].buf || msgs[i].addr > 0x7f || msgs[i].flags) {
 			dev_dbg(gd->dev, "%s: unexpected msg: addr=%#x, flags=%#x, len=%u\n",
 				__func__, msgs[i].addr, msgs[i].flags,
 				msgs[i].len);

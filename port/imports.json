@@ -30083,5 +30083,233 @@
     "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
     "path": "drivers/soc/qcom/qcom_cpuss_sleep_stats.c",
     "blob": "bd53d5c4a01fccb0d5ddf08fe90f22b82754adf2"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/qcom-lpm.c",
+    "blob": "90cd150ee769acfcfdc88b9f70fc59009a017286"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/qcom-cluster-lpm.c",
+    "blob": "a7bc843746313178b2101ac1d16887bcc0e8a862"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/qcom-lpm-sysfs.c",
+    "blob": "fd17b0cfa3daa4451f66cda2b0b962b509559985"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/qcom-lpm.h",
+    "blob": "6c88d2919064cc2faa61eeceaaaeddf942dece1e"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/trace-qcom-lpm.h",
+    "blob": "f9015b22ca28e80c1369fc1cbe0841e060883be2"
+  },
+  {
+    "project": "baseline/kernel/qcom/sm8850",
+    "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+    "path": "drivers/cpuidle/governors/trace-cluster-lpm.h",
+    "blob": "7f0adb7dbaf2497f23b2f2c1f7fd5b3bbca1fb91"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/virt/gunyah/gh_rm_booster.c",
+    "blob": "56e19400d9965bcef27aa7c0b1236b46a740cfc9"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/virt/gunyah/gh_rm_booster.h",
+    "blob": "52b61fdc31b95c5611ceaded6fed098328512f46"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/tmecom/tmecom.c",
+    "blob": "04ecf8e0c2aa895f15f128c47e9170f65d17cd83"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/tmecom/tmecom.h",
+    "blob": "7e0a6a4f4c9a6b8fe5214c99f34327b54a37495a"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/tmecom/tmelog.c",
+    "blob": "e8766069b88550d75b97c9845bf5a920dfd84a9c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/tmelog.h",
+    "blob": "0cb8d3a3aa2e3b0aeb21218b8e761fec2336fca0"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/virt/gunyah/gh_panic_notifier.c",
+    "blob": "482115925fb2e16a8f381c2658fdf7a355fb9e3f"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/gunyah/gh_panic_notifier.h",
+    "blob": "bfbbb916fa77b991863e91e2f88e2b31350da3b0"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/mem-hooks.c",
+    "blob": "e7b7560dcdc17cc74a06ae63e625f7692b4dfa2c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/edac/qcom_edac.c",
+    "blob": "345cae059c029af7c55f4e0ac14ba391097a3159"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/edac/edac_mc.h",
+    "blob": "881b00eadf7a5f87552fcf9e07913395eab56b80"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/edac/edac_device.h",
+    "blob": "034711d71ebf63de1300283d4f49c2b7f683fa50"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/cpufreq/qcom-cpufreq-hw-debug.c",
+    "blob": "a2c36b50c3f775f6eeffcbd0365c7dff44e14580"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/charger-ulog-glink.c",
+    "blob": "43bd9e8a14648604911adfa8fbb8175c5c2d4fd6"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sysmon_subsystem_stats.c",
+    "blob": "30e299d098e42cbf29d794bbfd4ab688751216ce"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "include/linux/soc/qcom/sysmon_subsystem_stats.h",
+    "blob": "18a8acb01ee0a7cb1b218753299e236a8f5038e5"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/sys_pm_vx.c",
+    "blob": "4dea64739372bd09da50f61fee583da489cf96ac"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/mfd/qcom-i2c-pmic.c",
+    "blob": "2011ead9d25bfd6ef328e348d45e1e621f4d9c52"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/qti_battery_debug.c",
+    "blob": "c942392271a3bcfcd4c5b0d99defac2fa645bd1b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/soc/qcom/hung_task_enh.c",
+    "blob": "d0e6098dfc0d6d1e2c358e0360f5d6a1cfdcd24b"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/iommu/qcom-iommu-debug.c",
+    "blob": "ae69990f9f3c0a3c5f64b8f5e3605b3a9af08b5e"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/iommu/qcom-iommu-debug-user.c",
+    "blob": "fbd9823809bfb22bda2ba277139977126234895c"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/iommu/qcom-iommu-debug.h",
+    "blob": "3c47de41fd9a6c8a8f86a44de4484f26a4e97e46"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/tty/hvc/hvc_gunyah.c",
+    "blob": "eb18ed8a795eabdc307852fc82d70947c67d8835"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdcore.c",
+    "blob": "64808493b4f5ead22222616a732b5544c6d98539"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdsuper.c",
+    "blob": "b7e3763c47f0cdf6d27b8145ffbb26b281179311"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdconcat.c",
+    "blob": "f56f44aa8625ce27efe5f806a82ff89aec558e1a"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdpart.c",
+    "blob": "2876501a7814579c1b101bd1313f412a21fb19a6"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdchar.c",
+    "blob": "335c702633ffe023372477d536ce5320703b0676"
+  },
+  {
+    "project": "common",
+    "revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
+    "path": "drivers/mtd/mtdcore.h",
+    "blob": "b014861a06a6f28b50e137274ee93cca8a17f303"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/mtd/devices/block2mtd.c",
+    "blob": "79a820ed07f3295dd70fb6cc510e9b6e632e1ae8"
+  },
+  {
+    "project": "baseline/kernel/xiaomi/sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "path": "drivers/mtd/mtdoops.c",
+    "blob": "7b82ec65c674958e40afb435b322cb028f0fb123"
   }
 ]

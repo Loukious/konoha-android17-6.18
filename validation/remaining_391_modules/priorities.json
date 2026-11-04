@@ -1,0 +1,2183 @@
+{
+  "checkpoint": "Onyx Linux 6.18.38 / 391 platform modules",
+  "installed_platform_modules": 391,
+  "installed_packaged_modules": 471,
+  "runtime_summary": "validation/onyx-runtime-summary-20261104.md",
+  "pinned_sources": "port/sources.json",
+  "baseline_path_scope": "source_files are relative to the pinned build workspace; repositories and revisions are recorded in port/sources.json.",
+  "hardware_context": {
+    "device": "Onyx / SM8735",
+    "wireless_charging": false,
+    "validation_scope": "One global POCO F7 development phone; both Tuna DT variants checked offline."
+  },
+  "priority_counts": {
+    "P4 — hold: hardware or feature use unconfirmed": 34,
+    "P3 — low: logging, diagnostics, tracing and dependencies": 19,
+    "Skip — wireless charging absent": 5,
+    "Skip — disabled Onyx DT hardware": 4,
+    "Skip — alternate Sun/Kera SoCs": 17
+  },
+  "unresolved_names": 79,
+  "modules": [
+    {
+      "name": "mhi_dev_satellite",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "ADSP_0..3 channels belong to the CNSS2 PCI/MHI transport. This Onyx uses WCN7750 through ICNSS2; live MHI and PCI buses are empty and CNSS2 is unbound. The ADSP mhi_sat RPMsg endpoint alone cannot supply a controller. Require an active compatible MHI controller before porting.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/bus/mhi/devices/mhi_satellite.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "bootmonitor",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/xiaomi/bootmonitor/bm_device.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/xiaomi/bootmonitor/bm_netlink.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/xiaomi/bootmonitor/boot_monitor.c"
+        ],
+        "source_compatibles": [
+          "xiaomi,bootmonitor_pmsg"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/bootmonitor_pmsg@0xa3500000",
+              "compatible": [
+                "xiaomi,bootmonitor_pmsg"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/bootmonitor_pmsg@0xa3500000",
+              "compatible": [
+                "xiaomi,bootmonitor_pmsg"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chipreg",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "The current MTD/block2mtd/mtdoops stack already archives reboot records. This optional chip, block-device or partition-parser provider is not required by that setup.",
+      "source_evidence": {
+        "category": "MTD and persistent logging",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/chips/chipreg.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "coresight_stm",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/coresight/coresight-stm.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": true,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "coresight_tmc_sec",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/coresight/coresight-tmc-sec.c"
+        ],
+        "source_compatibles": [
+          "qcom,coresight-secure-etr"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/tmc-modem",
+              "compatible": [
+                "qcom,coresight-secure-etr"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/tmc-modem",
+              "compatible": [
+                "qcom,coresight-secure-etr"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "coresight_uetm",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/coresight/coresight-uetm.c"
+        ],
+        "source_compatibles": [
+          "qcom,coresight-uetm"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "diag",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "system_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "dmesg_dumper",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Deferred: current HLOS mode waits for TrustedVM BEFORE_POWERUP and shared-memory setup. User set aside protected-guest/HVC provisioning; not an independent HLOS crash-log provider.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/dmesg_dumper.c"
+        ],
+        "source_compatibles": [
+          "qcom,dmesg-dump"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/dmesg-dump",
+              "compatible": [
+                "qcom,dmesg-dump"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/dmesg-dump",
+              "compatible": [
+                "qcom,dmesg-dump"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "glink_probe",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "The live /soc/qcom,glink node has only name/compatible properties and no transport children. The driver only registers SSR transports from those children, so it has no current transport to manage. Require enabled transport children before porting.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/glink_probe.c"
+        ],
+        "source_compatibles": [
+          "qcom,glink"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,glink",
+              "compatible": [
+                "qcom,glink"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,glink",
+              "compatible": [
+                "qcom,glink"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "gpu_dump_skip_cdev",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "The live platform bus has no qcom,gpu-dump-skip-cdev device and the preserved native DT lacks that compatible. Its IMEM descriptor alone cannot instantiate the cooling provider. Require an enabled compatible node and NVMEM cell before porting.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/thermal/qcom/gpu_dump_skip_cdev.c"
+        ],
+        "source_compatibles": [
+          "qcom,gpu-dump-skip-cdev"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "ipclite_test",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/synx-kernel/msm/synx/test/ipclite_test.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "mtd_blkdevs",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "The current MTD/block2mtd/mtdoops stack already archives reboot records. This optional chip, block-device or partition-parser provider is not required by that setup.",
+      "source_evidence": {
+        "category": "MTD and persistent logging",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/mtd_blkdevs.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "mtdblock",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "The current MTD/block2mtd/mtdoops stack already archives reboot records. This optional chip, block-device or partition-parser provider is not required by that setup.",
+      "source_evidence": {
+        "category": "MTD and persistent logging",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/mtdblock.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "ofpart",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "The current MTD/block2mtd/mtdoops stack already archives reboot records. This optional chip, block-device or partition-parser provider is not required by that setup.",
+      "source_evidence": {
+        "category": "MTD and persistent logging",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/parsers/ofpart_bcm4908.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/parsers/ofpart_core.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/mtd/parsers/ofpart_linksys_ns.c"
+        ],
+        "source_compatibles": [
+          "brcm,bcm4908-partitions",
+          "fixed-partitions",
+          "linksys,ns-partitions"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qcom_dynamic_ramoops",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "The preserved Onyx DT uses the already bound a3500000.ramoops_region driver and mounted pstore; no qcom,ramoops node selects this alternate dynamic-child provider. Require that native interface before porting; retain the current working pstore memory layout.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/qcom_dynamic_ramoops.c"
+        ],
+        "source_compatibles": [
+          "qcom,ramoops"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "rdbg",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/char/rdbg.c"
+        ],
+        "source_compatibles": [
+          "qcom,smp2p-interrupt-rdbg-2-in",
+          "qcom,smp2p-interrupt-rdbg-2-out",
+          "qcom,smp2p-interrupt-rdbg-5-in",
+          "qcom,smp2p-interrupt-rdbg-5-out"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_2_out",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-2-out"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_2_in",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-2-in"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_5_out",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-5-out"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_5_in",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-5-in"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_2_out",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-2-out"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_2_in",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-2-in"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_5_out",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-5-out"
+              ],
+              "enabled": true
+            },
+            {
+              "path": "/soc/qcom,smp2p_interrupt_rdbg_5_in",
+              "compatible": [
+                "qcom,smp2p-interrupt-rdbg-5-in"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "stm_console",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/console.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "stm_core",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/core.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/policy.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "stm_ftrace",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/ftrace.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "stm_heartbeat",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/heartbeat.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "stm_p_ost",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional native diagnostics or recovery parity; no demonstrated ordinary-use failure requires this provider. Review its source lifetime and feature applicability before porting.",
+      "source_evidence": {
+        "category": "Tracing",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwtracing/stm/p_ost.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "thermal_config",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Optional thermal configuration dump. Safe zone iteration and reference acquisition across concurrent removal require a core lifetime API before porting.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/thermal/qcom/thermal_config.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "tz_log_dlkm",
+      "priority": "P3 — low: logging, diagnostics, tracing and dependencies",
+      "reason": "Native DT endpoint exists. Firmware log-buffer stop/drain/replacement lifetime and parser bounds must be established before deployment.",
+      "source_evidence": {
+        "category": "Logging, diagnostics and tests",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/securemsm-kernel/tz_log/tz_log.c"
+        ],
+        "source_compatibles": [
+          "qcom,tz-log"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/tz-log@14680720",
+              "compatible": [
+                "qcom,tz-log"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/tz-log@14680720",
+              "compatible": [
+                "qcom,tz-log"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "clk_scmi",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Native SCMI clock driver matches SCMI_PROTOCOL_CLOCK (0x14), not every SCMI firmware device. Live protocol devices report 0x10 and 0x80, not clock protocol 0x14. Require a clock protocol/device or clock consumer before porting; vendor SCMI control services alone do not establish clock use.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/clk-scmi.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "cqhci",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mmc/host/cqhci-core.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/mmc/host/cqhci-crypto-qti.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/mmc/host/cqhci-crypto.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "ddr_cdev",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/thermal/qcom/ddr_cdev.c"
+        ],
+        "source_compatibles": [
+          "qcom,ddr-cooling-device"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "i3c_master_msm_geni",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/i3c/master/i3c-master-msm-geni.c"
+        ],
+        "source_compatibles": [
+          "qcom,geni-i3c"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "leds_awrgb21024",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "China-only notification LED feature is outside active scope; a fitted controller or required output is not established on the development global Onyx.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/leds/leds-awrgb21024.c"
+        ],
+        "source_compatibles": [
+          "awinic,aw21024_led"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,qupv3_1_geni_se@ac0000/i2c@a98000/aw21024_led@30",
+              "compatible": [
+                "awinic,aw21024_led"
+              ],
+              "enabled": true
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,qupv3_1_geni_se@ac0000/i2c@a98000/aw21024_led@30",
+              "compatible": [
+                "awinic,aw21024_led"
+              ],
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "leds_qcom_flash",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/leds/flash/leds-qcom-flash.c"
+        ],
+        "source_compatibles": [
+          "qcom,spmi-flash-led"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "lt9611uxc",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/gpu/drm/bridge/lt9611uxc.c"
+        ],
+        "source_compatibles": [
+          "lt,lt9611uxc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "max31760_fan",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/thermal/qcom/max31760_fan.c"
+        ],
+        "source_compatibles": [
+          "maxim,max31760"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "mem_offline",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No matching applied Onyx DT node, live mem-offline interface, or Onyx init caller. Hold memory offlining until runtime/feature evidence appears.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/mem-offline.c"
+        ],
+        "source_compatibles": [
+          "qcom,mem-offline"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "mhi_dev_uci",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Native MHI channel IDs are LOOPBACK, SAHARA, DIAG, EFS, QMI0/1, TF, DCI and DUN. No MHI devices are currently enumerated and no Onyx init caller was found. Wireless MHI transport alone does not establish UCI channels.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/bus/mhi/devices/mhi_uci.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "nb7vpq904m",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/usb/redriver/nb7vpq904m.c"
+        ],
+        "source_compatibles": [
+          "onnn,redriver"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "phy_msm_m31_eusb2",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/usb/phy/phy-msm-m31-eusb2.c"
+        ],
+        "source_compatibles": [
+          "qcom,usb-m31-eusb2-phy"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "phy_qcom_emu",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/usb/phy/phy-qcom-emu.c"
+        ],
+        "source_compatibles": [
+          "qcom,usb-emu-phy"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "phy_qcom_ufs_qrbtc_sdm845",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/phy/qualcomm/phy-qcom-ufs-qrbtc-sdm845.c"
+        ],
+        "source_compatibles": [
+          "qcom,ufs-phy-qrbtc-sdm845"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "pinctrl_spmi_mpp",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/pinctrl/qcom/pinctrl-spmi-mpp.c"
+        ],
+        "source_compatibles": [
+          "qcom,pm8019-mpp",
+          "qcom,pm8226-mpp",
+          "qcom,pm8841-mpp",
+          "qcom,pm8916-mpp",
+          "qcom,pm8937-mpp",
+          "qcom,pm8941-mpp",
+          "qcom,pm8950-mpp",
+          "qcom,pm8994-mpp",
+          "qcom,pma8084-mpp",
+          "qcom,pmi8950-mpp",
+          "qcom,pmi8994-mpp"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "ptp_kvm",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "system_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "q2spi_geni",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/spi/q2spi-gsi.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/spi/q2spi-msm-geni.c"
+        ],
+        "source_compatibles": [
+          "qcom,q2spi-msm-geni"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qcom_glink_spss",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Native helper belongs to the SPSS remoteproc stack. No SPSS DT provider or active SPSS service was established. Keep this dependency held with qcom_spss.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/rpmsg/qcom_glink_spss.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qcom_hv_haptics",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/input/misc/qcom-hv-haptics.c"
+        ],
+        "source_compatibles": [
+          "qcom,hv-haptics",
+          "qcom,pm5100-haptics",
+          "qcom,pm8350b-haptics"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qcom_spss",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No native SPSS PAS compatible matches applied Onyx DT. Group with SPSS GLINK, utils and spcom; ROM permission/library references do not establish active SPSS hardware or firmware.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/remoteproc/qcom_spss.c"
+        ],
+        "source_compatibles": [
+          "qcom,kalama-spss-pas",
+          "qcom,pineapple-spss-pas",
+          "qcom,sun-spss-pas",
+          "qcom,waipio-spss-pas"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qmp_dlkm",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/audio-kernel/asoc/codecs/qmp1000/qmp-aggregator.c",
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/audio-kernel/asoc/codecs/qmp1000/qmp-dmic.c"
+        ],
+        "source_compatibles": [
+          "qcom,qmp-sdca-dmic"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qsee_ipc_irq_bridge",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No matching applied Onyx DT node or live /dev/qsee_ipc_irq_spss. ueventd ownership declaration alone is insufficient to establish use.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/qsee_ipc_irq_bridge.c"
+        ],
+        "source_compatibles": [
+          "qcom,qsee-ipc-irq-bridge"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qti_dmof_scmi",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No qcom,dmof node in applied Onyx DT and no Onyx init caller. Hold this specific firmware control feature; other SCMI clients remain independent.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/soc/qcom/qti_dmof_scmi.c"
+        ],
+        "source_compatibles": [
+          "qcom,dmof"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qti_ocp_notifier",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No qcom,regulator-ocp-notifier node in applied Onyx DT and no Onyx init caller. This does not mean hardware overcurrent protection is absent; hold this software notifier provider.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/regulator/qti-ocp-notifier.c"
+        ],
+        "source_compatibles": [
+          "qcom,regulator-ocp-notifier"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "sc7601",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_hardware_ic/load_switch_ic/sc7601/sc7601.c"
+        ],
+        "source_compatibles": [
+          "sc7601"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "sc8541",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_hardware_ic/charge_pump_ic/sc8541/sc8541.c"
+        ],
+        "source_compatibles": [
+          "sc8541",
+          "sc8541_master",
+          "sc8541_slave"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "snd_soc_hdmi_codec",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/sound/soc/codecs/hdmi-codec.c"
+        ],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "spcom",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No qcom,spcom DT node or live /dev/spcom. libspcom packaging and ueventd ownership are recorded but do not establish an active service. Hold with SPSS stack.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/spu-kernel/drivers/spcom.c"
+        ],
+        "source_compatibles": [
+          "qcom,spcom"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "spss_utils",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "No qcom,spss-utils DT node or live /dev/spss_utils. Fingerprint SELinux permission and ueventd declarations are recorded but do not demonstrate accesses. Hold with SPSS stack.",
+      "source_evidence": {
+        "category": "Security, IPC and virtualization",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/spu-kernel/drivers/spss_utils.c"
+        ],
+        "source_compatibles": [
+          "qcom,spss-utils"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "xhci_pci_renesas",
+      "priority": "P4 — hold: hardware or feature use unconfirmed",
+      "reason": "Do not spend port effort until the physical peripheral or software feature is demonstrated. The global GL phone exposes no AW21024 lights; CN overlay/shared DT do not establish fitted hardware. Preserve its draft and require new applicability evidence. Missing OF matches do not prove absence. ddr_cdev has no matching applied Onyx DT node.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "system_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [],
+        "source_compatibles": [],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "mca_basic_wireless",
+      "priority": "Skip — wireless charging absent",
+      "reason": "User confirms Onyx has no wireless charging. The last two modules implement wireless ICs; none of these five belongs in the Onyx port queue.",
+      "source_evidence": {
+        "category": "Wireless charging strategies",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_strategy/strategy_wireless/mca_basic_wireless.c"
+        ],
+        "source_compatibles": [
+          "mca,basic_wireless"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/mca_strategy_basic_wireless_class",
+              "compatible": [
+                "mca,basic_wireless"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/mca_strategy_basic_wireless_class",
+              "compatible": [
+                "mca,basic_wireless"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "mca_quick_wireless",
+      "priority": "Skip — wireless charging absent",
+      "reason": "User confirms Onyx has no wireless charging. The last two modules implement wireless ICs; none of these five belongs in the Onyx port queue.",
+      "source_evidence": {
+        "category": "Wireless charging strategies",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_strategy/strategy_wireless/mca_quick_wireless.c"
+        ],
+        "source_compatibles": [
+          "mca,quick_wireless"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/mca_strategy_quick_wireless_class",
+              "compatible": [
+                "mca,quick_wireless"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/mca_strategy_quick_wireless_class",
+              "compatible": [
+                "mca,quick_wireless"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "mca_wireless_revchg",
+      "priority": "Skip — wireless charging absent",
+      "reason": "User confirms Onyx has no wireless charging. The last two modules implement wireless ICs; none of these five belongs in the Onyx port queue.",
+      "source_evidence": {
+        "category": "Wireless charging strategies",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_strategy/strategy_wireless/mca_wireless_revchg.c"
+        ],
+        "source_compatibles": [
+          "mca,wireless_revchg"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/mca_strategy_wireless_revchg_class",
+              "compatible": [
+                "mca,wireless_revchg"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/mca_strategy_wireless_revchg_class",
+              "compatible": [
+                "mca,wireless_revchg"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "nuvolta_1652",
+      "priority": "Skip — wireless charging absent",
+      "reason": "User confirms Onyx has no wireless charging. The last two modules implement wireless ICs; none of these five belongs in the Onyx port queue.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_hardware_ic/wireless_ic/nuvolta_1652/nuvolta_1652.c"
+        ],
+        "source_compatibles": [
+          "fuda,nu1652"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "sc96281_comp",
+      "priority": "Skip — wireless charging absent",
+      "reason": "User confirms Onyx has no wireless charging. The last two modules implement wireless ICs; none of these five belongs in the Onyx port queue.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_hardware_ic/wireless_ic/sc96281/sc96281_charger.c",
+          "baseline/kernel/xiaomi/sm8735/drivers/power/supply/mca/mca_hardware_ic/wireless_ic/sc96281/sc96281_mtp_program.c"
+        ],
+        "source_compatibles": [
+          "sc,sc96281-wireless-charger"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qcom_amoled_regulator",
+      "priority": "Skip — disabled Onyx DT hardware",
+      "reason": "Only disabled matches in both applied Onyx DT variants. Keep native disabled state; reconsider only if this hardware configuration changes.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/regulator/qcom-amoled-regulator.c"
+        ],
+        "source_compatibles": [
+          "qcom,amoled-regulator"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pm7550ba@7/qcom,amoled",
+              "compatible": [
+                "qcom,amoled-regulator"
+              ],
+              "enabled": false
+            },
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pmd802x@4/qcom-amoled",
+              "compatible": [
+                "qcom,amoled-regulator"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pm7550ba@7/qcom,amoled",
+              "compatible": [
+                "qcom,amoled-regulator"
+              ],
+              "enabled": false
+            },
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pmd802x@4/qcom-amoled",
+              "compatible": [
+                "qcom,amoled-regulator"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "qti_amoled_ecm",
+      "priority": "Skip — disabled Onyx DT hardware",
+      "reason": "Only disabled matches in both applied Onyx DT variants. Keep native disabled state; reconsider only if this hardware configuration changes.",
+      "source_evidence": {
+        "category": "Power, thermal and memory",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/hwmon/qti_amoled_ecm.c"
+        ],
+        "source_compatibles": [
+          "qcom,amoled-ecm"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pm7550ba@7/qcom,amoled-ecm@f900",
+              "compatible": [
+                "qcom,amoled-ecm"
+              ],
+              "enabled": false
+            },
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pmd802x@4/amoled-ecm@f900",
+              "compatible": [
+                "qcom,amoled-ecm"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pm7550ba@7/qcom,amoled-ecm@f900",
+              "compatible": [
+                "qcom,amoled-ecm"
+              ],
+              "enabled": false
+            },
+            {
+              "path": "/soc/qcom,spmi@c42d000/qcom,pmd802x@4/amoled-ecm@f900",
+              "compatible": [
+                "qcom,amoled-ecm"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "radio_i2c_rtc6226_qca",
+      "priority": "Skip — disabled Onyx DT hardware",
+      "reason": "Only disabled matches in both applied Onyx DT variants. Keep native disabled state; reconsider only if this hardware configuration changes.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/bt-kernel/rtc6226/radio-rtc6226-common.c",
+          "baseline/kernel/xiaomi/sm8735-modules/qcom/opensource/bt-kernel/rtc6226/radio-rtc6226-i2c.c"
+        ],
+        "source_compatibles": [
+          "rtc6226"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/qcom,qupv3_1_geni_se@ac0000/i2c@a94000/nq@64",
+              "compatible": [
+                "rtc6226"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/qcom,qupv3_1_geni_se@ac0000/i2c@a94000/nq@64",
+              "compatible": [
+                "rtc6226"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sdhci_msm",
+      "priority": "Skip — disabled Onyx DT hardware",
+      "reason": "Only disabled matches in both applied Onyx DT variants. Keep native disabled state; reconsider only if this hardware configuration changes.",
+      "source_evidence": {
+        "category": "Other peripheral and generic drivers",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/mmc/host/sdhci-msm.c"
+        ],
+        "source_compatibles": [
+          "qcom,sdhci-msm-v4",
+          "qcom,sdhci-msm-v5",
+          "qcom,sdm670-sdhci",
+          "qcom,sdm845-sdhci"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [
+            {
+              "path": "/soc/sdhci@8804000",
+              "compatible": [
+                "qcom,sdhci-msm-v5"
+              ],
+              "enabled": false
+            }
+          ],
+          "tuna7": [
+            {
+              "path": "/soc/sdhci@8804000",
+              "compatible": [
+                "qcom,sdhci-msm-v5"
+              ],
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cambistmclkcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/cambistmclkcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-cambistmclkcc",
+          "qcom,sun-cambistmclkcc-v2"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "camcc_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/camcc-kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-camcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "camcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/camcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-camcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "debugcc_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/debugcc-kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-debugcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "debugcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load.recovery",
+          "vendor_dlkm/lib/modules/modules.load"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/debugcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-debugcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "dispcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/dispcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-dispcc",
+          "qcom,sun-dispcc_mx"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "evacc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/evacc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-evacc",
+          "qcom,sun-evacc-v2"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "gcc_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/gcc-kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-gcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "gcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/gcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-gcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "gpucc_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/gpucc-kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-gpucc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "gpucc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/gpucc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-gpucc",
+          "qcom,sun-gx_clkctl"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "pinctrl_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/pinctrl/qcom/pinctrl-kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-tlmm",
+          "qcom,kera-vm-tlmm"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "pinctrl_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/pinctrl/qcom/pinctrl-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-tlmm",
+          "qcom,sun-vm-tlmm"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qnoc_kera",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/interconnect/qcom/kera.c"
+        ],
+        "source_compatibles": [
+          "qcom,kera-aggre1_noc",
+          "qcom,kera-aggre2_noc",
+          "qcom,kera-clk_virt",
+          "qcom,kera-cnoc_cfg",
+          "qcom,kera-cnoc_main",
+          "qcom,kera-gem_noc",
+          "qcom,kera-lpass_ag_noc",
+          "qcom,kera-lpass_lpiaon_noc",
+          "qcom,kera-lpass_lpicx_noc",
+          "qcom,kera-mc_virt",
+          "qcom,kera-mmss_noc",
+          "qcom,kera-nsp_noc",
+          "qcom,kera-pcie_anoc",
+          "qcom,kera-system_noc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "qnoc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/interconnect/qcom/sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-aggre1_noc",
+          "qcom,sun-aggre2_noc",
+          "qcom,sun-clk_virt",
+          "qcom,sun-cnoc_cfg",
+          "qcom,sun-cnoc_main",
+          "qcom,sun-gem_noc",
+          "qcom,sun-lpass_ag_noc",
+          "qcom,sun-lpass_lpiaon_noc",
+          "qcom,sun-lpass_lpicx_noc",
+          "qcom,sun-mc_virt",
+          "qcom,sun-mmss_noc",
+          "qcom,sun-nsp_noc",
+          "qcom,sun-pcie_anoc",
+          "qcom,sun-system_noc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "tcsrcc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/tcsrcc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-tcsrcc"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    },
+    {
+      "name": "videocc_sun",
+      "priority": "Skip — alternate Sun/Kera SoCs",
+      "reason": "These 17 retained names target alternate SoCs. The installed Onyx trees use Tuna/Tuna7 providers.",
+      "source_evidence": {
+        "category": "Sun/Kera board variants",
+        "retained_load_lists": [
+          "vendor_ramdisk/lib/modules/modules.load",
+          "vendor_ramdisk/lib/modules/modules.load.recovery"
+        ],
+        "source_files": [
+          "baseline/kernel/xiaomi/sm8735/drivers/clk/qcom/videocc-sun.c"
+        ],
+        "source_compatibles": [
+          "qcom,sun-videocc",
+          "qcom,sun-videocc-v2"
+        ],
+        "amba_driver": false,
+        "dt_matches": {
+          "tuna": [],
+          "tuna7": []
+        }
+      }
+    }
+  ],
+  "pending_live_functionality": [
+    {
+      "name": "qti_battery_debug",
+      "native_installed": true,
+      "state": "QBG returns 2448 bytes. The corrected stock-compatible 16-byte aggregation request still times out; the cause remains unresolved in the tested kernel/ROM/firmware combination."
+    },
+    {
+      "name": "qcom_iommu_debug",
+      "native_installed": true,
+      "state": "DMA API mappings, coherent CPU access and SMMU ATOS translations pass on the dedicated apps test stream SID 0x400 for 4 KiB, 64 KiB and 1 MiB mappings. Peripheral payload DMA, secure/GPU use cases and full-VA stress remain untested."
+    },
+    {
+      "name": "hvc_gunyah",
+      "native_installed": true,
+      "state": "Autoload and failed-open/unload cleanup pass. All five console opens return RM status 6; useful console access, guest visibility and provisioning remain unresolved and deferred."
+    }
+  ],
+  "resolved_in_this_checkpoint": {
+    "block2mtd": "Port installed; reboot archive passes with temporary policy; normal backend autoload pending ROM build",
+    "mtd": "Port installed; reboot archive passes with temporary policy; normal backend autoload pending ROM build",
+    "mtdoops": "Port installed; reboot archive passes with temporary policy; normal backend autoload pending ROM build",
+    "xhci_sideband": "Already built into accepted GKI"
+  },
+  "deferred_followups": [
+    "HVC/MiTEE guest and console provisioning",
+    "Guest-dependent dmesg_dumper",
+    "China-only notification LED support"
+  ],
+  "fundamental_assessment": "No missing fundamental driver identified for demonstrated ordinary phone operation; broader feature, power and endurance validation remains.",
+  "limits": [
+    "Priorities recommend applicability review; an unavailable retained module name does not establish a missing feature.",
+    "Source and DT matches do not establish fitted hardware, firmware support or tested peripheral behavior.",
+    "Skip and hold dispositions do not modify native load lists or enable disabled hardware.",
+    "Raw device traces, firmware, image and machine-specific installation receipts remain local."
+  ]
+}

@@ -4,28 +4,25 @@ This repository contains the complete POCO F7 (Onyx/SM8735) module port and a
 reproducible GKI build recipe. It tracks Google's `android17-6.18-lts` branch
 and fetches the official **KernelSU Next `dev` branch on every build**.
 
-The initial accepted source is Linux **6.18.33**, with **318 platform modules**
-and **179 port patches**, imported from the working Konoha 6.18 development
-workspace. It includes the Bluetooth power-ownership corrections, the measured
-Onyx PMIC inventory overlay, and the July CoreSight platform-removal correction.
-It also includes WLAN sensor/cooling ownership fixes and the narrowly scoped
-camera/SYNX logging corrections. This 6.18.33 baseline is installed and passed
-startup checks, front/rear photos and short 1080p recordings. Camera synchronization
-recovery itself is unchanged; separate SOF-skip diagnostics remain. New
-LTS/KernelSU builds require device validation.
+The current Onyx source uses Linux **6.18.38** with **391 platform modules**.
+The matched device package contains **471 modules**. It includes native WALT and
+Qualcomm low-power idle support, Gunyah transport and HVC lifetime fixes, battery
+and IOMMU diagnostics, and block-backed MTD kernel/pmsg archival. The source
+snapshot reproduces all **5,042 module files** from pinned imports and patches.
+The local matched image set passed Android, KernelSU root, audio, enforcing
+SELinux and partition-identity checks on the global POCO F7 used for development.
 
-The current candidate uses Linux **6.18.38** with **370 platform modules**.
-It adds native CSR/ETR byte-counter streaming, trace-NoC and TPDM BC/TC/GPR
-controls, fixes reverse-charging gear error handling, and addresses kernel
-camera startup/statistics findings. See [kernel follow-up notes](port/kernel-followup.md)
-for validation limits and the ROM-side findings recorded without ROM changes.
-The remaining-provider batch adds native VBAT protection, memlat, Qualcomm CTI
-and qcom-battery sysfs. See [module port notes](port/remaining-active-modules.md)
-for their validation and hardware limits. A further batch adds native boot/suspend
-diagnostics, IBAT/business providers, SCMI statistics, QMI/TGU, CPUCP logging and
-FAST hints, C1DCVS/DYNPF controls, and dummy/remote ETM trace sources.
-The phone still runs the validated
-352-module candidate; this batch has not been installed.
+The device target is **Onyx / SM8735**. Android and Geekbench report the platform
+name `sun`; the device-tree recipe includes Tuna and Tuna7 with the Onyx overlay.
+Both trees pass offline checks. Hardware testing covers the development phone,
+not every phone or board revision using those names. China-only notification LED
+support and other unconfirmed hardware remain outside the target scope.
+
+Battery aggregation and firmware console availability remain unresolved optional
+diagnostics. Automatic block2mtd attachment requires the saved ROM policy change;
+Wi-Fi concurrent-channel ROM work is also pending. Broad peripheral, suspend,
+power and endurance validation remains. See [current device validation summary](validation/onyx-runtime-summary-20261104.md) and [remaining module inventory](validation/remaining_391_modules/priorities.md). A new upstream or KernelSU build
+requires device validation even when its automated build checks pass.
 
 ## Branch layout
 
@@ -72,13 +69,18 @@ an upstream conflict fails the update without changing the accepted source branc
 Already integrated CoreSight fixes are excluded from the effective patch.
 
 The tracker opens a pull request and explicitly dispatches its complete build
-(GitHub's default token does not trigger a workflow from its own push). Merge
-the update into `android17-6.18` after reviewing its build result. The source
-branch remains pinned and reproducible. A KernelSU-only update rebuilds the
-accepted kernel without changing its GKI source. Successful accepted-source
-builds record their exact revisions, so unchanged upstream inputs do not
-cause daily rebuilds. The daily tracker also rebuilds manual source-branch
-changes. Candidate source edits can be tested through the manual workflow.
+(GitHub's default token does not trigger workflows from its own pushes). A verified
+upstream candidate is automatically fast-forwarded into `android17-6.18`, then
+published as a GitHub release. KernelSU-only updates and accepted source changes
+rebuild that source branch. Repeated checks deduplicate active builds and already
+released inputs; failed builds can retry within the configured attempt limit.
+
+Releases are published only after the complete module catalog, imported CRCs,
+source identities, configuration, device trees and asset checks pass. Assets are
+uploaded to a draft and checked before publication. Accepted tracking state records
+published inputs, so an incomplete upload does not count as a completed update.
+Unchanged released inputs do not cause daily builds or duplicate releases. The
+source branch remains pinned and reproducible.
 
 Builds use standard `ubuntu-24.04` GitHub-hosted runners, adapted from
 `Loukious/konoha-kernel-gki`'s workflow: build dependencies, swap, artifact and
@@ -89,13 +91,13 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
-Every build includes GKI, all 370 modules, both supported device-tree variants,
+Every build includes GKI, all 391 modules, both supported device-tree variants,
 KernelSU dev's exact source archive, classic/extended symbol CRC verification,
 input hashes and logs. Download `konoha-gki-and-modules.tar.gz`, `kernel-abi/`
 and `SHA256SUMS` from the build's artifacts. These are build outputs, not a
 universal flashable ZIP: matched boot/DLKM images depend on the ROM's ramdisks,
-module load lists, filesystem labels and partition layout. CI does not flash
-devices or automatically publish a tested release.
+module load lists, filesystem labels and partition layout. GitHub releases contain verified build artifacts. CI does not flash devices or
+claim hardware validation for a newly built kernel.
 
 ## Manual workflow
 

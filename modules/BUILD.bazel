@@ -4311,6 +4311,24 @@ ddk_module(
 kernel_module_group(
     name = "platform_modules",
     srcs = [
+        ":mtd",
+        ":block2mtd",
+        ":mtdoops",
+        ":hvc_gunyah",
+        ":qcom_iommu_debug",
+        ":hung_task_enh",
+        ":qti_battery_debug",
+        ":qcom_i2c_pmic",
+        ":sys_pm_vx",
+        ":sysmon_subsystem_stats",
+        ":charger_ulog_glink",
+        ":qcom_cpufreq_hw_debug",
+        ":qcom_edac",
+        ":mem_hooks",
+        ":gh_rm_booster",
+        ":tmecom_intf",
+        ":gh_panic_notifier",
+        ":qcom_lpm",
         ":qcom_cpuss_sleep_stats",
         ":qcom_cpuss_sleep_stats_v4",
         ":coresight_dummy",
@@ -5251,3 +5269,198 @@ ddk_module(
     kernel_build = "//common:kernel_aarch64",
     deps = [":scm_headers", ":qcom_scm"],
 )
+
+# Full LineageOS CPU and cluster idle governor, selected by cpuidle rating.
+ddk_module(
+    name = "qcom_lpm",
+    srcs = [
+        "drivers/cpuidle/governors/qcom-lpm.c",
+        "drivers/cpuidle/governors/qcom-cluster-lpm.c",
+        "drivers/cpuidle/governors/qcom-lpm-sysfs.c",
+        "drivers/cpuidle/governors/qcom-lpm.h",
+        "drivers/cpuidle/governors/trace-qcom-lpm.h",
+        "drivers/cpuidle/governors/trace-cluster-lpm.h",
+    ],
+    includes = ["drivers/cpuidle/governors"],
+    out = "qcom_lpm.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":walt_headers", ":sched_walt"],
+)
+
+ddk_module(
+    name = "mem_hooks",
+    srcs = ["drivers/soc/qcom/mem-hooks.c"],
+    out = "mem-hooks.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+)
+
+ddk_module(
+    name = "gh_rm_booster",
+    srcs = ["drivers/virt/gunyah/gh_rm_booster.c", "drivers/virt/gunyah/gh_rm_booster.h"],
+    includes = ["drivers/virt/gunyah"],
+    out = "gh_rm_booster.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":gunyah_headers", ":scm_headers", ":gh_rm_drv"],
+)
+
+ddk_module(
+    name = "tmecom_intf",
+    srcs = ["drivers/soc/qcom/tmecom/tmecom.c", "drivers/soc/qcom/tmecom/tmelog.c",
+            "drivers/soc/qcom/tmecom/tmecom.h", "include/linux/tmelog.h"],
+    includes = ["drivers/soc/qcom/tmecom", "include"],
+    out = "tmecom-intf.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mailbox_headers"],
+)
+
+ddk_module(
+    name = "gh_panic_notifier",
+    srcs = ["drivers/virt/gunyah/gh_panic_notifier.c", "include/linux/gunyah/gh_panic_notifier.h"],
+    includes = ["include"],
+    out = "gh_panic_notifier.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":scm_headers", ":gunyah_headers", ":iommu_headers", ":gh_dbl",
+            ":gh_rm_drv", ":gunyah_loader", ":qcom_scm"],
+)
+
+# Native LLCC ECC diagnostic child; the accepted GKI supplies the EDAC core.
+ddk_module(
+    name = "qcom_edac",
+    srcs = ["drivers/edac/qcom_edac.c", "drivers/edac/edac_mc.h", "drivers/edac/edac_device.h"],
+    includes = ["drivers/edac"],
+    out = "qcom_edac.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":cache_irq_headers", ":llcc_qcom"],
+)
+
+ddk_module(
+    name = "qcom_cpufreq_hw_debug",
+    srcs = ["drivers/cpufreq/qcom-cpufreq-hw-debug.c"],
+    out = "qcom-cpufreq-hw-debug.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+)
+
+ddk_module(
+    name = "charger_ulog_glink",
+    srcs = ["drivers/soc/qcom/charger-ulog-glink.c"],
+    out = "charger-ulog-glink.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":qti_pmic_glink", ":pmic_glink_headers", ":mca_headers", ":mca_log", ":platform_headers", ":qcom_ipc_logging"],
+)
+
+ddk_module(
+    name = "sysmon_subsystem_stats",
+    srcs = ["drivers/soc/qcom/sysmon_subsystem_stats.c", "include/linux/soc/qcom/sysmon_subsystem_stats.h"],
+    linux_includes = ["include"],
+    out = "sysmon_subsystem_stats.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":smem"],
+)
+
+ddk_module(
+    name = "sys_pm_vx",
+    srcs = ["drivers/soc/qcom/sys_pm_vx.c", "include/soc/qcom/qcom_stats.h"],
+    linux_includes = ["include"],
+    out = "sys_pm_vx.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":platform_headers", ":mailbox_headers", ":qcom_stats", ":qcom_aoss"],
+)
+
+ddk_module(
+    name = "qcom_i2c_pmic",
+    srcs = ["drivers/mfd/qcom-i2c-pmic.c"],
+    out = "qcom-i2c-pmic.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":soc_headers", ":pinctrl_headers", ":pinctrl_msm", ":qti_regmap_debugfs"],
+)
+
+ddk_module(
+    name = "qti_battery_debug",
+    srcs = ["drivers/soc/qcom/qti_battery_debug.c"],
+    out = "qti_battery_debug.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":qti_pmic_glink", ":pmic_glink_headers"],
+)
+
+ddk_module(
+    name = "hung_task_enh",
+    srcs = ["drivers/soc/qcom/hung_task_enh.c"],
+    out = "hung_task_enh.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":walt_headers", ":sched_walt"],
+)
+
+ddk_module(
+    name = "qcom_iommu_debug",
+    srcs = ["drivers/iommu/qcom-iommu-debug.c", "drivers/iommu/qcom-iommu-debug-user.c", "drivers/iommu/qcom-iommu-debug.h"],
+    out = "qcom_iommu_debug.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":iommu_headers", ":qcom_iommu_util"],
+)
+
+# Requires the native HVC/RM common patches, including linux/hvc_backend.h.
+ddk_module(
+    name = "hvc_gunyah",
+    srcs = ["drivers/tty/hvc/hvc_gunyah.c"],
+    out = "hvc_gunyah.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":gunyah_headers", ":scm_headers", ":gh_rm_drv", ":gunyah_loader"],
+)
+
+ddk_module(
+    name = "mtd",
+    srcs = ["drivers/mtd/mtdcore.c", "drivers/mtd/mtdsuper.c", "drivers/mtd/mtdconcat.c", "drivers/mtd/mtdpart.c", "drivers/mtd/mtdchar.c", "drivers/mtd/mtdcore.h"],
+    out = "mtd.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+)
+ddk_module(
+    name = "block2mtd",
+    srcs = ["drivers/mtd/devices/block2mtd.c"],
+    out = "block2mtd.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mtd"],
+)
+ddk_module(
+    name = "mtdoops",
+    srcs = ["drivers/mtd/mtdoops.c"],
+    out = "mtdoops.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":mtd", ":pm8941_pwrkey"],
+)
+

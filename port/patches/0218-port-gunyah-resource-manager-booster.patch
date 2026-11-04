@@ -1,0 +1,581 @@
+--- a/drivers/virt/gunyah/gh_rm_booster.c
++++ b/drivers/virt/gunyah/gh_rm_booster.c
+@@ -3,331 +3,319 @@
+  * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+  */
+ 
++#include <linux/bitmap.h>
++#include <linux/cpufreq.h>
+ #include <linux/gunyah/gh_errno.h>
++#include <linux/kernel.h>
+ #include <linux/module.h>
+-#include <linux/kernel.h>
+ #include <linux/notifier.h>
+-#include <linux/cpufreq.h>
+ #include <linux/platform_device.h>
+-#include <asm/gunyah/hcall.h>
++#include <asm/smp.h>
+ 
+ #include "gh_rm_drv_private.h"
+ #include "gh_rm_booster.h"
+ 
+-#define BOOSTER_TIMEOUT_MSEC	5000
++#define BOOSTER_TIMEOUT_MSEC 5000
++#define BOOSTER_VM_COUNT (U16_MAX + 1U)
+ 
+ struct gh_rm_booster_dev {
+ 	u32 boost_cnt;
+-	int vmid;
+-	int orig_cpu;
++	DECLARE_BITMAP(active_vms, BOOSTER_VM_COUNT);
++	unsigned long boost_deadline;
++	bool stopping;
++	bool affinity_changed;
++	gh_vmid_t vmid;
++	unsigned int orig_cpu;
+ 	u64 orig_cpu_mpidr;
+ 	u64 target_cpu_mpidr;
+ 	struct device *dev;
++	struct cpufreq_policy *boost_policy;
+ 	struct freq_qos_request gh_rm_boost_req;
+ 	struct notifier_block gh_rm_boost_nb;
+ 	struct delayed_work booster_release_work;
+ 	gh_capid_t vcpu_cap_id;
+ };
++
++/* The parameter and every per-device transition use this same lock. */
+ static struct gh_rm_booster_dev *rm_status;
+ static DEFINE_MUTEX(rm_booster_lock);
+-
+-static void gh_rm_booster_mpidr(void *arg)
+-{
+-	u64 *mpidr = arg;
+-
+-	*mpidr = read_cpuid_mpidr();
+-}
+-
+-static u64 gh_rm_booster_get_mpidr(int cpu)
+-{
+-	u64 mpidr = cpu;
+-
+-	smp_call_function_single(cpu, gh_rm_booster_mpidr, &mpidr, 1);
+-
+-	return mpidr;
++static unsigned int target_cpu = UINT_MAX;
++
++static int gh_rm_booster_get_mpidr(unsigned int cpu, u64 *mpidr)
++{
++	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
++		return -EINVAL;
++	*mpidr = cpu_logical_map(cpu);
++	return *mpidr == INVALID_HWID ? -ENODEV : 0;
+ }
+ 
+ static int rm_boost_target_cpu_set(const char *val, const struct kernel_param *kp)
+ {
+ 	unsigned int cpu;
+-	int ret;
+-
+-	ret = kstrtou32(val, 10, &cpu);
++	u64 mpidr;
++	int ret;
++
++	ret = kstrtouint(val, 10, &cpu);
+ 	if (ret)
+ 		return ret;
+-
+-	if (cpu < num_possible_cpus()) {
+-		ret = param_set_int(val, kp);
+-		if (!ret && rm_status)
+-			rm_status->target_cpu_mpidr = gh_rm_booster_get_mpidr(cpu);
+-
++	ret = gh_rm_booster_get_mpidr(cpu, &mpidr);
++	if (ret)
+ 		return ret;
+-	}
+-
+-	return -EINVAL;
++	mutex_lock(&rm_booster_lock);
++	if (rm_status && rm_status->boost_cnt) {
++		ret = -EBUSY;
++		goto out;
++	}
++	ret = param_set_uint(val, kp);
++	if (!ret && rm_status)
++		rm_status->target_cpu_mpidr = mpidr;
++out:
++	mutex_unlock(&rm_booster_lock);
++	return ret;
++}
++
++static int rm_boost_target_cpu_get(char *buf, const struct kernel_param *kp)
++{
++	int ret;
++
++	mutex_lock(&rm_booster_lock);
++	ret = param_get_uint(buf, kp);
++	mutex_unlock(&rm_booster_lock);
++	return ret;
+ }
+ 
+ static const struct kernel_param_ops target_cpu_ops = {
+ 	.set = rm_boost_target_cpu_set,
+-	.get = param_get_int,
++	.get = rm_boost_target_cpu_get,
+ };
+-static unsigned int target_cpu = UINT_MAX;
+ module_param_cb(target_cpu, &target_cpu_ops, &target_cpu, 0644);
+ MODULE_PARM_DESC(target_cpu, "Choose the target core for Resource Manager");
+ 
+-static int _gh_set_rm_affinity(int cpu, u64 mpidr)
+-{
+-	int ret = -EINVAL;
+-
+-	ret = gh_hcall_change_rm_affinity_mpidr(rm_status->vcpu_cap_id, mpidr);
++static int gh_set_rm_affinity(struct gh_rm_booster_dev *st, unsigned int cpu, u64 mpidr)
++{
++	int ret;
++
++	ret = gh_hcall_change_rm_affinity_mpidr(st->vcpu_cap_id, mpidr);
+ 	if (ret == GH_ERROR_ARG_INVAL) {
+-		dev_dbg(rm_status->dev,
+-			"MPIDR based CPU identification not supported by Gunyah\n");
+-		ret = gh_hcall_change_rm_affinity(rm_status->vcpu_cap_id, cpu);
+-	}
+-
+-	if (ret == GH_ERROR_OK)
+-		return 0;
+-
+-	dev_err(rm_status->dev, "gh set RM affinity fail\n");
+-	return ret;
+-}
+-
+-static int gh_set_rm_affinity(void)
+-{
+-	return _gh_set_rm_affinity(target_cpu, rm_status->target_cpu_mpidr);
+-}
+-
+-static int gh_restore_rm_affinity(void)
+-{
+-	return _gh_set_rm_affinity(rm_status->orig_cpu, rm_status->orig_cpu_mpidr);
+-}
+-
+-static void gh_boost_rmfreq(int cpu)
++		dev_dbg(st->dev, "MPIDR affinity unsupported; use logical CPU\n");
++		ret = gh_hcall_change_rm_affinity(st->vcpu_cap_id, cpu);
++	}
++	return gh_remap_error(ret);
++}
++
++static int gh_boost_rmfreq(struct gh_rm_booster_dev *st, unsigned int cpu)
+ {
+ 	struct cpufreq_policy *policy;
+ 	int ret;
+ 
+ 	policy = cpufreq_cpu_get(cpu);
+-	if (!policy) {
+-		dev_err(rm_status->dev, "Failed to get RM cpufreq policy\n");
+-		return;
+-	}
+-
+-	/* Always have target cpu's max freq as boosted freq. */
+-	ret = freq_qos_add_request(&policy->constraints,
+-				   &rm_status->gh_rm_boost_req,
+-				   FREQ_QOS_MIN, policy->max);
+-
+-	if (ret < 0)
+-		dev_err(rm_status->dev, "Failed to boost RM freq\n");
+-}
+-
+-static void gh_resume_rm_status(void)
+-{
+-	int ret;
+-
+-	ret = freq_qos_remove_request(&rm_status->gh_rm_boost_req);
+-	if (ret < 0)
+-		dev_err(rm_status->dev, "Failed to resume RM freq\n");
+-
+-	if (rm_status->vcpu_cap_id == GH_CAPID_INVAL)
+-		return;
+-
+-	ret = gh_restore_rm_affinity();
+-	if (ret)
+-		dev_err(rm_status->dev, "Failed to resume RM affinity\n");
+-}
+-
+-static void gh_configure_rm(struct gh_rm_notif_vm_status_payload *status)
+-{
+-	int dest_cpu;
+-
++	if (!policy)
++		return -ENODEV;
++	ret = freq_qos_add_request(&policy->constraints, &st->gh_rm_boost_req,
++				  FREQ_QOS_MIN, policy->max);
++	if (ret < 0) {
++		cpufreq_cpu_put(policy);
++		return ret;
++	}
++	/* Retain the policy until its embedded constraint request is removed. */
++	st->boost_policy = policy;
++	return 0;
++}
++
++static void gh_resume_rm_status(struct gh_rm_booster_dev *st)
++{
++	int ret;
++
++	if (st->boost_policy) {
++		ret = freq_qos_remove_request(&st->gh_rm_boost_req);
++		if (ret < 0)
++			dev_err(st->dev, "Failed to remove RM frequency vote: %d\n", ret);
++		cpufreq_cpu_put(st->boost_policy);
++		st->boost_policy = NULL;
++	}
++	if (st->affinity_changed) {
++		ret = gh_set_rm_affinity(st, st->orig_cpu, st->orig_cpu_mpidr);
++		if (ret)
++			dev_err(st->dev, "Failed to restore RM affinity: %d\n", ret);
++		else
++			st->affinity_changed = false;
++	}
++}
++
++static void gh_configure_rm(struct gh_rm_booster_dev *st,
++			    const struct gh_rm_notif_vm_status_payload *status)
++{
++	unsigned int dest_cpu;
++	int ret;
++
++	mutex_lock(&rm_booster_lock);
++	if (st->stopping)
++		goto out;
+ 	switch (status->vm_status) {
+ 	case GH_RM_VM_STATUS_AUTH:
+-		cancel_delayed_work_sync(&rm_status->booster_release_work);
+-		mutex_lock(&rm_booster_lock);
+-		rm_status->boost_cnt++;
+-		schedule_delayed_work(&rm_status->booster_release_work,
+-				msecs_to_jiffies(BOOSTER_TIMEOUT_MSEC));
+-		if (rm_status->boost_cnt > 1) {
+-			mutex_unlock(&rm_booster_lock);
+-			dev_dbg(rm_status->dev,
+-				"VM%d found Gunyah RM booster already activated\n",
+-				status->vmid);
+-			break;
+-		}
+-
++		st->boost_deadline = jiffies + msecs_to_jiffies(BOOSTER_TIMEOUT_MSEC);
++		mod_delayed_work(system_wq, &st->booster_release_work,
++				 msecs_to_jiffies(BOOSTER_TIMEOUT_MSEC));
++		/* Repeated AUTH and unrelated completion must not corrupt the count. */
++		if (test_and_set_bit(status->vmid, st->active_vms))
++			break;
++		if (++st->boost_cnt > 1)
++			break;
+ 		dest_cpu = target_cpu;
+-		if (dest_cpu != rm_status->orig_cpu) {
+-			if (rm_status->vcpu_cap_id == GH_CAPID_INVAL ||
+-			    gh_set_rm_affinity()) {
+-				dest_cpu = rm_status->orig_cpu;
+-				dev_info(rm_status->dev,
+-					 "Fallback to boost the frequency of RM current cpu - CPU%d\n",
+-					 dest_cpu);
++		if (dest_cpu != st->orig_cpu) {
++			ret = st->vcpu_cap_id == GH_CAPID_INVAL ? -ENODEV :
++				gh_set_rm_affinity(st, dest_cpu, st->target_cpu_mpidr);
++			if (ret) {
++				dest_cpu = st->orig_cpu;
++				dev_info(st->dev, "Use original RM CPU%u after affinity error %d\n",
++					 dest_cpu, ret);
++			} else {
++				st->affinity_changed = true;
+ 			}
+ 		}
+-
+-		gh_boost_rmfreq(dest_cpu);
+-		mutex_unlock(&rm_booster_lock);
+-		dev_dbg(rm_status->dev,
+-			"Gunyah RM booster activated by VM%d\n", status->vmid);
++		ret = gh_boost_rmfreq(st, dest_cpu);
++		if (ret) {
++			dev_err(st->dev, "Failed to boost RM frequency: %d\n", ret);
++			gh_resume_rm_status(st);
++		}
+ 		break;
+ 	case GH_RM_VM_STATUS_INIT_FAILED:
+-		fallthrough;
+ 	case GH_RM_VM_STATUS_RUNNING:
+-		mutex_lock(&rm_booster_lock);
+-		if (!rm_status->boost_cnt) {
+-			mutex_unlock(&rm_booster_lock);
+-			break;
+-		}
+-
+-		rm_status->boost_cnt--;
+-		if (rm_status->boost_cnt) {
+-			mutex_unlock(&rm_booster_lock);
+-			dev_dbg(rm_status->dev,
+-				"VM%d will not deactivate Gunyah RM booster\n",
+-				status->vmid);
+-			break;
+-		}
+-
+-		gh_resume_rm_status();
+-		mutex_unlock(&rm_booster_lock);
+-		cancel_delayed_work_sync(&rm_status->booster_release_work);
+-		dev_dbg(rm_status->dev,
+-			"Gunyah RM booster deactivated by VM%d\n",
+-			status->vmid);
++		if (!test_and_clear_bit(status->vmid, st->active_vms))
++			break;
++		if (--st->boost_cnt)
++			break;
++		gh_resume_rm_status(st);
++		/* The worker uses this lock; never wait synchronously under it. */
++		cancel_delayed_work(&st->booster_release_work);
+ 		break;
+ 	default:
+ 		break;
+ 	}
+-}
+-
+-static int gh_rm_boost_nb_handler(struct notifier_block *this,
+-				  unsigned long cmd, void *data)
+-{
+-	switch (cmd) {
+-	case GH_RM_NOTIF_VM_STATUS:
+-		gh_configure_rm(data);
+-		break;
+-	default:
+-		break;
+-	}
+-
++out:
++	mutex_unlock(&rm_booster_lock);
++}
++
++static int gh_rm_boost_nb_handler(struct notifier_block *nb, unsigned long cmd, void *data)
++{
++	struct gh_rm_booster_dev *st = container_of(nb, struct gh_rm_booster_dev, gh_rm_boost_nb);
++
++	if (cmd == GH_RM_NOTIF_VM_STATUS && data)
++		gh_configure_rm(st, data);
+ 	return NOTIFY_DONE;
+ }
+ 
+ static void gh_rm_booster_release_func(struct work_struct *work)
+ {
+-	mutex_lock(&rm_booster_lock);
+-	if (!rm_status || rm_status->boost_cnt == 0) {
+-		mutex_unlock(&rm_booster_lock);
++	struct gh_rm_booster_dev *st = container_of(to_delayed_work(work),
++						  struct gh_rm_booster_dev, booster_release_work);
++
++	mutex_lock(&rm_booster_lock);
++	if (st->stopping || !st->boost_cnt)
++		goto out;
++	/* A running old timeout may have been extended by a new AUTH. */
++	if (time_before(jiffies, st->boost_deadline)) {
++		mod_delayed_work(system_wq, &st->booster_release_work, st->boost_deadline - jiffies);
++		goto out;
++	}
++	gh_resume_rm_status(st);
++	bitmap_zero(st->active_vms, BOOSTER_VM_COUNT);
++	st->boost_cnt = 0;
++out:
++	mutex_unlock(&rm_booster_lock);
++}
++
++static void gh_rm_booster_populate_res(struct gh_rm_booster_dev *st)
++{
++	struct gh_vm_get_hyp_res_resp_entry *entries;
++	u32 count, i;
++
++	entries = gh_rm_vm_get_hyp_res(st->vmid, &count);
++	if (IS_ERR_OR_NULL(entries)) {
++		dev_warn(st->dev, "RM vCPU resource unavailable; retain original CPU\n");
+ 		return;
+ 	}
+-
+-	dev_dbg(rm_status->dev, "Gunyah RM booster released\n");
+-	gh_resume_rm_status();
+-	rm_status->boost_cnt = 0;
+-	mutex_unlock(&rm_booster_lock);
+-}
+-
+-static void gh_rm_booster_populate_res(void)
+-{
+-	struct gh_vm_get_hyp_res_resp_entry *res_entries = NULL;
+-	u32 n_res, i;
+-
+-	res_entries = gh_rm_vm_get_hyp_res(rm_status->vmid, &n_res);
+-	if (IS_ERR_OR_NULL(res_entries)) {
+-		dev_err(rm_status->dev, "Get hyp resources failed.\n");
+-		return;
+-	}
+-
+-	for (i = 0; i < n_res; i++) {
+-		if (res_entries[i].res_type == GH_RM_RES_TYPE_VCPU) {
+-			rm_status->vcpu_cap_id = (u64) res_entries[i].cap_id_high << 32 |
+-				 res_entries[i].cap_id_low;
+-			goto out;
++	for (i = 0; i < count; i++) {
++		if (entries[i].res_type == GH_RM_RES_TYPE_VCPU) {
++			st->vcpu_cap_id = (u64)entries[i].cap_id_high << 32 | entries[i].cap_id_low;
++			break;
+ 		}
+ 	}
+-
+-	dev_err(rm_status->dev, "No vCPU resource type found.\n");
+-out:
+-	kfree(res_entries);
++	kfree(entries);
+ }
+ 
+ static int gh_rm_booster_probe(struct platform_device *pdev)
+ {
+-	struct device_node *np = pdev->dev.of_node;
+-	int ret = -ENODEV;
+-
+-	rm_status = kzalloc(sizeof(*rm_status), GFP_KERNEL);
+-	if (!rm_status)
++	struct gh_rm_booster_dev *st;
++	u32 vmid;
++	int ret;
++
++	st = kzalloc(sizeof(*st), GFP_KERNEL);
++	if (!st)
+ 		return -ENOMEM;
+-
+-	ret = of_property_read_u32(np, "qcom,rm-vmid", &rm_status->vmid);
++	st->dev = &pdev->dev;
++	ret = of_property_read_u32(pdev->dev.of_node, "qcom,rm-vmid", &vmid);
++	if (ret)
++		goto fail;
++	if (vmid > U16_MAX) {
++		ret = -EINVAL;
++		goto fail;
++	}
++	st->vmid = vmid;
++	ret = of_property_read_u32(pdev->dev.of_node, "qcom,rm-affinity-default", &st->orig_cpu);
++	if (ret)
++		goto fail;
++	ret = gh_rm_booster_get_mpidr(st->orig_cpu, &st->orig_cpu_mpidr);
++	if (ret)
++		goto fail;
++	INIT_DELAYED_WORK(&st->booster_release_work, gh_rm_booster_release_func);
++	st->vcpu_cap_id = GH_CAPID_INVAL;
++	gh_rm_booster_populate_res(st);
++	st->gh_rm_boost_nb.notifier_call = gh_rm_boost_nb_handler;
++	st->gh_rm_boost_nb.priority = INT_MAX;
++
++	mutex_lock(&rm_booster_lock);
++	if (rm_status) {
++		ret = -EBUSY;
++		goto unlock_fail;
++	}
++	if (target_cpu == UINT_MAX)
++		target_cpu = cpumask_last(cpu_possible_mask);
++	ret = gh_rm_booster_get_mpidr(target_cpu, &st->target_cpu_mpidr);
++	if (ret)
++		goto unlock_fail;
++	rm_status = st;
++	ret = gh_rm_register_notifier(&st->gh_rm_boost_nb);
+ 	if (ret) {
+-		dev_err(&pdev->dev, "Failed to get RM vmid\n");
+-		goto out_free;
+-	}
+-
+-	ret = of_property_read_u32(np, "qcom,rm-affinity-default",
+-				&rm_status->orig_cpu);
+-	if (ret) {
+-		dev_err(&pdev->dev, "Failed to get RM affinity\n");
+-		goto out_free;
+-	}
+-
+-	rm_status->orig_cpu_mpidr = gh_rm_booster_get_mpidr(rm_status->orig_cpu);
+-	dev_dbg(rm_status->dev, "orig_cpu: %d mpidr: %llu\n",
+-		rm_status->orig_cpu, rm_status->orig_cpu_mpidr);
+-
+-	rm_status->dev = &pdev->dev;
+-	platform_set_drvdata(pdev, rm_status);
+-
+-	INIT_DELAYED_WORK(&rm_status->booster_release_work,
+-			gh_rm_booster_release_func);
+-	/*
+-	 * By default target cpu will be the bigger number cpu,
+-	 * and usually the most powerful cpu here.
+-	 */
+-	if (target_cpu >= num_possible_cpus())
+-		target_cpu = num_possible_cpus() - 1;
+-
+-	rm_status->target_cpu_mpidr = gh_rm_booster_get_mpidr(target_cpu);
+-	dev_dbg(rm_status->dev, "target_cpu: %d mpidr: %llu\n",
+-		target_cpu, rm_status->target_cpu_mpidr);
+-
+-	rm_status->boost_cnt = 0;
+-	rm_status->vcpu_cap_id = GH_CAPID_INVAL;
+-	gh_rm_booster_populate_res();
+-
+-	rm_status->gh_rm_boost_nb.notifier_call = gh_rm_boost_nb_handler;
+-	rm_status->gh_rm_boost_nb.priority = INT_MAX;
+-	ret = gh_rm_register_notifier(&rm_status->gh_rm_boost_nb);
+-	if (!ret)
+-		return 0;
+-
+-	dev_err(&pdev->dev, "Failed to register RM notifier\n");
+-out_free:
+-	kfree(rm_status);
++		rm_status = NULL;
++		goto unlock_fail;
++	}
++	platform_set_drvdata(pdev, st);
++	mutex_unlock(&rm_booster_lock);
++	return 0;
++unlock_fail:
++	mutex_unlock(&rm_booster_lock);
++fail:
++	kfree(st);
+ 	return ret;
+ }
+ 
+-static int gh_rm_booster_remove(struct platform_device *pdev)
+-{
+-	gh_rm_unregister_notifier(&rm_status->gh_rm_boost_nb);
+-	cancel_delayed_work_sync(&rm_status->booster_release_work);
+-
+-	mutex_lock(&rm_booster_lock);
+-	if (rm_status->boost_cnt)
+-		gh_resume_rm_status();
+-
+-	kfree(rm_status);
++static void gh_rm_booster_remove(struct platform_device *pdev)
++{
++	struct gh_rm_booster_dev *st = platform_get_drvdata(pdev);
++
++	mutex_lock(&rm_booster_lock);
++	st->stopping = true;
++	mutex_unlock(&rm_booster_lock);
++	/* SRCU unregistration drains callbacks that already have the device. */
++	gh_rm_unregister_notifier(&st->gh_rm_boost_nb);
++	cancel_delayed_work_sync(&st->booster_release_work);
++	mutex_lock(&rm_booster_lock);
++	gh_resume_rm_status(st);
++	/* Keep the singleton reserved until the old affinity/vote is restored. */
+ 	rm_status = NULL;
+ 	mutex_unlock(&rm_booster_lock);
+-
+-	return 0;
++	kfree(st);
+ }
+ 
+ static const struct of_device_id gh_rm_booster_match_table[] = {
+@@ -343,8 +331,6 @@
+ 	.probe = gh_rm_booster_probe,
+ 	.remove = gh_rm_booster_remove,
+ };
+-
+ module_platform_driver(gh_rm_booster_driver);
+-
+ MODULE_DESCRIPTION("Qualcomm Technologies, Inc. Gunyah RM booster Driver");
+ MODULE_LICENSE("GPL");

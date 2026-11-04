@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "cases": 47482,
+  "child_sha256": "55c5928944c7ff1a46e11e33400e3760e2039cfeea9b88a7b8e337f992feaf52",
+  "parent_sha256": "ab2bb1ca236874e0250e52362bbcdc29e62702bc93bb049c8448e04093f3179b",
+  "harness_sha256": "31cf08b3f0adf35097b0c2baf131c6fdeb8f5ec9e2066ad8f6da3a106fd6298a",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "short-realtime-read": "REJECTED",
+    "ADSP-length-overrun": "REJECTED",
+    "drop-unanswered-record-on-unregister": "REJECTED",
+    "skip-dump-work-drain": "REJECTED"
+  },
+  "limits": [
+    "Actual native client and transport-fence C with simulated debugfs, IPC, RPMSG, workqueue and SRCU framework.",
+    "No live SSR, malformed firmware injection or intentional panic. Native firmware assumes one response per request; duplicate replies are not independently identifiable."
+  ]
+}

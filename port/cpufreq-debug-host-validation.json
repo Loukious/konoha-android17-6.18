@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "cases": 16776,
+  "page_sizes_tested": [
+    4096,
+    256
+  ],
+  "source_sha256": "72edeaf722b8f27c527d2977596dad3162d1c0213789df2032b2da16ebbaf4ee",
+  "harness_sha256": "8938154cb90ca522066d754d392c736bf21c6319e5c0cdf71d56dcc349228859",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "wrong-OF-node-release": "REJECTED",
+    "missing-panic-notifier-drain": "REJECTED",
+    "unbounded-sysfs-buffer": "REJECTED"
+  },
+  "limits": [
+    "Actual driver C with simulated OF, MMIO, kobject, sysfs and notifier framework.",
+    "Panic callback runs offline only; no intentional phone panic."
+  ]
+}

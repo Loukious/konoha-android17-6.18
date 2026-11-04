@@ -1,0 +1,20 @@
+--- a/drivers/soc/qcom/qti_battery_debug.c
++++ b/drivers/soc/qcom/qti_battery_debug.c
+@@ -71,6 +71,8 @@
+ 
+ struct votables_list_req_msg {
+ 	struct pmic_glink_hdr hdr;
++	/* Shipped Onyx client sends a zero-filled word after the header. */
++	u32 reserved;
+ };
+ 
+ struct votables_list_resp_msg {
+@@ -660,7 +662,7 @@
+ 
+ static int battery_dbg_get_votables_list(struct battery_dbg_dev *bd)
+ {
+-	struct votables_list_req_msg req_msg = { { 0 } };
++	struct votables_list_req_msg req_msg = { 0 };
+ 	int rc;
+ 
+ 	req_msg.hdr.owner = MSG_OWNER_BD;

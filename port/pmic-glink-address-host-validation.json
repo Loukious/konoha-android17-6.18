@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "cases": 99985,
+  "driver_sha256": "85bae4e6649d5c8ce97315ec5f83e1b33d7ea5b7c52406d8ed535cde89d9d63d",
+  "tested_c_sha256": "5006daf7b465a44d5f774b35e96bd2de787e880f9ffdb6ca127a44e303e8a37a",
+  "harness_sha256": "499f1f2cfff1c5c930eb3173a0f034337f4d244c2d91bd9d4757aceeb68dccde",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "restore-four-bit-i2c-vector-limit": "REJECTED",
+    "restore-four-bit-shared-helper-limit": "REJECTED",
+    "drop-spmi-namespace-limit": "REJECTED",
+    "accept-out-of-range-i2c-device": "REJECTED"
+  },
+  "limits": [
+    "Actual native read/write request handling, response fences, I2C vectors and SPMI/shared stream C; RPC replies simulated.",
+    "Existing controller probe/removal code unchanged and outside this host harness. No live PMIC writes."
+  ]
+}

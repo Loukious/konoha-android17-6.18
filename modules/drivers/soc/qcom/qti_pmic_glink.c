@@ -74,6 +74,7 @@ struct pmic_glink_dev {
 	struct idr		client_idr;
 	struct mutex		client_lock;
 	struct srcu_struct	client_srcu;
+	struct list_head reply_fences;
 	bool			removing;
 	bool			rx_enabled;
 	struct rw_semaphore	rpdev_sem;
@@ -131,6 +132,188 @@ struct pmic_glink_buf {
 
 static LIST_HEAD(pmic_glink_dev_list);
 static DEFINE_MUTEX(pmic_glink_dev_lock);
+
+/* Native replies have an owner/opcode but no transaction ID. Preserve an
+ * unanswered request across client unregister so the same owner/opcode cannot
+ * be reused until its late reply arrives or the actual channel is drained.
+ * All fence list operations hold client_lock.
+ */
+struct pmic_glink_reply_fence {
+	struct list_head node;
+	struct pmic_glink_client *client;
+	u32 owner, opcode, type;
+	size_t min_len, max_len;
+	bool received;
+	bool keyed;
+	size_t key_offset;
+	u32 key;
+};
+
+static int pmic_glink_request_begin_internal(struct pmic_glink_client *client, u32 opcode,
+			    u32 type, size_t min_len, size_t max_len,
+			    bool keyed, size_t key_offset, u32 key)
+{
+	struct pmic_glink_reply_fence *fence, *old;
+	struct pmic_glink_dev *pgdev;
+	int ret = 0;
+
+	if (!client || !client->pgdev || min_len < sizeof(struct pmic_glink_hdr) ||
+	    max_len < min_len || (keyed && (min_len < sizeof(key) || key_offset > min_len - sizeof(key))))
+		return -EINVAL;
+	pgdev = client->pgdev;
+	fence = kzalloc(sizeof(*fence), GFP_KERNEL);
+	if (!fence)
+		return -ENOMEM;
+	down_read(&pgdev->rpdev_sem);
+	if (pgdev->removing || !pgdev->rpdev || !atomic_read(&pgdev->state)) {
+		ret = -ENOTCONN;
+		goto unlock_transport;
+	}
+	mutex_lock(&pgdev->client_lock);
+	if (idr_find(&pgdev->client_idr, client->id) != client) {
+		ret = -ESHUTDOWN;
+		goto unlock_clients;
+	}
+	list_for_each_entry(old, &pgdev->reply_fences, node) {
+		if (old->owner == client->id && old->opcode == opcode) {
+			ret = -EAGAIN;
+			goto unlock_clients;
+		}
+	}
+	fence->client = client;
+	fence->owner = client->id;
+	fence->opcode = opcode;
+	fence->type = type;
+	fence->min_len = min_len;
+	fence->max_len = max_len;
+	fence->keyed = keyed;
+	fence->key_offset = key_offset;
+	fence->key = key;
+	list_add_tail(&fence->node, &pgdev->reply_fences);
+	fence = NULL;
+unlock_clients:
+	mutex_unlock(&pgdev->client_lock);
+unlock_transport:
+	up_read(&pgdev->rpdev_sem);
+	kfree(fence);
+	return ret;
+}
+int pmic_glink_request_begin(struct pmic_glink_client *client, u32 opcode,
+			    u32 type, size_t min_len, size_t max_len)
+{
+	return pmic_glink_request_begin_internal(client, opcode, type, min_len, max_len,
+					 false, 0, 0);
+}
+EXPORT_SYMBOL_GPL(pmic_glink_request_begin);
+
+int pmic_glink_request_begin_keyed(struct pmic_glink_client *client, u32 opcode,
+			    u32 type, size_t min_len, size_t max_len,
+			    size_t key_offset, u32 key)
+{
+	return pmic_glink_request_begin_internal(client, opcode, type, min_len, max_len,
+					 true, key_offset, key);
+}
+EXPORT_SYMBOL_GPL(pmic_glink_request_begin_keyed);
+
+/* Finish only this client's record. An old callback must never remove a
+ * replacement client's newer record for the same owner/opcode.
+ */
+void pmic_glink_request_end(struct pmic_glink_client *client, u32 opcode)
+{
+	struct pmic_glink_reply_fence *fence, *tmp;
+	struct pmic_glink_dev *pgdev = client->pgdev;
+
+	mutex_lock(&pgdev->client_lock);
+	list_for_each_entry_safe(fence, tmp, &pgdev->reply_fences, node) {
+		if (fence->client == client && fence->opcode == opcode) {
+			list_del(&fence->node);
+			kfree(fence);
+		}
+	}
+	mutex_unlock(&pgdev->client_lock);
+}
+EXPORT_SYMBOL_GPL(pmic_glink_request_end);
+
+void pmic_glink_request_reject(struct pmic_glink_client *client, u32 opcode)
+{
+	struct pmic_glink_reply_fence *fence;
+	struct pmic_glink_dev *pgdev = client->pgdev;
+
+	mutex_lock(&pgdev->client_lock);
+	list_for_each_entry(fence, &pgdev->reply_fences, node)
+		if (fence->client == client && fence->opcode == opcode)
+			fence->received = false;
+	mutex_unlock(&pgdev->client_lock);
+}
+EXPORT_SYMBOL_GPL(pmic_glink_request_reject);
+
+static void pmic_glink_orphan_requests(struct pmic_glink_dev *pgdev,
+				     struct pmic_glink_client *client)
+{
+	struct pmic_glink_reply_fence *fence, *tmp;
+
+	list_for_each_entry_safe(fence, tmp, &pgdev->reply_fences, node) {
+		if (fence->client != client)
+			continue;
+		if (fence->received) {
+			list_del(&fence->node);
+			kfree(fence);
+		} else {
+			fence->client = NULL;
+		}
+	}
+}
+
+static bool pmic_glink_filter_reply(struct pmic_glink_dev *pgdev,
+				   const void *data, size_t len)
+{
+	struct pmic_glink_hdr hdr;
+	struct pmic_glink_reply_fence *fence, *tmp;
+	bool valid;
+
+	if (len < sizeof(hdr))
+		return false;
+	memcpy(&hdr, data, sizeof(hdr));
+	list_for_each_entry_safe(fence, tmp, &pgdev->reply_fences, node) {
+		if (fence->owner != hdr.owner || fence->opcode != hdr.opcode)
+			continue;
+		valid = hdr.type == fence->type && len >= fence->min_len && len <= fence->max_len;
+		if (valid && fence->keyed) {
+			u32 key;
+
+			memcpy(&key, (const u8 *)data + fence->key_offset, sizeof(key));
+			valid = key == fence->key;
+		}
+		if (!fence->client) {
+			if (valid) {
+				list_del(&fence->node);
+				kfree(fence);
+			}
+			return true;
+		}
+		/* Unregister has detached this client but is still draining its
+		 * callbacks. Do not route its reply to a newly registered owner.
+		 */
+		if (idr_find(&pgdev->client_idr, fence->owner) != fence->client)
+			return true;
+		if (valid)
+			fence->received = true;
+		return false;
+	}
+	return false;
+}
+
+static void pmic_glink_clear_requests(struct pmic_glink_dev *pgdev)
+{
+	struct pmic_glink_reply_fence *fence, *tmp;
+
+	mutex_lock(&pgdev->client_lock);
+	list_for_each_entry_safe(fence, tmp, &pgdev->reply_fences, node) {
+		list_del(&fence->node);
+		kfree(fence);
+	}
+	mutex_unlock(&pgdev->client_lock);
+}
 
 static void pmic_glink_notify_clients(struct pmic_glink_dev *pgdev,
 				     enum pmic_glink_state state)
@@ -390,6 +573,12 @@ int pmic_glink_unregister_client(struct pmic_glink_client *client)
 	mutex_unlock(&pgdev->client_lock);
 	/* Callbacks may sleep, and no callback can retain freed client data. */
 	synchronize_srcu(&pgdev->client_srcu);
+	/* A running callback must validate/reject its reply before the record
+	 * is classified as answered or orphaned.
+	 */
+	mutex_lock(&pgdev->client_lock);
+	pmic_glink_orphan_requests(pgdev, client);
+	mutex_unlock(&pgdev->client_lock);
 	kfree(client->name);
 	kfree(client);
 	return 0;
@@ -405,7 +594,8 @@ static void pmic_glink_rx_callback(struct pmic_glink_dev *pgdev,
 
 	idx = srcu_read_lock(&pgdev->client_srcu);
 	mutex_lock(&pgdev->client_lock);
-	client = idr_find(&pgdev->client_idr, hdr->owner);
+	client = pmic_glink_filter_reply(pgdev, pbuf->buf, pbuf->len) ? NULL :
+		idr_find(&pgdev->client_idr, hdr->owner);
 	mutex_unlock(&pgdev->client_lock);
 	if (client) {
 		if (pgdev->log_enable &&
@@ -487,6 +677,7 @@ static void pmic_glink_rpmsg_remove(struct rpmsg_device *rpdev)
 	spin_unlock_irqrestore(&pgdev->rx_lock, flags);
 	cancel_work_sync(&pgdev->init_work);
 	flush_workqueue(pgdev->rx_wq);
+	pmic_glink_clear_requests(pgdev);
 	pmic_glink_notify_clients(pgdev, PMIC_GLINK_STATE_DOWN);
 	dev_set_drvdata(&rpdev->dev, NULL);
 }
@@ -677,6 +868,7 @@ static int pmic_glink_probe(struct platform_device *pdev)
 	INIT_WORK(&pgdev->rx_work, pmic_glink_rx_work);
 	INIT_WORK(&pgdev->init_work, pmic_glink_init_work);
 	INIT_LIST_HEAD(&pgdev->client_dev_list);
+	INIT_LIST_HEAD(&pgdev->reply_fences);
 	INIT_LIST_HEAD(&pgdev->rx_list);
 	INIT_LIST_HEAD(&pgdev->dev_list);
 	spin_lock_init(&pgdev->rx_lock);
@@ -766,6 +958,7 @@ static void pmic_glink_remove(struct platform_device *pdev)
 	of_platform_depopulate(&pdev->dev);
 	flush_workqueue(pgdev->rx_wq);
 	destroy_workqueue(pgdev->rx_wq);
+	pmic_glink_clear_requests(pgdev);
 	debugfs_remove_recursive(pgdev->debugfs_dir);
 	device_init_wakeup(pgdev->dev, false);
 	idr_destroy(&pgdev->client_idr);

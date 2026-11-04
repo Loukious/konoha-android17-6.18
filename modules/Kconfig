@@ -1494,3 +1494,121 @@ config QCOM_CPUSS_SLEEP_STATS_V4
 config QCOM_CPUSS_SLEEP_STATS
 	tristate "Onyx native CPUSS sleep statistics"
 	depends on OF && DEBUG_FS && QCOM_SCM
+
+config CPU_IDLE_GOV_QCOM_LPM
+    tristate "Qualcomm CPU and cluster idle governor"
+    depends on CPU_IDLE && ARCH_QCOM && ARM_PSCI_CPUIDLE
+    help
+      Full LineageOS qcom_lpm CPU and cluster prediction governor.
+      The governor is selected automatically by its cpuidle rating.
+
+config QCOM_MEM_HOOKS
+    tristate "Qualcomm memory trace hook callbacks"
+    depends on ANDROID_VENDOR_HOOKS
+
+config GH_RM_BOOSTER
+    tristate "Gunyah resource manager boost driver"
+    depends on GH_RM_DRV
+
+config MSM_TMECOM_QMP
+    tristate "TMECom QMP interface"
+    select MSM_QMP
+
+config GH_PANIC_NOTIFIER
+    tristate "Gunyah panic notification"
+    depends on GH_RM_DRV
+
+config ARM_QCOM_CPUFREQ_HW_DEBUG
+    tristate "QCOM CPUFreq HW debug"
+    depends on ARM_QCOM_CPUFREQ_HW
+    help
+      Read native CPUFreq hardware debug registers for normal sysfs
+      queries and the existing panic diagnostic callback.
+
+config QTI_CHARGER_ULOG_GLINK
+    tristate "QTI charger firmware logging"
+    depends on QTI_PMIC_GLINK && DEBUG_FS
+    help
+      Native charger and ADSP logs over the existing PMIC logs channel.
+
+config QCOM_SYSMON_SUBSYSTEM_STATS
+    tristate "Qualcomm SysMon DSP subsystem statistics"
+    depends on QCOM_SMEM
+    help
+      Query the native DSP load, power, bandwidth and sleep statistics
+      from firmware-owned SMEM, with the existing debugfs interfaces.
+
+config QTI_SYS_PM_VX
+    tristate "Qualcomm system power-violator diagnostics"
+    depends on QCOM_AOSS_QMP && QCOM_STATS
+    help
+      Read the native firmware driver-vote logs and expose the existing
+      debugfs/sysfs monitoring controls. Monitoring and crash dumps
+      remain disabled until explicitly requested through those controls.
+
+config MFD_I2C_PMIC
+    tristate "Qualcomm I2C PMIC register and interrupt driver"
+    depends on I2C && REGMAP_QTI_DEBUGFS
+    help
+      Provide the native PMIC regmap and optional nested interrupt controller.
+      The Onyx debug clients expose registers without enabling IRQ self-tests.
+
+config QTI_PMIC_GLINK_CLIENT_DEBUG
+	depends on QTI_PMIC_GLINK && DEBUG_FS
+	bool "Enable debugfs features in PMIC GLINK client drivers"
+	help
+	  This option enables the generation of debugfs files in PMIC GLINK
+	  client drivers that are strictly meant for internal debugging only.
+	  Writing to these debug files changes key physical parameters of a
+	  system, which may lead to instability. Therefore, this option should
+	  never be enabled on production devices.
+
+
+config QTI_BATTERY_GLINK_DEBUG
+	tristate "Enable support for QTI battery glink debug driver"
+	depends on QTI_PMIC_GLINK
+	help
+	  Qualcomm Technologies, Inc. battery glink debug driver helps to
+	  obtain debug information for battery charging and gauging over PMIC
+	  Glink from charger and gauging firmware running on a remote subsystem
+	  (e.g. DSP).
+
+
+config QCOM_HUNG_TASK_ENH
+        tristate "QTI Hung Task Enhancement"
+        depends on ARCH_QCOM && DETECT_HUNG_TASK && SCHED_WALT
+        help
+          Add options at sysfs to enhance khungtask, allow user to
+          select and monitor tasks in black/white list mode. Also
+          processes in iowait for specific situation will be monitored
+          to avoid devices long time no response.
+
+
+config QCOM_IOMMU_DEBUG
+	tristate "IOMMU debugging and testing"
+	depends on QCOM_IOMMU_UTIL
+	depends on DEBUG_FS
+	help
+	  This option is used to enable profiling and debugging in
+	  the IOMMU framework code. IOMMU profiling and debugging
+	  can be done through the debugfs nodes which this option
+	  makes available.
+
+config HVC_GUNYAH
+	tristate "Gunyah inter-VM console support"
+	depends on HVC_DRIVER && GH_RM_DRV && GH_SECURE_VM_LOADER
+	help
+	  Expose the native Gunyah virtual machine consoles through HVC TTYs.
+	  This removable backend requires the native HVC lifecycle API and RM
+	  console-notification bounds validation. Printk console mode is disabled.
+
+# SPDX-License-Identifier: GPL-2.0-only
+config ONYX_MTD_CORE
+    tristate "Matching 6.18 MTD archive core"
+    select MTD
+config ONYX_BLOCK2MTD
+    tristate "Native Onyx block-backed archive"
+    depends on MTD && BLOCK
+config ONYX_MTDOOPS
+    tristate "Native Xiaomi reboot and power-key archive"
+    depends on MTD && PSTORE_RAM

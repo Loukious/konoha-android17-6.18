@@ -19,3 +19,7 @@
   coresight_disable_sysfs
   zap_page_range_single
   vmf_insert_pfn_prot
+  hvc_backend_alloc
+  hvc_backend_poll
+  hvc_backend_publish
+  hvc_backend_remove

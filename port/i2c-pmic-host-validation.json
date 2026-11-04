@@ -1,0 +1,22 @@
+{
+  "status": "PASS",
+  "cases": 209740,
+  "driver_sha256": "178493733b71f59a3c8d0f635146872d3fd8d8d944d6713a362ff5a4ec943d9d",
+  "harness_sha256": "8a64db82cc3e9abdd52032b77f618ec1f2184512a9d8db7bb6b7a77f18711e03",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "index-unused-summary-tail-bits": "REJECTED",
+    "accept-truncated-peripheral-address": "REJECTED",
+    "ignore-regmap-error-pointer": "REJECTED",
+    "lose-partial-enable-sync": "REJECTED",
+    "discard-earlier-suspend-mask-error": "REJECTED",
+    "remove-domain-before-parent-irq": "REJECTED"
+  },
+  "limits": [
+    "Complete actual native driver C; I2C/regmap, IRQ domain, devres, MFD children and system PM simulated.",
+    "IRQ toggle self-test executes only against host mocks; Onyx has no interrupt-controller or toggle property on the two debug clients."
+  ]
+}

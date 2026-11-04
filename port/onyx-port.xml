@@ -8,4 +8,5 @@
   <project path="baseline/kernel/xiaomi/onyx-wlan" name="Loukious/vendor_qcom_opensource_wlan" remote="github-onyx" revision="6cc986b6e08783b8a14b155c1531c86959a1398a" upstream="onyx-v-oss-monitor-direct-konoha-abi" clone-depth="1" />
   <project path="baseline/device/xiaomi/onyx" name="crdroidandroid/android_device_xiaomi_onyx" remote="github-onyx" revision="80e10cbdd977be75b8734e27856d77961aa991f6" upstream="17.0" clone-depth="1" />
   <project path="baseline/tools/dtc" name="LineageOS/android_external_dtc" remote="github-onyx" revision="c1197f56b8f468effbbf5e79feae353c4280e2ea" upstream="lineage-24.0" clone-depth="1" />
+  <project path="baseline/kernel/qcom/sm8850" name="LineageOS/android_kernel_qcom_sm8850" remote="github-onyx" revision="557159b6a0d06f1c6f07ec4c1f22bc9309a113e4" upstream="lineage-24.0" clone-depth="1" />
 </manifest>

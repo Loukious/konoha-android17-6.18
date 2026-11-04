@@ -1,0 +1,939 @@
+--- a/drivers/cpuidle/governors/qcom-lpm.c
++++ b/drivers/cpuidle/governors/qcom-lpm.c
+@@ -10,6 +10,7 @@
+ #include <linux/cpuidle.h>
+ #include <linux/cpu_pm.h>
+ #include <linux/ktime.h>
++#include <linux/overflow.h>
+ #include <linux/module.h>
+ #include <linux/pm_domain.h>
+ #include <linux/pm_runtime.h>
+@@ -131,7 +132,6 @@
+ 	struct lpm_cpu *cpu_gov = this_cpu_ptr(&lpm_cpu_data);
+ 	struct hrtimer *cpu_histtimer = &cpu_gov->histtimer;
+ 
+-	cpu_histtimer->function = histtimer_fn;
+ 	hrtimer_start(cpu_histtimer, time_ns, HRTIMER_MODE_REL_PINNED);
+ }
+ 
+@@ -181,7 +181,6 @@
+ 	struct lpm_cpu *cpu_gov = this_cpu_ptr(&lpm_cpu_data);
+ 	struct hrtimer *cpu_biastimer = &cpu_gov->biastimer;
+ 
+-	cpu_biastimer->function = biastimer_fn;
+ 	hrtimer_start(cpu_biastimer, time_ns, HRTIMER_MODE_REL_PINNED);
+ }
+ 
+@@ -203,7 +202,7 @@
+ 	u64 stddev, max, min;
+ 	u64 max_thresh = U64_MAX;
+ 	u64 min_thresh = 0;
+-	u64 avg, avg_sq;
++	u64 avg, avg_sq, remainder, square;
+ 	struct cpuidle_driver *drv = cpu_gov->drv;
+ 	int divisor, i;
+ 	int last_level = drv->state_count - 1;
+@@ -214,18 +213,17 @@
+ 		ref_stddev = ipi_pred_ref_stddev;
+ 
+ 	do {
+-		max = avg = divisor = stddev = 0;
++		max = avg = divisor = stddev = remainder = 0;
+ 		min = S64_MAX;
+ 		for (i = 0; i < MAXSAMPLES; i++) {
+ 			value = samples_history[i];
+ 			value = ktime_to_us(value);
+-			if (value <= min_thresh || value >= max_thresh)
++			if (value <= 0 || (u64)value <= min_thresh || (u64)value >= max_thresh)
+ 				continue;
+ 
+ 			divisor++;
+ 
+ 			avg += value;
+-			stddev += value * value;
+ 			if (value > max)
+ 				max = value;
+ 			if (value < min)
+@@ -235,10 +233,20 @@
+ 			return 0;
+ 
+ 		do_div(avg, divisor);
+-		do_div(stddev, divisor);
++		for (i = 0; i < MAXSAMPLES; i++) {
++			value = ktime_to_us(samples_history[i]);
++			if (value <= 0 || (u64)value <= min_thresh || (u64)value >= max_thresh)
++				continue;
++			if (check_mul_overflow((u64)value, (u64)value, &square))
++				return 0;
++			remainder += do_div(square, divisor);
++			if (check_add_overflow(stddev, square, &stddev))
++				return 0;
++		}
++		stddev += div_u64(remainder, divisor);
+ 		avg_sq = avg * avg;
+ 		stddev -= avg_sq;
+-		stddev_sqrt = int_sqrt(stddev);
++		stddev_sqrt = int_sqrt64(stddev);
+ 
+ 		/*
+ 		 * If the deviation is less, return the average, else
+@@ -501,7 +509,7 @@
+ 		lpm_history->samples_idx = 0;
+ }
+ 
+-void update_ipi_history(int cpu, ktime_t now)
++static void update_ipi_history(int cpu, ktime_t now)
+ {
+ 	struct lpm_cpu *cpu_gov = per_cpu_ptr(&lpm_cpu_data, cpu);
+ 	struct history_ipi *history = &cpu_gov->ipi_history;
+@@ -551,7 +559,7 @@
+ 	cpu_gov->next_wakeup = KTIME_MAX - 1;
+ 	cpu_gov->cpu_off_invoked = true;
+ 
+-	if (cluster_gov_ops && cluster_gov_ops->select)
++	if (cpu_gov->enable && cluster_gov_ops && cluster_gov_ops->select)
+ 		cluster_gov_ops->select(cpu_gov);
+ 
+ 	dev_pm_qos_remove_notifier(dev, &cpu_gov->nb,
+@@ -568,12 +576,11 @@
+ 	if (!dev || !cpu_gov)
+ 		return 0;
+ 
++	cpu_gov->cpu = cpu;
+ 	cpu_gov->cpu_off_invoked = false;
+ 	cpu_gov->nb.notifier_call = lpm_cpu_qos_notify;
+-	dev_pm_qos_add_notifier(dev, &cpu_gov->nb,
+-				DEV_PM_QOS_RESUME_LATENCY);
+-
+-	return 0;
++	return dev_pm_qos_add_notifier(dev, &cpu_gov->nb,
++				       DEV_PM_QOS_RESUME_LATENCY);
+ }
+ 
+ static void ipi_raise(void *ignore, const struct cpumask *mask, const char *unused)
+@@ -907,13 +914,8 @@
+ 			     struct cpuidle_device *dev)
+ {
+ 	struct lpm_cpu *cpu_gov = per_cpu_ptr(&lpm_cpu_data, dev->cpu);
+-	struct hrtimer *cpu_histtimer = &cpu_gov->histtimer;
+-	struct hrtimer *cpu_biastimer = &cpu_gov->biastimer;
+ 	int ret;
+ 
+-	spin_lock_init(&cpu_gov->lock);
+-	hrtimer_init(cpu_histtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	hrtimer_init(cpu_biastimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	if (!traces_registered) {
+ 		ret = register_trace_ipi_raise(ipi_raise, NULL);
+ 		if (ret)
+@@ -922,6 +924,7 @@
+ 		ret = register_trace_ipi_entry(ipi_entry, NULL);
+ 		if (ret) {
+ 			unregister_trace_ipi_raise(ipi_raise, NULL);
++			tracepoint_synchronize_unregister();
+ 			return ret;
+ 		}
+ 
+@@ -930,6 +933,7 @@
+ 		if (ret) {
+ 			unregister_trace_ipi_raise(ipi_raise, NULL);
+ 			unregister_trace_ipi_entry(ipi_entry, NULL);
++			tracepoint_synchronize_unregister();
+ 			return ret;
+ 		}
+ 
+@@ -940,22 +944,32 @@
+ 			unregister_trace_ipi_entry(ipi_entry, NULL);
+ 			unregister_trace_android_vh_cpu_idle_enter(
+ 					lpm_idle_enter, NULL);
++			tracepoint_synchronize_unregister();
+ 			return ret;
+ 		}
+ 
+-		if (cluster_gov_ops && cluster_gov_ops->enable)
+-			cluster_gov_ops->enable();
++		if (cluster_gov_ops && cluster_gov_ops->enable) {
++			ret = cluster_gov_ops->enable();
++			if (ret) {
++				unregister_trace_android_vh_cpu_idle_exit(lpm_idle_exit, NULL);
++				unregister_trace_android_vh_cpu_idle_enter(lpm_idle_enter, NULL);
++				unregister_trace_ipi_entry(ipi_entry, NULL);
++				unregister_trace_ipi_raise(ipi_raise, NULL);
++				tracepoint_synchronize_unregister();
++				return ret;
++			}
++		}
+ 
+ 		traces_registered = true;
+ 	}
+ 
+ 	cpu_gov->cpu = dev->cpu;
+-	cpu_gov->enable = true;
+ 	cpu_gov->drv = drv;
+ 	cpu_gov->dev = dev;
+ 	cpu_gov->last_idx = -1;
+ 	cpu_gov->timer_factor = 1;
+ 	cpu_gov->exit_time = 0;
++	WRITE_ONCE(cpu_gov->enable, true);
+ 
+ 	return 0;
+ }
+@@ -971,7 +985,9 @@
+ 	struct lpm_cpu *cpu_gov = per_cpu_ptr(&lpm_cpu_data, dev->cpu);
+ 	int cpu;
+ 
+-	cpu_gov->enable = false;
++	WRITE_ONCE(cpu_gov->enable, false);
++	hrtimer_cancel(&cpu_gov->histtimer);
++	hrtimer_cancel(&cpu_gov->biastimer);
+ 	cpu_gov->last_idx = -1;
+ 	for_each_possible_cpu(cpu) {
+ 		struct lpm_cpu *cpu_gov = per_cpu_ptr(&lpm_cpu_data, cpu);
+@@ -990,6 +1006,7 @@
+ 		if (cluster_gov_ops && cluster_gov_ops->disable)
+ 			cluster_gov_ops->disable();
+ 
++		tracepoint_synchronize_unregister();
+ 		traces_registered = false;
+ 	}
+ }
+@@ -1030,40 +1047,61 @@
+ 
+ static int __init qcom_lpm_governor_init(void)
+ {
+-	int ret;
++	int ret, cpu, hp_state;
++
++	if (nr_cpu_ids > MAX_LPM_CPUS)
++		return -EINVAL;
++
++	for_each_possible_cpu(cpu) {
++		struct lpm_cpu *cpu_gov = per_cpu_ptr(&lpm_cpu_data, cpu);
++
++		cpu_gov->cpu = cpu;
++		cpu_gov->last_idx = -1;
++		spin_lock_init(&cpu_gov->lock);
++		hrtimer_setup(&cpu_gov->histtimer, histtimer_fn,
++			      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++		hrtimer_setup(&cpu_gov->biastimer, biastimer_fn,
++			      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	}
+ 
+ 	ret = create_global_sysfs_nodes();
+ 	if (ret)
+-		goto sysfs_fail;
++		return ret;
+ 
+ 	ret = qcom_cluster_lpm_governor_init();
+ 	if (ret)
+ 		goto cluster_init_fail;
+ 
+-	ret = cpuidle_register_governor(&lpm_governor);
+-	if (ret)
+-		goto cpuidle_reg_fail;
+-
+ 	ret = register_trace_suspend_resume(qcom_lpm_suspend_trace, NULL);
+ 	if (ret)
+-		goto cpuidle_reg_fail;
+-
+-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "qcom-cpu-lpm",
+-				lpm_online_cpu, lpm_offline_cpu);
+-	if (ret < 0)
++		goto suspend_trace_fail;
++
++	hp_state = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "qcom-cpu-lpm",
++				    lpm_online_cpu, lpm_offline_cpu);
++	if (hp_state < 0) {
++		ret = hp_state;
+ 		goto cpuhp_setup_fail;
+-
+-	register_pm_notifier(&suspend_lpm_nb);
+-
+-	return 0;
+-
++	}
++
++	ret = register_pm_notifier(&suspend_lpm_nb);
++	if (ret)
++		goto pm_register_fail;
++
++	/* No unregister-governor API exists: publish only after setup succeeds. */
++	ret = cpuidle_register_governor(&lpm_governor);
++	if (!ret)
++		return 0;
++
++	unregister_pm_notifier(&suspend_lpm_nb);
++pm_register_fail:
++	cpuhp_remove_state(hp_state);
+ cpuhp_setup_fail:
+ 	unregister_trace_suspend_resume(qcom_lpm_suspend_trace, NULL);
+-cpuidle_reg_fail:
++	tracepoint_synchronize_unregister();
++suspend_trace_fail:
+ 	qcom_cluster_lpm_governor_deinit();
+ cluster_init_fail:
+ 	remove_global_sysfs_nodes();
+-sysfs_fail:
+ 	return ret;
+ }
+ module_init(qcom_lpm_governor_init);
+--- a/drivers/cpuidle/governors/qcom-cluster-lpm.c
++++ b/drivers/cpuidle/governors/qcom-cluster-lpm.c
+@@ -13,6 +13,7 @@
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/rculist.h>
+ #include <linux/pm_domain.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/sched/idle.h>
+@@ -21,21 +22,23 @@
+ #include <linux/tick.h>
+ #include <linux/time64.h>
+ 
+-#if defined(_TRACE_HOOK_PM_DOMAIN_H)
+ #include <trace/hooks/pm_domain.h>
+-#endif
++#include <linux/overflow.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include "trace-cluster-lpm.h"
+ #include "qcom-lpm.h"
+ 
+-LIST_HEAD(cluster_dev_list);
++static LIST_HEAD(cluster_dev_list);
++static DEFINE_MUTEX(cluster_dev_lock);
++static bool cluster_prediction_enabled;
++static struct tracepoint *allow_domain_state_tp;
+ 
+ static struct lpm_cluster *to_cluster(struct generic_pm_domain *genpd)
+ {
+ 	struct lpm_cluster *cluster_gov;
+ 
+-	list_for_each_entry(cluster_gov, &cluster_dev_list, list)
++	list_for_each_entry_rcu(cluster_gov, &cluster_dev_list, list)
+ 		if (cluster_gov->genpd == genpd)
+ 			return cluster_gov;
+ 
+@@ -74,7 +77,6 @@
+ {
+ 	struct hrtimer *timer = &cluster_gov->histtimer;
+ 
+-	timer->function = clusttimer_fn;
+ 	hrtimer_start(timer, time_ns, HRTIMER_MODE_REL_PINNED);
+ }
+ 
+@@ -162,6 +164,8 @@
+ 	 */
+ 	for (j = 0; j < genpd->state_count; j++) {
+ 		u32 count = 0;
++
++		avg_residency = 0;
+ 
+ 		for (i = 0; i < MAXSAMPLES; i++) {
+ 
+@@ -253,7 +257,7 @@
+  *			    which are in online for this cluster domain.
+  * @cluster_gov: Targeted cluster's lpm data structure
+  */
+-ktime_t get_cluster_sleep_time(struct lpm_cluster *cluster_gov)
++static ktime_t get_cluster_sleep_time(struct lpm_cluster *cluster_gov)
+ {
+ 	int cpu;
+ 	ktime_t next_wakeup, next_cpu_wakeup;
+@@ -286,8 +290,8 @@
+ 	s64 residency, cpus_qos;
+ 	int i;
+ 
+-	if (idx < 0)
+-		return 0;
++	if (idx < 0 || idx >= genpd->state_count)
++		return -EINVAL;
+ 
+ 	cluster_gov->entry_time = cluster_gov->now;
+ 	cluster_gov->entry_idx = idx;
+@@ -390,20 +394,27 @@
+  *
+  * It returns the NOTIFY_OK/NOTIFY_BAD to notify the notifier call chain
+  */
+-static int cluster_power_cb(struct notifier_block *nb,
++static int cluster_power_event(struct notifier_block *nb,
+ 			    unsigned long action, void *data)
+ {
+ 	struct lpm_cluster *cluster_gov = container_of(nb, struct lpm_cluster, genpd_nb);
+ 	struct generic_pm_domain *pd = cluster_gov->genpd;
+-	struct genpd_power_state *state = &pd->states[pd->state_idx];
++	struct genpd_power_state *state;
+ 	struct lpm_cpu *cpu_gov;
+ 	int cpu, ret = 0;
+-	u32 *suspend_param = state->data;
++	u32 suspend_param;
+ 	unsigned long flags;
++
++	if (!READ_ONCE(cluster_gov->initialized))
++		return NOTIFY_OK;
++	if (pd->state_idx < 0 || pd->state_idx >= pd->state_count)
++		return action == GENPD_NOTIFY_PRE_OFF ? NOTIFY_BAD : NOTIFY_OK;
++	state = &pd->states[pd->state_idx];
++	suspend_param = state->data ? *(u32 *)state->data : 0;
+ 
+ 	switch (action) {
+ 	case GENPD_NOTIFY_ON:
+-		trace_cluster_exit(raw_smp_processor_id(), pd->state_idx, *suspend_param);
++		trace_cluster_exit(raw_smp_processor_id(), pd->state_idx, suspend_param);
+ 		if (cluster_gov->genpd->suspended_count != 0)
+ 			break;
+ 
+@@ -419,7 +430,7 @@
+ 		if (!cpumask_intersects(cluster_gov->genpd->cpus, cpu_online_mask))
+ 			return NOTIFY_OK;
+ 
+-		if (!cluster_gov->state_allowed[pd->state_idx])
++		if (!READ_ONCE(cluster_gov->state_allowed[pd->state_idx]))
+ 			return NOTIFY_BAD;
+ 
+ 		if (cluster_gov->genpd->suspended_count != 0) {
+@@ -454,13 +465,25 @@
+ 
+ 		break;
+ 	case GENPD_NOTIFY_OFF:
+-		trace_cluster_enter(raw_smp_processor_id(), pd->state_idx, *suspend_param);
++		trace_cluster_enter(raw_smp_processor_id(), pd->state_idx, suspend_param);
+ 		break;
+ 	default:
+ 		break;
+ 	}
+ 
+ 	return NOTIFY_OK;
++}
++
++static int cluster_power_cb(struct notifier_block *nb,
++			    unsigned long action, void *data)
++{
++	int ret = NOTIFY_OK;
++
++	rcu_read_lock();
++	if (READ_ONCE(cluster_prediction_enabled))
++		ret = cluster_power_event(nb, action, data);
++	rcu_read_unlock();
++	return ret;
+ }
+ 
+ 
+@@ -493,8 +516,9 @@
+ 	struct lpm_cluster *cluster_gov;
+ 	int cpu = cpu_gov->cpu;
+ 
+-	list_for_each_entry(cluster_gov, &cluster_dev_list, list) {
+-		if (!cluster_gov->initialized)
++	rcu_read_lock();
++	list_for_each_entry_rcu(cluster_gov, &cluster_dev_list, list) {
++		if (!READ_ONCE(cluster_gov->initialized))
+ 			continue;
+ 
+ 		genpd = cluster_gov->genpd;
+@@ -507,6 +531,7 @@
+ 			spin_unlock(&cluster_gov->lock);
+ 		}
+ 	}
++	rcu_read_unlock();
+ }
+ 
+ /**
+@@ -520,8 +545,9 @@
+ 	struct lpm_cluster *cluster_gov;
+ 	int cpu = cpu_gov->cpu;
+ 
+-	list_for_each_entry(cluster_gov, &cluster_dev_list, list) {
+-		if (!cluster_gov->initialized)
++	rcu_read_lock();
++	list_for_each_entry_rcu(cluster_gov, &cluster_dev_list, list) {
++		if (!READ_ONCE(cluster_gov->initialized))
+ 			continue;
+ 
+ 		genpd = cluster_gov->genpd;
+@@ -533,37 +559,52 @@
+ 			spin_unlock(&cluster_gov->lock);
+ 		}
+ 	}
+-}
+-
+-#if defined(_TRACE_HOOK_PM_DOMAIN_H)
++	rcu_read_unlock();
++}
++
+ static void android_vh_allow_domain_state(void *unused,
+ 					  struct generic_pm_domain *genpd,
+ 					  uint32_t idx, bool *allow)
+ {
+-	struct lpm_cluster *cluster_gov = to_cluster(genpd);
+-
+-	if (!cluster_gov)
+-		return;
+-
+-	*allow = cluster_gov->state_allowed[idx];
+-}
+-#endif
++	struct lpm_cluster *cluster_gov;
++
++	rcu_read_lock();
++	cluster_gov = to_cluster(genpd);
++	if (cluster_gov && READ_ONCE(cluster_gov->initialized))
++		*allow = idx < genpd->state_count && idx < MAX_CLUSTER_STATES &&
++			 READ_ONCE(cluster_gov->state_allowed[idx]);
++	rcu_read_unlock();
++}
+ 
+ static void cluster_gov_disable(void)
+ {
+-#if defined(_TRACE_HOOK_PM_DOMAIN_H)
+-	unregister_trace_android_vh_allow_domain_state(android_vh_allow_domain_state, NULL);
+-#endif
+-}
+-
+-static void cluster_gov_enable(void)
+-{
+-#if defined(_TRACE_HOOK_PM_DOMAIN_H)
+-	register_trace_android_vh_allow_domain_state(android_vh_allow_domain_state, NULL);
+-#endif
+-}
+-
+-struct cluster_governor gov_ops = {
++	struct lpm_cluster *cluster_gov;
++
++	WRITE_ONCE(cluster_prediction_enabled, false);
++	tracepoint_probe_unregister(allow_domain_state_tp, android_vh_allow_domain_state, NULL);
++	tracepoint_synchronize_unregister();
++	synchronize_rcu();
++	mutex_lock(&cluster_dev_lock);
++	list_for_each_entry(cluster_gov, &cluster_dev_list, list) {
++		hrtimer_cancel(&cluster_gov->histtimer);
++		cluster_gov->is_timer_queued = false;
++		cluster_gov->is_timer_expired = false;
++		cluster_gov->need_timer_requeue = false;
++	}
++	mutex_unlock(&cluster_dev_lock);
++}
++
++static int cluster_gov_enable(void)
++{
++	int ret;
++
++	ret = tracepoint_probe_register(allow_domain_state_tp, android_vh_allow_domain_state, NULL);
++	if (!ret)
++		WRITE_ONCE(cluster_prediction_enabled, true);
++	return ret;
++}
++
++static struct cluster_governor gov_ops = {
+ 	.select = update_cluster_select,
+ 	.enable = cluster_gov_enable,
+ 	.disable = cluster_gov_disable,
+@@ -581,14 +622,17 @@
+ 			if (d->usage_attr[i].attr.name) {
+ 				sysfs_remove_file(d->kobj, &d->usage_attr[i].attr);
+ 				kfree(d->usage_attr[i].attr.name);
++				d->usage_attr[i].attr.name = NULL;
+ 			}
+ 			if (d->idle_time_attr[i].attr.name) {
+ 				sysfs_remove_file(d->kobj, &d->idle_time_attr[i].attr);
+ 				kfree(d->idle_time_attr[i].attr.name);
++				d->idle_time_attr[i].attr.name = NULL;
+ 			}
+ 			if (d->rejected_attr[i].attr.name) {
+ 				sysfs_remove_file(d->kobj, &d->rejected_attr[i].attr);
+ 				kfree(d->rejected_attr[i].attr.name);
++				d->rejected_attr[i].attr.name = NULL;
+ 			}
+ 		}
+ 	}
+@@ -596,19 +640,20 @@
+ 
+ static void lpm_cluster_gov_remove(struct platform_device *pdev)
+ {
+-	struct generic_pm_domain *genpd = pd_to_genpd(pdev->dev.pm_domain);
+-	struct lpm_cluster *cluster_gov = to_cluster(genpd);
+-
+-	if (!cluster_gov)
+-		return;
+-
++	struct lpm_cluster *cluster_gov = platform_get_drvdata(pdev);
++
++	mutex_lock(&cluster_dev_lock);
++	WRITE_ONCE(cluster_gov->initialized, false);
++	list_del_rcu(&cluster_gov->list);
++	mutex_unlock(&cluster_dev_lock);
++	dev_pm_genpd_remove_notifier(cluster_gov->dev);
++	synchronize_rcu();
++	hrtimer_cancel(&cluster_gov->histtimer);
++	cleanup_cluster_attrs(cluster_gov, cluster_gov->genpd->state_count - 1);
++	remove_cluster_sysfs_nodes(cluster_gov);
++	if (cluster_gov->min_residency_added)
++		cluster_gov->genpd->flags &= ~GENPD_FLAG_MIN_RESIDENCY;
+ 	pm_runtime_disable(&pdev->dev);
+-	cluster_gov->genpd->flags &= ~GENPD_FLAG_MIN_RESIDENCY;
+-
+-	cleanup_cluster_attrs(cluster_gov, cluster_gov->genpd->state_count - 1);
+-
+-	remove_cluster_sysfs_nodes(cluster_gov);
+-	dev_pm_genpd_remove_notifier(cluster_gov->dev);
+ }
+ 
+ static ssize_t usage_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+@@ -678,71 +723,14 @@
+ 	return scnprintf(buf, PAGE_SIZE, "%llu\n", genpd->states[i].rejected);
+ }
+ 
+-static int lpm_cluster_gov_probe(struct platform_device *pdev)
+-{
+-	struct device_node *dn = pdev->dev.of_node;
+-	struct lpm_cluster *cluster_gov;
+-	static bool gov_ops_registered;
++static int create_cluster_stats_nodes(struct lpm_cluster *cluster_gov)
++{
+ 	int ret, i;
+-
+-	cluster_gov = devm_kzalloc(&pdev->dev,
+-				   sizeof(struct lpm_cluster),
+-				   GFP_KERNEL);
+-	if (!cluster_gov)
+-		return -ENOMEM;
+-
+-	ret = of_property_read_u32(dn, "qcom,pred-prem-cnt",
+-				   &cluster_gov->pred_premature_cnt);
+-	if (ret)
+-		cluster_gov->pred_premature_cnt = PRED_PREMATURE_CNT;
+-
+-	ret = of_property_read_u64(dn, "qcom,sample-invalid-time",
+-				   &cluster_gov->samples_invalid_time);
+-	if (ret)
+-		cluster_gov->samples_invalid_time = CLUST_SMPL_INVLD_TIME;
+-
+-	cluster_gov->samples_invalid_time *= NSEC_PER_USEC;
+-	cluster_gov->use_bias_timer = of_property_read_bool(dn,
+-					"qcom,use-cluster-bias-timer");
+-
+-	cluster_gov->cpu_next_wakeup = devm_alloc_percpu(&pdev->dev, ktime_t);
+-	if (!cluster_gov->cpu_next_wakeup)
+-		return -ENOMEM;
+-
+-	spin_lock_init(&cluster_gov->lock);
+-	cluster_gov->dev = &pdev->dev;
+-	cluster_gov->pred_wakeup = KTIME_MAX;
+-	cluster_gov->pred_residency = 0;
+-	cluster_gov->predicted = false;
+-	cluster_gov->need_timer_requeue = false;
+-	cluster_gov->restrict_idx = -1;
+-	cluster_gov->timer_cpu = -1;
+-	pm_runtime_enable(&pdev->dev);
+-	hrtimer_init(&cluster_gov->histtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+-	cluster_gov->genpd = pd_to_genpd(cluster_gov->dev->pm_domain);
+-	cluster_gov->genpd_nb.notifier_call = cluster_power_cb;
+-	cluster_gov->genpd_nb.priority = INT_MAX;
+-	cluster_gov->genpd->flags |= GENPD_FLAG_MIN_RESIDENCY;
+-	ret = dev_pm_genpd_add_notifier(cluster_gov->dev,
+-					&cluster_gov->genpd_nb);
+-	if (ret) {
+-		pm_runtime_disable(&pdev->dev);
+-		return ret;
+-	}
+-
+-	if (create_cluster_sysfs_nodes(cluster_gov)) {
+-		pm_runtime_disable(&pdev->dev);
+-		return ret;
+-	}
+-
+-	list_add_tail(&cluster_gov->list, &cluster_dev_list);
+-	cluster_gov->initialized = true;
+ 
+ 	for (i = 0; i < cluster_gov->genpd->state_count; i++) {
+ 		char attr_name[32];
+ 		struct qcom_cluster_node *d = cluster_gov->dev_node[i];
+ 
+-		cluster_gov->state_allowed[i] = true;
+ 
+ 		if (!d) {
+ 			ret = -EINVAL;
+@@ -794,18 +782,91 @@
+ 			goto cleanup_attrs;
+ 	}
+ 
+-	if (!gov_ops_registered) {
+-		register_cluster_governor_ops(&gov_ops);
+-		gov_ops_registered = true;
+-	}
+-
+ 	return 0;
+-
+ cleanup_attrs:
+ 	cleanup_cluster_attrs(cluster_gov, i);
++	return ret;
++}
++
++static int lpm_cluster_gov_probe(struct platform_device *pdev)
++{
++	struct device_node *dn = pdev->dev.of_node;
++	struct lpm_cluster *cluster_gov;
++	int ret, i;
++
++	cluster_gov = devm_kzalloc(&pdev->dev, sizeof(*cluster_gov), GFP_KERNEL);
++	if (!cluster_gov)
++		return -ENOMEM;
++	if (!pdev->dev.pm_domain)
++		return -EPROBE_DEFER;
++	cluster_gov->genpd = pd_to_genpd(pdev->dev.pm_domain);
++	if (IS_ERR_OR_NULL(cluster_gov->genpd))
++		return -ENODEV;
++	if (!cluster_gov->genpd->states ||
++	    !cluster_gov->genpd->state_count ||
++	    cluster_gov->genpd->state_count > MAX_CLUSTER_STATES)
++		return -EINVAL;
++
++	ret = of_property_read_u32(dn, "qcom,pred-prem-cnt",
++				   &cluster_gov->pred_premature_cnt);
++	if (ret)
++		cluster_gov->pred_premature_cnt = PRED_PREMATURE_CNT;
++	if (!cluster_gov->pred_premature_cnt || cluster_gov->pred_premature_cnt > MAXSAMPLES)
++		return -EINVAL;
++	ret = of_property_read_u64(dn, "qcom,sample-invalid-time",
++				   &cluster_gov->samples_invalid_time);
++	if (ret)
++		cluster_gov->samples_invalid_time = CLUST_SMPL_INVLD_TIME;
++	if (cluster_gov->samples_invalid_time > S64_MAX / NSEC_PER_USEC)
++		return -ERANGE;
++	cluster_gov->samples_invalid_time *= NSEC_PER_USEC;
++	if (!cpumask_available(cluster_gov->genpd->cpus) || cpumask_empty(cluster_gov->genpd->cpus))
++		return -EINVAL;
++	cluster_gov->cpu_next_wakeup = devm_alloc_percpu(&pdev->dev, ktime_t);
++	if (!cluster_gov->cpu_next_wakeup)
++		return -ENOMEM;
++	for_each_possible_cpu(i)
++		*per_cpu_ptr(cluster_gov->cpu_next_wakeup, i) = KTIME_MAX;
++	cluster_gov->timer_cpu = -1;
++	cluster_gov->use_bias_timer = of_property_read_bool(dn, "qcom,use-cluster-bias-timer");
++	spin_lock_init(&cluster_gov->lock);
++	cluster_gov->dev = &pdev->dev;
++	cluster_gov->pred_wakeup = KTIME_MAX;
++	cluster_gov->next_wakeup = KTIME_MAX;
++	cluster_gov->entry_idx = INT_MIN;
++	cluster_gov->restrict_idx = -1;
++	hrtimer_setup(&cluster_gov->histtimer, clusttimer_fn, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	for (i = 0; i < cluster_gov->genpd->state_count; i++)
++		cluster_gov->state_allowed[i] = true;
++	cluster_gov->genpd_nb.notifier_call = cluster_power_cb;
++	cluster_gov->genpd_nb.priority = INT_MAX;
++	cluster_gov->min_residency_added = !(cluster_gov->genpd->flags & GENPD_FLAG_MIN_RESIDENCY);
++	cluster_gov->genpd->flags |= GENPD_FLAG_MIN_RESIDENCY;
++	pm_runtime_enable(&pdev->dev);
++	ret = dev_pm_genpd_add_notifier(cluster_gov->dev, &cluster_gov->genpd_nb);
++	if (ret)
++		goto disable_runtime;
++	ret = create_cluster_sysfs_nodes(cluster_gov);
++	if (ret)
++		goto remove_notifier;
++	ret = create_cluster_stats_nodes(cluster_gov);
++	if (ret) {
++		remove_cluster_sysfs_nodes(cluster_gov);
++		goto remove_notifier;
++	}
++	platform_set_drvdata(pdev, cluster_gov);
++	mutex_lock(&cluster_dev_lock);
++	WRITE_ONCE(cluster_gov->initialized, true);
++	list_add_tail_rcu(&cluster_gov->list, &cluster_dev_list);
++	mutex_unlock(&cluster_dev_lock);
++	return 0;
++
++remove_notifier:
++	dev_pm_genpd_remove_notifier(cluster_gov->dev);
++disable_runtime:
++	if (cluster_gov->min_residency_added)
++		cluster_gov->genpd->flags &= ~GENPD_FLAG_MIN_RESIDENCY;
+ 	pm_runtime_disable(&pdev->dev);
+-	dev_pm_genpd_remove_notifier(cluster_gov->dev);
+-	list_del(&cluster_gov->list);
+ 	return ret;
+ }
+ 
+@@ -829,7 +890,19 @@
+ 	 platform_driver_unregister(&qcom_cluster_lpm_driver);
+ }
+ 
++static void find_allow_domain_state(struct tracepoint *tp, void *unused)
++{
++	if (!strcmp(tp->name, "android_vh_allow_domain_state"))
++		allow_domain_state_tp = tp;
++}
++
+ int qcom_cluster_lpm_governor_init(void)
+ {
++	/* Use the kernel's exported tracepoint API, retaining the native hook. */
++	check_trace_callback_type_android_vh_allow_domain_state(android_vh_allow_domain_state);
++	for_each_kernel_tracepoint(find_allow_domain_state, NULL);
++	if (!allow_domain_state_tp)
++		return -ENOENT;
++	register_cluster_governor_ops(&gov_ops);
+ 	return platform_driver_register(&qcom_cluster_lpm_driver);
+ }
+--- a/drivers/cpuidle/governors/qcom-lpm-sysfs.c
++++ b/drivers/cpuidle/governors/qcom-lpm-sysfs.c
+@@ -28,7 +28,7 @@
+ 	if (ret)
+ 		return -EINVAL;
+ 
+-	d->cluster->state_allowed[d->state_idx] = !disable;
++	WRITE_ONCE(d->cluster->state_allowed[d->state_idx], !disable);
+ 
+ 	return len;
+ }
+@@ -39,7 +39,7 @@
+ {
+ 	struct qcom_cluster_node *d = container_of(attr, struct qcom_cluster_node, disable_attr);
+ 
+-	return scnprintf(buf, PAGE_SIZE, "%d\n", !d->cluster->state_allowed[d->state_idx]);
++	return scnprintf(buf, PAGE_SIZE, "%d\n", !READ_ONCE(d->cluster->state_allowed[d->state_idx]));
+ }
+ 
+ static int create_cluster_state_node(struct device *dev, struct qcom_cluster_node *d)
+@@ -66,39 +66,34 @@
+ 	d->attr_group->attrs = d->attrs;
+ 
+ 	ret = sysfs_create_group(d->kobj, d->attr_group);
+-	if (ret)
+-		return -ENOMEM;
+-
+ 	return ret;
+ }
+ 
+ void remove_cluster_sysfs_nodes(struct lpm_cluster *cluster)
+ {
+-	struct generic_pm_domain *genpd = cluster->genpd;
+-	struct kobject *kobj = cluster->dev_kobj;
+ 	int i;
+ 
+-	if (!qcom_lpm_kobj)
+-		return;
+-
+-	for (i = 0; i < genpd->state_count; i++) {
++	for (i = 0; i < cluster->genpd->state_count; i++) {
+ 		struct qcom_cluster_node *d = cluster->dev_node[i];
+ 
++		if (!d)
++			continue;
++		sysfs_remove_group(d->kobj, d->attr_group);
+ 		kobject_put(d->kobj);
+-	}
+-
+-	kobject_put(kobj);
++		cluster->dev_node[i] = NULL;
++	}
++	kobject_put(cluster->dev_kobj);
++	cluster->dev_kobj = NULL;
+ }
+ 
+ int create_cluster_sysfs_nodes(struct lpm_cluster *cluster)
+ {
+ 	char name[10];
+-	int i, ret;
++	int i, ret = -ENOMEM;
+ 	struct generic_pm_domain *genpd = cluster->genpd;
+ 
+ 	if (!qcom_lpm_kobj)
+ 		return -EPROBE_DEFER;
+-
+ 	cluster->dev_kobj = kobject_create_and_add(genpd->name, qcom_lpm_kobj);
+ 	if (!cluster->dev_kobj)
+ 		return -ENOMEM;
+@@ -107,31 +102,26 @@
+ 		struct qcom_cluster_node *d;
+ 
+ 		d = devm_kzalloc(cluster->dev, sizeof(*d), GFP_KERNEL);
+-		if (!d) {
+-			kobject_put(cluster->dev_kobj);
+-			return -ENOMEM;
+-		}
+-
++		if (!d)
++			goto fail;
+ 		d->state_idx = i;
+ 		d->cluster = cluster;
+-		scnprintf(name, PAGE_SIZE, "D%u", i);
++		scnprintf(name, sizeof(name), "D%u", i);
+ 		d->kobj = kobject_create_and_add(name, cluster->dev_kobj);
+-		if (!d->kobj) {
+-			kobject_put(cluster->dev_kobj);
+-			return -ENOMEM;
+-		}
+-
++		if (!d->kobj)
++			goto fail;
+ 		ret = create_cluster_state_node(cluster->dev, d);
+ 		if (ret) {
+ 			kobject_put(d->kobj);
+-			kobject_put(cluster->dev_kobj);
+-			return ret;
++			goto fail;
+ 		}
+-
+ 		cluster->dev_node[i] = d;
+-	}
+-
++		ret = -ENOMEM;
++	}
+ 	return 0;
++fail:
++	remove_cluster_sysfs_nodes(cluster);
++	return ret;
+ }
+ 
+ static ssize_t optimized_resi_show(struct kobject *kobj,
+@@ -512,11 +502,15 @@
+ 
+ void remove_global_sysfs_nodes(void)
+ {
++	if (qcom_lpm_kobj)
++		sysfs_remove_group(qcom_lpm_kobj, &lpm_gov_attr_group);
+ 	kobject_put(qcom_lpm_kobj);
++	qcom_lpm_kobj = NULL;
+ }
+ 
+ int create_global_sysfs_nodes(void)
+ {
++	int ret;
+ 	struct kobject *cpuidle_kobj;
+ 	struct device *dev_root = bus_get_dev_root(&cpu_subsys);
+ 
+@@ -526,8 +520,13 @@
+ 	cpuidle_kobj = &dev_root->kobj;
+ 
+ 	qcom_lpm_kobj = kobject_create_and_add(KBUILD_MODNAME, cpuidle_kobj);
++	put_device(dev_root);
+ 	if (!qcom_lpm_kobj)
+ 		return -ENOMEM;
+-
+-	return sysfs_create_group(qcom_lpm_kobj, &lpm_gov_attr_group);
+-}
++	ret = sysfs_create_group(qcom_lpm_kobj, &lpm_gov_attr_group);
++	if (ret) {
++		kobject_put(qcom_lpm_kobj);
++		qcom_lpm_kobj = NULL;
++	}
++	return ret;
++}
+--- a/drivers/cpuidle/governors/qcom-lpm.h
++++ b/drivers/cpuidle/governors/qcom-lpm.h
+@@ -127,6 +127,7 @@
+ 	spinlock_t lock;
+ 	bool predicted;
+ 	bool initialized;
++	bool min_residency_added;
+ 	bool is_timer_expired;
+ 	bool is_timer_queued;
+ 	bool need_timer_requeue;
+@@ -136,7 +137,7 @@
+ 
+ struct cluster_governor {
+ 	void (*select)(struct lpm_cpu *cpu_gov);
+-	void (*enable)(void);
++	int (*enable)(void);
+ 	void (*disable)(void);
+ 	void (*reflect)(struct lpm_cpu *cpu_gov);
+ };

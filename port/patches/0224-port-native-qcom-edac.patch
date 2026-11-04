@@ -1,0 +1,399 @@
+--- a/drivers/edac/qcom_edac.c
++++ b/drivers/edac/qcom_edac.c
+@@ -9,6 +9,7 @@
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/regmap.h>
++#include <linux/mutex.h>
+ #include <linux/soc/qcom/llcc-qcom.h>
+ 
+ #include "edac_mc.h"
+@@ -47,6 +48,7 @@
+ #define SB_DB_DRP_INTERRUPT_ENABLE      0x3
+ 
+ #define ECC_POLL_MSEC			5000
++#define LLCC_MAX_EDAC_BANKS		16
+ 
+ enum {
+ 	LLCC_DRAM_CE = 0,
+@@ -86,42 +88,74 @@
+ 	},
+ };
+ 
+-static int qcom_llcc_core_setup(struct llcc_drv_data *drv, struct regmap *llcc_bcast_regmap)
+-{
+-	u32 sb_err_threshold;
+-	int ret;
+-
+-	/*
+-	 * Configure interrupt enable registers such that Tag, Data RAM related
+-	 * interrupts are propagated to interrupt controller for servicing
+-	 */
+-	ret = regmap_update_bits(llcc_bcast_regmap, drv->edac_reg_offset->cmn_interrupt_0_enable,
+-				 TRP0_INTERRUPT_ENABLE,
+-				 TRP0_INTERRUPT_ENABLE);
+-	if (ret)
+-		return ret;
+-
+-	ret = regmap_update_bits(llcc_bcast_regmap, drv->edac_reg_offset->trp_interrupt_0_enable,
+-				 SB_DB_TRP_INTERRUPT_ENABLE,
+-				 SB_DB_TRP_INTERRUPT_ENABLE);
+-	if (ret)
+-		return ret;
+-
+-	sb_err_threshold = (SB_ERROR_THRESHOLD << SB_ERROR_THRESHOLD_SHIFT);
+-	ret = regmap_write(llcc_bcast_regmap, drv->edac_reg_offset->drp_ecc_error_cfg,
+-			   sb_err_threshold);
+-	if (ret)
+-		return ret;
+-
+-	ret = regmap_update_bits(llcc_bcast_regmap, drv->edac_reg_offset->cmn_interrupt_0_enable,
+-				 DRP0_INTERRUPT_ENABLE,
+-				 DRP0_INTERRUPT_ENABLE);
+-	if (ret)
+-		return ret;
+-
+-	ret = regmap_write(llcc_bcast_regmap, drv->edac_reg_offset->drp_interrupt_enable,
+-			   SB_DB_DRP_INTERRUPT_ENABLE);
+-	return ret;
++struct qcom_llcc_edac {
++	struct edac_device_ctl_info *ctl;
++	struct llcc_drv_data *drv;
++	struct mutex lock;
++	bool active;
++	bool configured;
++	bool irq_requested;
++	bool registered;
++	u32 saved[4];
++};
++
++static void qcom_llcc_setup_registers(struct llcc_drv_data *drv, u32 *regs)
++{
++	regs[0] = drv->edac_reg_offset->cmn_interrupt_0_enable;
++	regs[1] = drv->edac_reg_offset->trp_interrupt_0_enable;
++	regs[2] = drv->edac_reg_offset->drp_ecc_error_cfg;
++	regs[3] = drv->edac_reg_offset->drp_interrupt_enable;
++}
++
++static const u32 qcom_llcc_setup_masks[] = {
++	TRP0_INTERRUPT_ENABLE | DRP0_INTERRUPT_ENABLE,
++	SB_DB_TRP_INTERRUPT_ENABLE, U32_MAX, U32_MAX,
++};
++
++static void qcom_llcc_restore_setup(struct qcom_llcc_edac *st)
++{
++	u32 regs[4];
++	int i, ret;
++
++	if (!st->configured)
++		return;
++	qcom_llcc_setup_registers(st->drv, regs);
++	for (i = ARRAY_SIZE(regs) - 1; i >= 0; i--) {
++		ret = regmap_update_bits(st->drv->bcast_regmap, regs[i],
++					 qcom_llcc_setup_masks[i], st->saved[i]);
++		if (ret)
++			dev_err(st->ctl->dev, "Failed to restore ECC register %#x: %d\n",
++				regs[i], ret);
++	}
++	st->configured = false;
++}
++
++static int qcom_llcc_core_setup(struct qcom_llcc_edac *st)
++{
++	u32 regs[4];
++	const u32 values[] = {
++		TRP0_INTERRUPT_ENABLE | DRP0_INTERRUPT_ENABLE,
++		SB_DB_TRP_INTERRUPT_ENABLE,
++		SB_ERROR_THRESHOLD << SB_ERROR_THRESHOLD_SHIFT,
++		SB_DB_DRP_INTERRUPT_ENABLE,
++	};
++	int i, ret;
++
++	qcom_llcc_setup_registers(st->drv, regs);
++	/* Snapshot before any write. Publish handlers only after all writes pass. */
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		ret = regmap_read(st->drv->bcast_regmap, regs[i], &st->saved[i]);
++		if (ret)
++			return ret;
++	}
++	st->configured = true;
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		ret = regmap_update_bits(st->drv->bcast_regmap, regs[i],
++					 qcom_llcc_setup_masks[i], values[i]);
++		if (ret)
++			return ret;
++	}
++	return 0;
+ }
+ 
+ /* Clear the error interrupt and counter registers */
+@@ -246,6 +280,13 @@
+ 		    reg_data.name, err_ways);
+ 
+ clear:
++	if (ret) {
++		int clear_ret = qcom_llcc_clear_error_status(err_type, drv);
++
++		if (clear_ret)
++			pr_err("LLCC ECC status clear failed: %d\n", clear_ret);
++		return ret;
++	}
+ 	return qcom_llcc_clear_error_status(err_type, drv);
+ }
+ 
+@@ -257,7 +298,10 @@
+ 
+ 	ret = dump_syn_reg_values(drv, bank, err_type);
+ 	if (ret)
+-		return ret;
++		dev_err(edev_ctl->dev, "ECC syndrome/status read failed: %d\n", ret);
++	/* The preceding status read established a fault. Never hide a real UE
++	 * merely because its syndrome/acknowledgement operation failed.
++	 */
+ 
+ 	switch (err_type) {
+ 	case LLCC_DRAM_CE:
+@@ -285,119 +329,128 @@
+ 	return ret;
+ }
+ 
+-static irqreturn_t llcc_ecc_irq_handler(int irq, void *edev_ctl)
+-{
+-	struct edac_device_ctl_info *edac_dev_ctl = edev_ctl;
+-	struct llcc_drv_data *drv = edac_dev_ctl->dev->platform_data;
+-	irqreturn_t irq_rc = IRQ_NONE;
+-	u32 drp_error, trp_error, i;
+-	int ret;
+-
+-	/* Iterate over the banks and look for Tag RAM or Data RAM errors */
++static irqreturn_t llcc_ecc_irq_handler(int irq, void *data)
++{
++	struct edac_device_ctl_info *ctl = data;
++	struct qcom_llcc_edac *st = ctl->pvt_info;
++	struct llcc_drv_data *drv = st->drv;
++	irqreturn_t handled = IRQ_NONE;
++	u32 drp[LLCC_MAX_EDAC_BANKS] = {0}, trp[LLCC_MAX_EDAC_BANKS] = {0};
++	bool drp_valid[LLCC_MAX_EDAC_BANKS], trp_valid[LLCC_MAX_EDAC_BANKS];
++	u32 i, bit;
++
++	mutex_lock(&st->lock);
++	if (!st->active)
++		goto out;
++	/* A broadcast clear affects every bank. Snapshot all banks before
++	 * acknowledging any fault, so a CE cannot erase an unseen UE.
++	 */
+ 	for (i = 0; i < drv->num_banks; i++) {
+-		ret = regmap_read(drv->regmaps[i], drv->edac_reg_offset->drp_interrupt_status,
+-				  &drp_error);
+-
+-		if (!ret && (drp_error & SB_ECC_ERROR)) {
+-			edac_printk(KERN_CRIT, EDAC_LLCC,
+-				    "Single Bit Error detected in Data RAM\n");
+-			ret = dump_syn_reg(edev_ctl, LLCC_DRAM_CE, i);
+-		} else if (!ret && (drp_error & DB_ECC_ERROR)) {
+-			edac_printk(KERN_CRIT, EDAC_LLCC,
+-				    "Double Bit Error detected in Data RAM\n");
+-			ret = dump_syn_reg(edev_ctl, LLCC_DRAM_UE, i);
++		drp_valid[i] = !regmap_read(drv->regmaps[i], drv->edac_reg_offset->drp_interrupt_status, &drp[i]);
++		trp_valid[i] = !regmap_read(drv->regmaps[i], drv->edac_reg_offset->trp_interrupt_0_status, &trp[i]);
++	}
++	/* Uncorrectable errors take precedence across all banks. */
++	for (bit = DB_ECC_ERROR; bit; bit >>= 1) {
++		for (i = 0; i < drv->num_banks; i++) {
++			if (drp_valid[i] && (drp[i] & bit) &&
++			    !(bit == SB_ECC_ERROR && (drp[i] & DB_ECC_ERROR))) {
++				dump_syn_reg(ctl, bit == DB_ECC_ERROR ? LLCC_DRAM_UE : LLCC_DRAM_CE, i);
++				handled = IRQ_HANDLED;
++			}
++			if (trp_valid[i] && (trp[i] & bit) &&
++			    !(bit == SB_ECC_ERROR && (trp[i] & DB_ECC_ERROR))) {
++				dump_syn_reg(ctl, bit == DB_ECC_ERROR ? LLCC_TRAM_UE : LLCC_TRAM_CE, i);
++				handled = IRQ_HANDLED;
++			}
+ 		}
++	}
++out:
++	mutex_unlock(&st->lock);
++	return handled;
++}
++
++static void llcc_ecc_check(struct edac_device_ctl_info *edev_ctl)
++{
++	llcc_ecc_irq_handler(0, edev_ctl);
++}
++
++static int qcom_llcc_edac_probe(struct platform_device *pdev)
++{
++	struct llcc_drv_data *drv = pdev->dev.platform_data;
++	struct edac_device_ctl_info *ctl;
++	struct qcom_llcc_edac *st;
++	struct device *dev = &pdev->dev;
++	int i, ret;
++
++	if (!drv || !drv->edac_reg_offset || IS_ERR_OR_NULL(drv->bcast_regmap) ||
++	    !drv->num_banks || drv->num_banks > LLCC_MAX_EDAC_BANKS || !drv->regmaps)
++		return -EINVAL;
++	for (i = 0; i < drv->num_banks; i++)
++		if (IS_ERR_OR_NULL(drv->regmaps[i]))
++			return -EINVAL;
++	ctl = edac_device_alloc_ctl_info(sizeof(*st), "qcom-llcc", 1, "bank",
++					drv->num_banks, 1, edac_device_alloc_index());
++	if (!ctl)
++		return -ENOMEM;
++	ctl->dev = dev;
++	ctl->mod_name = dev_name(dev);
++	ctl->dev_name = dev_name(dev);
++	ctl->ctl_name = "llcc";
++	ctl->panic_on_ue = LLCC_ERP_PANIC_ON_UE;
++	st = ctl->pvt_info;
++	st->ctl = ctl;
++	st->drv = drv;
++	mutex_init(&st->lock);
++	if (drv->ecc_irq > 0) {
++		ret = devm_request_threaded_irq(dev, drv->ecc_irq, NULL,
++				llcc_ecc_irq_handler, IRQF_ONESHOT | IRQF_TRIGGER_HIGH,
++				"llcc_ecc", ctl);
+ 		if (!ret)
+-			irq_rc = IRQ_HANDLED;
+-
+-		ret = regmap_read(drv->regmaps[i], drv->edac_reg_offset->trp_interrupt_0_status,
+-				  &trp_error);
+-
+-		if (!ret && (trp_error & SB_ECC_ERROR)) {
+-			edac_printk(KERN_CRIT, EDAC_LLCC,
+-				    "Single Bit Error detected in Tag RAM\n");
+-			ret = dump_syn_reg(edev_ctl, LLCC_TRAM_CE, i);
+-		} else if (!ret && (trp_error & DB_ECC_ERROR)) {
+-			edac_printk(KERN_CRIT, EDAC_LLCC,
+-				    "Double Bit Error detected in Tag RAM\n");
+-			ret = dump_syn_reg(edev_ctl, LLCC_TRAM_UE, i);
+-		}
+-		if (!ret)
+-			irq_rc = IRQ_HANDLED;
+-	}
+-
+-	return irq_rc;
+-}
+-
+-static void llcc_ecc_check(struct edac_device_ctl_info *edev_ctl)
+-{
+-	llcc_ecc_irq_handler(0, edev_ctl);
+-}
+-
+-static int qcom_llcc_edac_probe(struct platform_device *pdev)
+-{
+-	struct llcc_drv_data *llcc_driv_data = pdev->dev.platform_data;
+-	struct edac_device_ctl_info *edev_ctl;
+-	struct device *dev = &pdev->dev;
+-	int ecc_irq;
+-	int rc;
+-
+-	rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
+-	if (rc)
+-		return rc;
+-
+-	/* Allocate edac control info */
+-	edev_ctl = edac_device_alloc_ctl_info(0, "qcom-llcc", 1, "bank",
+-					      llcc_driv_data->num_banks, 1,
+-					      NULL, 0,
+-					      edac_device_alloc_index());
+-
+-	if (!edev_ctl)
+-		return -ENOMEM;
+-
+-	edev_ctl->dev = dev;
+-	edev_ctl->mod_name = dev_name(dev);
+-	edev_ctl->dev_name = dev_name(dev);
+-	edev_ctl->ctl_name = "llcc";
+-	edev_ctl->panic_on_ue = LLCC_ERP_PANIC_ON_UE;
+-
+-	/* Check if LLCC driver has passed ECC IRQ */
+-	ecc_irq = llcc_driv_data->ecc_irq;
+-	if (ecc_irq > 0) {
+-		/* Use interrupt mode if IRQ is available */
+-		rc = devm_request_irq(dev, ecc_irq, llcc_ecc_irq_handler,
+-			      IRQF_TRIGGER_HIGH, "llcc_ecc", edev_ctl);
+-		if (!rc) {
+-			edac_op_state = EDAC_OPSTATE_INT;
+-			goto irq_done;
+-		}
+-	}
+-
+-	/* Fall back to polling mode otherwise */
+-	edev_ctl->poll_msec = ECC_POLL_MSEC;
+-	edev_ctl->edac_check = llcc_ecc_check;
+-	edac_op_state = EDAC_OPSTATE_POLL;
+-
+-irq_done:
+-	rc = edac_device_add_device(edev_ctl);
+-	if (rc) {
+-		edac_device_free_ctl_info(edev_ctl);
+-		return rc;
+-	}
+-
+-	platform_set_drvdata(pdev, edev_ctl);
+-
+-	return rc;
+-}
+-
+-static int qcom_llcc_edac_remove(struct platform_device *pdev)
+-{
+-	struct edac_device_ctl_info *edev_ctl = dev_get_drvdata(&pdev->dev);
+-
+-	edac_device_del_device(edev_ctl->dev);
+-	edac_device_free_ctl_info(edev_ctl);
+-
++			st->irq_requested = true;
++	}
++	if (!st->irq_requested) {
++		ctl->poll_msec = ECC_POLL_MSEC;
++		ctl->edac_check = llcc_ecc_check;
++	}
++	ret = edac_device_add_device(ctl);
++	if (ret)
++		goto release_irq;
++	st->registered = true;
++	mutex_lock(&st->lock);
++	ret = qcom_llcc_core_setup(st);
++	if (!ret)
++		st->active = true;
++	else
++		qcom_llcc_restore_setup(st);
++	mutex_unlock(&st->lock);
++	if (ret)
++		goto release_irq;
++	platform_set_drvdata(pdev, ctl);
+ 	return 0;
++release_irq:
++	if (st->irq_requested)
++		devm_free_irq(dev, drv->ecc_irq, ctl);
++	if (st->registered)
++		edac_device_del_device(dev);
++	edac_device_free_ctl_info(ctl);
++	return ret;
++}
++
++static void qcom_llcc_edac_remove(struct platform_device *pdev)
++{
++	struct edac_device_ctl_info *ctl = platform_get_drvdata(pdev);
++	struct qcom_llcc_edac *st = ctl->pvt_info;
++
++	mutex_lock(&st->lock);
++	st->active = false;
++	qcom_llcc_restore_setup(st);
++	mutex_unlock(&st->lock);
++	/* Both IRQ and EDAC polling callbacks must finish before ctl is freed. */
++	if (st->irq_requested)
++		devm_free_irq(&pdev->dev, st->drv->ecc_irq, ctl);
++	edac_device_del_device(ctl->dev);
++	platform_set_drvdata(pdev, NULL);
++	edac_device_free_ctl_info(ctl);
+ }
+ 
+ static const struct platform_device_id qcom_llcc_edac_id_table[] = {
+@@ -418,3 +471,5 @@
+ 
+ MODULE_DESCRIPTION("QCOM EDAC driver");
+ MODULE_LICENSE("GPL v2");
++
++MODULE_SOFTDEP("pre: llcc_qcom");

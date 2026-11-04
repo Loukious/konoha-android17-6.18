@@ -42,3 +42,5 @@ SRCU. Register/unregister callbacks can sleep while changing the graph;
 the CTI module can unload. It holds no graph mutex while waiting. The actual
 wrappers have concurrent add/remove-versus-unload host tests in
 `verify_cti_assoc.py`, and the normal GKI build checks the real SRCU API.
+
+The HVC extension uses `0002-required-common-fixes-with-hvc.patch`. The original required patch and pre-HVC manifest are preserved; `hvc-core.patch` is the independently reviewed second component. Its public certificate and trusted-key config preserve signed accepted GKI compatibility without disabling module protection. New-file before hashes are null and those files are removed on context exit.

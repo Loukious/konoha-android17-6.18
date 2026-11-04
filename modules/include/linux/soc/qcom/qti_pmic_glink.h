@@ -58,6 +58,23 @@ struct pmic_glink_client *pmic_glink_register_client(struct device *dev,
 int pmic_glink_unregister_client(struct pmic_glink_client *client);
 int pmic_glink_write(struct pmic_glink_client *client, void *data,
 			size_t len);
+/* Replies have no native transaction ID. Call begin before a synchronous
+ * request; end after a validated reply or a failed send that did not submit.
+ * A timeout leaves the record pending. Client unregister preserves it until
+ * its late reply is consumed or a drained RPMSG channel removal clears it.
+ * Serialize request_begin/end/writes with unregister, as for ordinary writes.
+ */
+int pmic_glink_request_begin(struct pmic_glink_client *client, u32 opcode,
+			    u32 type, size_t min_len, size_t max_len);
+void pmic_glink_request_end(struct pmic_glink_client *client, u32 opcode);
+/* Reject a matching envelope whose client-specific payload is invalid.
+ * Keep its unanswered record across unregister. Call from the RX callback.
+ */
+void pmic_glink_request_reject(struct pmic_glink_client *client, u32 opcode);
+/* Match an echoed u32 reply field before releasing an orphaned request. */
+int pmic_glink_request_begin_keyed(struct pmic_glink_client *client, u32 opcode,
+			    u32 type, size_t min_len, size_t max_len,
+			    size_t key_offset, u32 key);
 #else
 static inline struct pmic_glink_client *pmic_glink_register_client(
 			struct device *dev,
@@ -76,6 +93,19 @@ static inline int pmic_glink_write(struct pmic_glink_client *client, void *data,
 {
 	return -ENODEV;
 }
+static inline int pmic_glink_request_begin(struct pmic_glink_client *client,
+		u32 opcode, u32 type, size_t min_len, size_t max_len)
+{
+	return -ENODEV;
+}
+static inline void pmic_glink_request_end(struct pmic_glink_client *client, u32 opcode)
+{ }
+static inline void pmic_glink_request_reject(struct pmic_glink_client *client, u32 opcode)
+{ }
+static inline int pmic_glink_request_begin_keyed(struct pmic_glink_client *client,
+		u32 opcode, u32 type, size_t min_len, size_t max_len,
+		size_t key_offset, u32 key)
+{ return -ENODEV; }
 #endif
 
 #endif

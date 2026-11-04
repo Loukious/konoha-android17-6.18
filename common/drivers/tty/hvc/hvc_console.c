@@ -27,6 +27,10 @@
 #include <linux/freezer.h>
 #include <linux/slab.h>
 #include <linux/serial_core.h>
+#include <linux/hvc_backend.h>
+#include <linux/idr.h>
+#include <linux/module.h>
+#include <linux/srcu.h>
 
 #include <linux/uaccess.h>
 
@@ -57,8 +61,8 @@ static struct task_struct *hvc_task;
 /* Picks up late kicks after list walk but before schedule() */
 static int hvc_kicked;
 
-/* hvc_init is triggered from hvc_alloc, i.e. only when actually used */
-static atomic_t hvc_needs_init __read_mostly = ATOMIC_INIT(-1);
+/* Legacy and owned backends share lazy initialization, including failed retries. */
+static DEFINE_MUTEX(hvc_init_mutex);
 
 static int hvc_init(void);
 
@@ -75,12 +79,211 @@ static LIST_HEAD(hvc_structs);
  */
 static DEFINE_MUTEX(hvc_structs_mutex);
 
+enum hvc_backend_state {
+	HVC_BACKEND_PRIVATE,
+	HVC_BACKEND_LIVE,
+	HVC_BACKEND_RETIRING,
+	HVC_BACKEND_RETIRED,
+};
+
 /*
- * This value is used to assign a tty->index value to a hvc_struct based
- * upon order of exposure via hvc_probe(), when we can not match it to
- * a console candidate registered with hvc_instantiate().
+ * Keep metadata, generation key, and tty index until the last port reference
+ * disappears. hp->ops always points into the core, including after removal.
+ * Existing hvc_struct/hv_ops layouts and legacy exported APIs stay unchanged.
  */
-static int last_hvc = -1;
+struct hvc_backend {
+	struct list_head all_node;
+	struct list_head live_node;
+	struct hvc_struct *hp;
+	const struct hvc_backend_ops *ops;
+	struct module *owner;
+	void *data;
+	u32 key;
+	enum hvc_backend_state state;
+};
+
+static LIST_HEAD(hvc_backend_all);
+static LIST_HEAD(hvc_backend_live);
+static DEFINE_IDA(hvc_backend_keys);
+DEFINE_STATIC_SRCU(hvc_backend_srcu);
+
+static struct hvc_backend *hvc_backend_get(u32 key, bool closing, int *idx)
+{
+	struct hvc_backend *backend;
+
+	*idx = srcu_read_lock(&hvc_backend_srcu);
+	list_for_each_entry_rcu(backend, &hvc_backend_live, live_node,
+			       srcu_read_lock_held(&hvc_backend_srcu)) {
+		enum hvc_backend_state state = READ_ONCE(backend->state);
+
+		if (backend->key == key &&
+		    (state == HVC_BACKEND_LIVE ||
+		     (closing && state == HVC_BACKEND_RETIRING)) &&
+		    try_module_get(backend->owner))
+			return backend;
+	}
+	srcu_read_unlock(&hvc_backend_srcu, *idx);
+	return NULL;
+}
+
+static void hvc_backend_put(struct hvc_backend *backend, int idx)
+{
+	module_put(backend->owner);
+	srcu_read_unlock(&hvc_backend_srcu, idx);
+}
+
+static ssize_t hvc_backend_get_chars(u32 key, u8 *buf, size_t count)
+{
+	struct hvc_backend *backend;
+	ssize_t ret;
+	int idx;
+
+	backend = hvc_backend_get(key, false, &idx);
+	if (!backend)
+		return -EPIPE;
+	ret = backend->ops->get_chars(backend->data, buf, count);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static ssize_t hvc_backend_put_chars(u32 key, const u8 *buf, size_t count)
+{
+	struct hvc_backend *backend;
+	ssize_t ret;
+	int idx;
+
+	backend = hvc_backend_get(key, false, &idx);
+	if (!backend)
+		return -EPIPE;
+	ret = backend->ops->put_chars(backend->data, buf, count);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static int hvc_backend_flush(u32 key, bool wait)
+{
+	struct hvc_backend *backend;
+	int idx, ret = 0;
+
+	backend = hvc_backend_get(key, false, &idx);
+	if (!backend)
+		return -ENODEV;
+	if (backend->ops->flush)
+		ret = backend->ops->flush(backend->data, wait);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static int hvc_backend_open(struct hvc_struct *hp, int unused)
+{
+	struct hvc_backend *backend;
+	int idx, ret = 0;
+
+	backend = hvc_backend_get(hp->vtermno, false, &idx);
+	if (!backend)
+		return -ENODEV;
+	if (backend->ops->open)
+		ret = backend->ops->open(backend->data);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static void hvc_backend_close(struct hvc_struct *hp, int unused)
+{
+	struct hvc_backend *backend;
+	int idx;
+
+	backend = hvc_backend_get(hp->vtermno, true, &idx);
+	if (!backend)
+		return;
+	if (backend->ops->close)
+		backend->ops->close(backend->data);
+	hvc_backend_put(backend, idx);
+}
+
+static void hvc_backend_hangup(struct hvc_struct *hp, int unused)
+{
+	struct hvc_backend *backend;
+	int idx;
+
+	backend = hvc_backend_get(hp->vtermno, true, &idx);
+	if (!backend)
+		return;
+	if (backend->ops->hangup)
+		backend->ops->hangup(backend->data);
+	else if (backend->ops->close)
+		backend->ops->close(backend->data);
+	hvc_backend_put(backend, idx);
+}
+
+static int hvc_backend_tiocmget(struct hvc_struct *hp)
+{
+	struct hvc_backend *backend;
+	int idx, ret = -EINVAL;
+
+	backend = hvc_backend_get(hp->vtermno, false, &idx);
+	if (!backend)
+		return -ENODEV;
+	if (backend->ops->tiocmget)
+		ret = backend->ops->tiocmget(backend->data);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static int hvc_backend_tiocmset(struct hvc_struct *hp, unsigned int set,
+			       unsigned int clear)
+{
+	struct hvc_backend *backend;
+	int idx, ret = -EINVAL;
+
+	backend = hvc_backend_get(hp->vtermno, false, &idx);
+	if (!backend)
+		return -ENODEV;
+	if (backend->ops->tiocmset)
+		ret = backend->ops->tiocmset(backend->data, set, clear);
+	hvc_backend_put(backend, idx);
+	return ret;
+}
+
+static void hvc_backend_dtr_rts(struct hvc_struct *hp, bool active)
+{
+	struct hvc_backend *backend;
+	int idx;
+
+	backend = hvc_backend_get(hp->vtermno, !active, &idx);
+	if (!backend)
+		return;
+	if (backend->ops->dtr_rts)
+		backend->ops->dtr_rts(backend->data, active);
+	hvc_backend_put(backend, idx);
+}
+
+static const struct hv_ops hvc_backend_forward_ops = {
+	.get_chars = hvc_backend_get_chars,
+	.put_chars = hvc_backend_put_chars,
+	.flush = hvc_backend_flush,
+	.notifier_add = hvc_backend_open,
+	.notifier_del = hvc_backend_close,
+	.notifier_hangup = hvc_backend_hangup,
+	.tiocmget = hvc_backend_tiocmget,
+	.tiocmset = hvc_backend_tiocmset,
+	.dtr_rts = hvc_backend_dtr_rts,
+};
+
+/* hvc_structs_mutex protects indices held by active and retained ports. */
+static bool hvc_index_in_use(int index)
+{
+	struct hvc_backend *backend;
+	struct hvc_struct *hp;
+
+	list_for_each_entry(hp, &hvc_structs, next)
+		if (hp->index == index)
+			return true;
+	list_for_each_entry(backend, &hvc_backend_all, all_node)
+		if (backend->hp->index == index)
+			return true;
+	return false;
+}
 
 /*
  * Do not call this function with either the hvc_structs_mutex or the hvc_struct
@@ -249,13 +452,23 @@ console_initcall(hvc_console_init);
 static void hvc_port_destruct(struct tty_port *port)
 {
 	struct hvc_struct *hp = container_of(port, struct hvc_struct, port);
+	struct hvc_backend *backend, *next;
 	unsigned long flags;
 
 	mutex_lock(&hvc_structs_mutex);
 
 	spin_lock_irqsave(&hp->lock, flags);
-	list_del(&(hp->next));
+	list_del_init(&hp->next);
 	spin_unlock_irqrestore(&hp->lock, flags);
+	list_for_each_entry_safe(backend, next, &hvc_backend_all, all_node) {
+		if (backend->hp != hp)
+			continue;
+		WARN_ON(backend->state != HVC_BACKEND_RETIRED);
+		list_del(&backend->all_node);
+		ida_free(&hvc_backend_keys, backend->key);
+		kfree(backend);
+		break;
+	}
 
 	mutex_unlock(&hvc_structs_mutex);
 
@@ -284,28 +497,26 @@ static void hvc_check_console(int index)
  */
 int hvc_instantiate(uint32_t vtermno, int index, const struct hv_ops *ops)
 {
-	struct hvc_struct *hp;
+	int ret = -1;
 
 	if (index < 0 || index >= MAX_NR_HVC_CONSOLES)
 		return -1;
 
-	if (vtermnos[index] != -1)
-		return -1;
-
-	/* make sure no tty has been registered in this index */
-	hp = hvc_get_by_index(index);
-	if (hp) {
-		tty_port_put(&hp->port);
-		return -1;
+	console_lock();
+	mutex_lock(&hvc_structs_mutex);
+	if (vtermnos[index] == (u32)-1 && !hvc_index_in_use(index)) {
+		cons_ops[index] = ops;
+		vtermnos[index] = vtermno;
+		ret = 0;
 	}
-
-	vtermnos[index] = vtermno;
-	cons_ops[index] = ops;
+	mutex_unlock(&hvc_structs_mutex);
+	console_unlock();
 
 	/* check if we need to re-register the kernel console */
-	hvc_check_console(index);
+	if (!ret)
+		hvc_check_console(index);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(hvc_instantiate);
 
@@ -908,25 +1119,36 @@ static const struct tty_port_operations hvc_port_ops = {
 	.destruct = hvc_port_destruct,
 };
 
+static int hvc_ensure_init(void)
+{
+	int ret = 0;
+
+	mutex_lock(&hvc_init_mutex);
+	if (!hvc_driver)
+		ret = hvc_init();
+	mutex_unlock(&hvc_init_mutex);
+	return ret;
+}
+
 struct hvc_struct *hvc_alloc(uint32_t vtermno, int data,
 			     const struct hv_ops *ops,
 			     int outbuf_size)
 {
 	struct hvc_struct *hp;
 	int i;
+	int ret;
 
 	/* We wait until a driver actually comes along */
-	if (atomic_inc_not_zero(&hvc_needs_init)) {
-		int err = hvc_init();
-		if (err)
-			return ERR_PTR(err);
-	}
+	ret = hvc_ensure_init();
+	if (ret)
+		return ERR_PTR(ret);
 
 	hp = kzalloc(struct_size(hp, outbuf, outbuf_size), GFP_KERNEL);
 	if (!hp)
 		return ERR_PTR(-ENOMEM);
 
 	hp->vtermno = vtermno;
+	hp->index = -1;
 	hp->data = data;
 	hp->ops = ops;
 	hp->outbuf_size = outbuf_size;
@@ -936,6 +1158,8 @@ struct hvc_struct *hvc_alloc(uint32_t vtermno, int data,
 
 	INIT_WORK(&hp->tty_resize, hvc_set_winsz);
 	spin_lock_init(&hp->lock);
+	INIT_LIST_HEAD(&hp->next);
+	console_lock();
 	mutex_lock(&hvc_structs_mutex);
 
 	/*
@@ -944,18 +1168,20 @@ struct hvc_struct *hvc_alloc(uint32_t vtermno, int data,
 	 */
 	for (i=0; i < MAX_NR_HVC_CONSOLES; i++)
 		if (vtermnos[i] == hp->vtermno &&
-		    cons_ops[i] == hp->ops)
+		    cons_ops[i] == hp->ops && !hvc_index_in_use(i))
 			break;
 
 	if (i >= MAX_NR_HVC_CONSOLES) {
-
-		/* find 'empty' slot for console */
-		for (i = 0; i < MAX_NR_HVC_CONSOLES && vtermnos[i] != -1; i++) {
+		for (i = 0; i < HVC_ALLOC_TTY_ADAPTERS; i++)
+			if (!hvc_index_in_use(i) &&
+			    (i >= MAX_NR_HVC_CONSOLES || vtermnos[i] == (u32)-1))
+				break;
+		if (i == HVC_ALLOC_TTY_ADAPTERS) {
+			mutex_unlock(&hvc_structs_mutex);
+			console_unlock();
+			tty_port_put(&hp->port);
+			return ERR_PTR(-ENOSPC);
 		}
-
-		/* no matching slot, just use a counter */
-		if (i == MAX_NR_HVC_CONSOLES)
-			i = ++last_hvc + MAX_NR_HVC_CONSOLES;
 	}
 
 	hp->index = i;
@@ -966,6 +1192,7 @@ struct hvc_struct *hvc_alloc(uint32_t vtermno, int data,
 
 	list_add_tail(&(hp->next), &hvc_structs);
 	mutex_unlock(&hvc_structs_mutex);
+	console_unlock();
 
 	/* check if we need to re-register the kernel console */
 	hvc_check_console(i);
@@ -1010,6 +1237,165 @@ void hvc_remove(struct hvc_struct *hp)
 	}
 }
 EXPORT_SYMBOL_GPL(hvc_remove);
+
+struct hvc_backend *hvc_backend_alloc(const struct hvc_backend_ops *ops,
+				     void *data, int outbuf_size,
+				     struct module *owner)
+{
+	struct hvc_backend *backend;
+	struct hvc_struct *hp;
+	int key, ret;
+
+	if (!ops || !ops->get_chars || !ops->put_chars || outbuf_size <= 0)
+		return ERR_PTR(-EINVAL);
+	ret = hvc_ensure_init();
+	if (ret)
+		return ERR_PTR(ret);
+	backend = kzalloc(sizeof(*backend), GFP_KERNEL);
+	if (!backend)
+		return ERR_PTR(-ENOMEM);
+	hp = kzalloc(struct_size(hp, outbuf, outbuf_size), GFP_KERNEL);
+	if (!hp) {
+		kfree(backend);
+		return ERR_PTR(-ENOMEM);
+	}
+	key = ida_alloc(&hvc_backend_keys, GFP_KERNEL);
+	if (key < 0) {
+		kfree(hp);
+		kfree(backend);
+		return ERR_PTR(key);
+	}
+	hp->vtermno = key;
+	hp->index = -1;
+	hp->ops = &hvc_backend_forward_ops;
+	hp->outbuf_size = outbuf_size;
+	tty_port_init(&hp->port);
+	hp->port.ops = &hvc_port_ops;
+	INIT_WORK(&hp->tty_resize, hvc_set_winsz);
+	spin_lock_init(&hp->lock);
+	INIT_LIST_HEAD(&hp->next);
+	backend->hp = hp;
+	backend->key = key;
+	backend->ops = ops;
+	backend->owner = owner;
+	backend->data = data;
+	backend->state = HVC_BACKEND_PRIVATE;
+	INIT_LIST_HEAD(&backend->live_node);
+	mutex_lock(&hvc_structs_mutex);
+	list_add_tail(&backend->all_node, &hvc_backend_all);
+	mutex_unlock(&hvc_structs_mutex);
+	return backend;
+}
+EXPORT_SYMBOL_GPL(hvc_backend_alloc);
+
+int hvc_backend_publish(struct hvc_backend **backends, unsigned int count)
+{
+	bool occupied[HVC_ALLOC_TTY_ADAPTERS] = { false };
+	int indices[HVC_ALLOC_TTY_ADAPTERS];
+	struct hvc_backend *backend;
+	struct hvc_struct *hp;
+	unsigned int i, j;
+	int ret = 0;
+
+	if (!backends || !count || count > HVC_ALLOC_TTY_ADAPTERS)
+		return -EINVAL;
+	/* Same order as retirement; never invoke backend callbacks under the mutex. */
+	console_lock();
+	mutex_lock(&hvc_structs_mutex);
+	for (i = 0; i < HVC_ALLOC_TTY_ADAPTERS; i++)
+		occupied[i] = hvc_index_in_use(i) ||
+			(i < MAX_NR_HVC_CONSOLES && vtermnos[i] != (u32)-1);
+	for (i = 0; i < count; i++) {
+		if (!backends[i] || backends[i]->state != HVC_BACKEND_PRIVATE) {
+			ret = -EINVAL;
+			goto out;
+		}
+		for (j = 0; j < i; j++)
+			if (backends[j] == backends[i]) {
+				ret = -EINVAL;
+				goto out;
+			}
+		for (j = 0; j < HVC_ALLOC_TTY_ADAPTERS; j++)
+			if (!occupied[j])
+				break;
+		if (j == HVC_ALLOC_TTY_ADAPTERS) {
+			ret = -ENOSPC;
+			goto out;
+		}
+		indices[i] = j;
+		occupied[j] = true;
+	}
+	/* Nothing below can fail after the first adapter is made visible. */
+	for (i = 0; i < count; i++) {
+		backend = backends[i];
+		hp = backend->hp;
+		hp->index = indices[i];
+		WRITE_ONCE(backend->state, HVC_BACKEND_LIVE);
+		list_add_tail_rcu(&backend->live_node, &hvc_backend_live);
+		if (hp->index < MAX_NR_HVC_CONSOLES) {
+			cons_ops[hp->index] = &hvc_backend_forward_ops;
+			vtermnos[hp->index] = backend->key;
+		}
+		list_add_tail(&hp->next, &hvc_structs);
+	}
+out:
+	mutex_unlock(&hvc_structs_mutex);
+	console_unlock();
+	if (!ret)
+		for (i = 0; i < count; i++)
+			hvc_check_console(indices[i]);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(hvc_backend_publish);
+
+void hvc_backend_remove(struct hvc_backend *backend)
+{
+	struct hvc_struct *hp = backend->hp;
+	struct tty_struct *tty;
+	bool published;
+
+	console_lock();
+	mutex_lock(&hvc_structs_mutex);
+	published = backend->state == HVC_BACKEND_LIVE;
+	WRITE_ONCE(backend->state, HVC_BACKEND_RETIRING);
+	list_del_init(&hp->next);
+	if (hp->index >= 0 && hp->index < MAX_NR_HVC_CONSOLES &&
+	    cons_ops[hp->index] == &hvc_backend_forward_ops &&
+	    vtermnos[hp->index] == backend->key) {
+		cons_ops[hp->index] = NULL;
+		vtermnos[hp->index] = -1;
+	}
+	mutex_unlock(&hvc_structs_mutex);
+	console_unlock();
+
+	tty = tty_port_tty_get(&hp->port);
+	if (tty) {
+		tty_vhangup(tty);
+		tty_kref_put(tty);
+	}
+	if (published) {
+		mutex_lock(&hvc_structs_mutex);
+		list_del_rcu(&backend->live_node);
+		mutex_unlock(&hvc_structs_mutex);
+		synchronize_srcu(&hvc_backend_srcu);
+		INIT_LIST_HEAD(&backend->live_node);
+	}
+	backend->ops = NULL;
+	backend->data = NULL;
+	backend->owner = NULL;
+	WRITE_ONCE(backend->state, HVC_BACKEND_RETIRED);
+	cancel_work_sync(&hp->tty_resize);
+	/* Final metadata/key/index release follows the final TTY reference. */
+	tty_port_put(&hp->port);
+}
+EXPORT_SYMBOL_GPL(hvc_backend_remove);
+
+void hvc_backend_poll(struct hvc_backend *backend)
+{
+	if (READ_ONCE(backend->state) == HVC_BACKEND_LIVE && hvc_poll(backend->hp))
+		hvc_kick();
+}
+EXPORT_SYMBOL_GPL(hvc_backend_poll);
 
 /* Driver initialization: called as soon as someone uses hvc_alloc(). */
 static int hvc_init(void)

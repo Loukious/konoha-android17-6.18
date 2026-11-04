@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "cases": 34893,
+  "driver_sha256": "62bff84eada262c6b0fdaf34bd15f7ff281fc140707184616a8780be938fc5cb",
+  "harness_sha256": "fec5e5088bc812fba9653bbd6bda4bb725723069e21be49421abaf6799900f68",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "skip-firmware-extent-bound": "REJECTED",
+    "accept-invalid-timestamp-shift": "REJECTED",
+    "truncate-shifted-timestamp": "REJECTED",
+    "use-cxpc-count-for-aoss-blocker-check": "REJECTED",
+    "publish-instance-before-probe-success": "REJECTED",
+    "retain-removed-global-instance": "REJECTED"
+  },
+  "limits": [
+    "Complete actual native driver, parser, formatting, sysfs, QMP state machine, probe and removal C; kernel frameworks simulated.",
+    "Firmware has no whole-log sequence protocol; header recheck detects some updates, not globally atomic logs.",
+    "Crash-dump QMP branch exercised only against a host mock, never on the phone."
+  ]
+}

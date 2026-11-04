@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+#include <linux/srcu.h>
 
 #include <linux/gunyah/gh_errno.h>
 #include <linux/gunyah/gh_dbl.h>
@@ -32,6 +33,9 @@ struct gh_dbl_cap_table {
 	gh_capid_t rx_cap_id;
 	int rx_irq;
 	int rx_reg_done;
+	bool rx_unregistering;
+	bool rx_srcu_initialized;
+	struct srcu_struct rx_srcu;
 	const char *rx_irq_name;
 	dbl_rx_cb_t rx_callback;
 	void *rx_priv_data;
@@ -59,7 +63,13 @@ static int gh_dbl_validate_params(struct gh_dbl_desc *client_desc,
 
 	cap_table_entry = &gh_dbl_cap_table[client_desc->label];
 
-	spin_lock(&cap_table_entry->cap_entry_lock);
+	/* A panic can stop another CPU while it owns this lock. */
+	if (flags & GH_DBL_NONBLOCK) {
+		if (!spin_trylock(&cap_table_entry->cap_entry_lock))
+			return -EAGAIN;
+	} else {
+		spin_lock(&cap_table_entry->cap_entry_lock);
+	}
 
 	if (cap_table_entry->client_desc != client_desc) {
 		spin_unlock(&cap_table_entry->cap_entry_lock);
@@ -284,11 +294,19 @@ EXPORT_SYMBOL_GPL(gh_dbl_reset);
 static irqreturn_t gh_dbl_rx_callback_thread(int irq, void *data)
 {
 	struct gh_dbl_cap_table *cap_table_entry = data;
+	dbl_rx_cb_t callback;
+	void *priv;
+	int index;
 
-	if (!cap_table_entry->rx_callback)
-		return IRQ_HANDLED;
-
-	cap_table_entry->rx_callback(irq, cap_table_entry->rx_priv_data);
+	/* The client's threaded callback may sleep or use its RX descriptor. */
+	index = srcu_read_lock(&cap_table_entry->rx_srcu);
+	spin_lock(&cap_table_entry->cap_entry_lock);
+	callback = cap_table_entry->rx_callback;
+	priv = cap_table_entry->rx_priv_data;
+	spin_unlock(&cap_table_entry->cap_entry_lock);
+	if (callback)
+		callback(irq, priv);
+	srcu_read_unlock(&cap_table_entry->rx_srcu, index);
 	return IRQ_HANDLED;
 }
 
@@ -443,7 +461,7 @@ int gh_dbl_tx_unregister(void *dbl_client_desc)
 	spin_lock(&cap_table_entry->cap_entry_lock);
 
 	/* Is the client trying to free someone else's doorbell? */
-	if (cap_table_entry->client_desc != client_desc) {
+	if (cap_table_entry->client_desc != client_desc || !cap_table_entry->tx_reg_done) {
 		pr_err("%s: Trying to free invalid client descriptor!\n",
 			__func__);
 		spin_unlock(&cap_table_entry->cap_entry_lock);
@@ -475,6 +493,9 @@ EXPORT_SYMBOL_GPL(gh_dbl_tx_unregister);
  *
  * The function returns 0 is the client was unregistered successfully. Else,
  * -EINVAL for invalid arguments.
+ * This function sleeps while draining RX callbacks. The client must call it
+ * from process context, outside its own RX callback, with its data still alive.
+ * Returns -EBUSY if another RX unregister is already draining this descriptor.
  */
 int gh_dbl_rx_unregister(void *dbl_client_desc)
 {
@@ -493,27 +514,37 @@ int gh_dbl_rx_unregister(void *dbl_client_desc)
 	spin_lock(&cap_table_entry->cap_entry_lock);
 
 	/* Is the client trying to free someone else's doorbell? */
-	if (cap_table_entry->client_desc != client_desc) {
+	if (cap_table_entry->client_desc != client_desc || !cap_table_entry->rx_reg_done) {
 		pr_err("%s: Trying to free invalid client descriptor!\n",
 			__func__);
 		spin_unlock(&cap_table_entry->cap_entry_lock);
 		return -EINVAL;
 	}
+	if (cap_table_entry->rx_unregistering) {
+		spin_unlock(&cap_table_entry->cap_entry_lock);
+		return -EBUSY;
+	}
 
 	pr_debug("%s: Unregistering client for label: %d\n", __func__,
 			 client_desc->label);
 
-	/* Tx client still holding the "client_desc". Do not remove now.*/
+	/* Stop new dispatch, keeping the descriptor valid for existing readers. */
+	cap_table_entry->rx_unregistering = true;
+	cap_table_entry->rx_callback = NULL;
+	cap_table_entry->rx_priv_data = NULL;
+	spin_unlock(&cap_table_entry->cap_entry_lock);
+	synchronize_srcu(&cap_table_entry->rx_srcu);
+	spin_lock(&cap_table_entry->cap_entry_lock);
+	cap_table_entry->rx_reg_done = 0;
+	cap_table_entry->rx_unregistering = false;
+
+	/* A TX client may have registered/unregistered while RX was draining. */
 	if (!cap_table_entry->tx_reg_done) {
 		cap_table_entry->client_desc = NULL;
 		kfree(client_desc);
 	} else {
 		pr_debug("%s: Tx client holding the client_desc.\n", __func__);
 	}
-
-	cap_table_entry->rx_callback = NULL;
-	cap_table_entry->rx_priv_data = NULL;
-	cap_table_entry->rx_reg_done = 0;
 
 	spin_unlock(&cap_table_entry->cap_entry_lock);
 
@@ -668,7 +699,19 @@ static void gh_dbl_cleanup(int begin_idx)
 
 	for (i = begin_idx; i >= 0; i--) {
 		cap_table_entry = &gh_dbl_cap_table[i];
+		/* RM normally releases these IRQs before its dependency unloads. */
+		if (cap_table_entry->rx_irq > 0) {
+			irq_set_irq_wake(cap_table_entry->rx_irq, 0);
+			free_irq(cap_table_entry->rx_irq, cap_table_entry);
+			cap_table_entry->rx_irq = 0;
+		}
+		if (cap_table_entry->rx_srcu_initialized) {
+			synchronize_srcu(&cap_table_entry->rx_srcu);
+			cleanup_srcu_struct(&cap_table_entry->rx_srcu);
+			cap_table_entry->rx_srcu_initialized = false;
+		}
 		kfree(cap_table_entry->rx_irq_name);
+		cap_table_entry->rx_irq_name = NULL;
 	}
 }
 
@@ -682,6 +725,10 @@ static int __init gh_dbl_init(void)
 		entry = &gh_dbl_cap_table[i];
 		spin_lock_init(&entry->cap_entry_lock);
 		init_waitqueue_head(&entry->cap_wq);
+		ret = init_srcu_struct(&entry->rx_srcu);
+		if (ret)
+			goto err;
+		entry->rx_srcu_initialized = true;
 		entry->tx_cap_id = GH_CAPID_INVAL;
 		entry->rx_cap_id = GH_CAPID_INVAL;
 		entry->rx_irq_name = kasprintf(GFP_KERNEL, "gh_dbl_rx_%d", i);
@@ -703,6 +750,7 @@ module_init(gh_dbl_init);
 
 static void __exit gh_dbl_exit(void)
 {
+	gh_dbl_initialized = false;
 	gh_dbl_cleanup(GH_DBL_LABEL_MAX - 1);
 }
 module_exit(gh_dbl_exit);

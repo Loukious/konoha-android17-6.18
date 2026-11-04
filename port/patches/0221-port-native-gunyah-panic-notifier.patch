@@ -1,0 +1,865 @@
+--- a/drivers/virt/gunyah/gh_panic_notifier.c
++++ b/drivers/virt/gunyah/gh_panic_notifier.c
+@@ -8,6 +8,9 @@
+ #include <linux/dma-direct.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/list.h>
++#include <linux/mutex.h>
+ #include <linux/irq.h>
+ #include <linux/module.h>
+ #include <linux/of_address.h>
+@@ -26,10 +29,27 @@
+ #define GH_RECOVERY_VM_MAX 2
+ #define GH_PANIC_DBL_MASK				0x1
+ 
++struct recovery_vm {
++	bool recovery;
++	struct device_attribute recovery_attr;
++};
++
+ struct gh_panic_notifier_dev {
+ 	struct device *dev;
+ 	struct resource res;
+ 	void *base;
++	dma_addr_t dma_handle;
++	struct mutex lock;
++	gh_vmid_t self_vmid, peer_vmid;
++	bool assigned;
++	bool shared;
++	bool panic_registered;
++	bool cma_initialized;
++	bool stopping;
++	bool pins_held;
++	struct list_head quarantine_node;
++	unsigned int recovery_files;
++	struct recovery_vm recovery_vms[GH_RECOVERY_VM_MAX];
+ 	u64 size;
+ 	u32 label, peer_name, memparcel;
+ 	bool primary_vm;
+@@ -40,7 +60,7 @@
+ 	struct notifier_block gh_panic_blk;
+ };
+ 
+-const static struct {
++static const struct {
+ 	enum gh_vm_names val;
+ 	const char *str;
+ } recovery_name_to_vm_name[] = {
+@@ -48,15 +68,13 @@
+ 	{GH_OEM_VM, "oemvm_recovery"},
+ };
+ 
+-struct recovery_vm {
+-	bool recovery;
+-	struct device_attribute recovery_attr;
+-};
+-
+-static struct recovery_vm *recovery_vms;
+ SRCU_NOTIFIER_HEAD_STATIC(gh_panic_notifier);
+ 
+-static inline struct recovery_vm *get_recovery_vm_from_vmid(gh_vmid_t vmid)
++/* Removed primary devices keep their ownership records until real reclaim succeeds. */
++static LIST_HEAD(gh_panic_quarantine);
++static DEFINE_MUTEX(gh_panic_quarantine_lock);
++
++static inline struct recovery_vm *get_recovery_vm_from_vmid(struct gh_panic_notifier_dev *gpnd, gh_vmid_t vmid)
+ {
+ 	struct recovery_vm *vm = NULL;
+ 	enum gh_vm_names vm_name;
+@@ -70,22 +88,7 @@
+ 
+ 	for (i = 0; i < ARRAY_SIZE(recovery_name_to_vm_name); ++i) {
+ 		if (recovery_name_to_vm_name[i].val == vm_name) {
+-			vm = &recovery_vms[i];
+-			break;
+-		}
+-	}
+-
+-	return vm;
+-}
+-
+-static inline struct recovery_vm *get_recovery_vm_from_name(const char *str)
+-{
+-	struct recovery_vm *vm = NULL;
+-	int i;
+-
+-	for (i = 0; i < ARRAY_SIZE(recovery_name_to_vm_name); ++i) {
+-		if (!strcmp(str, recovery_name_to_vm_name[i].str)) {
+-			vm = &recovery_vms[i];
++			vm = &gpnd->recovery_vms[i];
+ 			break;
+ 		}
+ 	}
+@@ -121,98 +124,149 @@
+ {
+ 	struct gh_panic_notifier_dev *gpnd = data;
+ 	gh_dbl_flags_t dbl_mask = GH_PANIC_DBL_MASK;
+-	bool *handle_done;
+-
+-	handle_done = gpnd->base;
+-	gh_dbl_read_and_clean(gpnd->rx_dbl, &dbl_mask, GH_DBL_NONBLOCK);
+-
+-	/* avoid system enter suspend */
++	int ret;
++
++	/* Registration can publish this threaded callback before returning. */
++	mutex_lock(&gpnd->lock);
++	if (gpnd->stopping)
++		goto out;
++	ret = gh_dbl_read_and_clean(gpnd->rx_dbl, &dbl_mask, GH_DBL_NONBLOCK);
++	if (ret || !(dbl_mask & GH_PANIC_DBL_MASK))
++		goto out;
+ 	__pm_stay_awake(gpnd->ws);
+ 	srcu_notifier_call_chain(&gh_panic_notifier, 0, NULL);
+-	*handle_done = true;
+-}
++	/* Secondary VM maps this shared acknowledgement as IO memory. */
++	writeb(1, gpnd->base);
++out:
++	mutex_unlock(&gpnd->lock);
++}
++
++/* Called with gpnd->lock held and its panic callback unregistered/drained. */
++static int gh_panic_notifier_release_mem(struct gh_panic_notifier_dev *gpnd)
++{
++	struct qcom_scm_vmperm dst = {
++		gpnd->self_vmid, PERM_READ | PERM_WRITE | PERM_EXEC
++	};
++	u64 owners;
++	int ret;
++
++	if (!gpnd->base)
++		return 0;
++	if (gpnd->shared) {
++		ret = ghd_rm_mem_reclaim(gpnd->memparcel, 0);
++		if (ret)
++			return ret;
++		gpnd->shared = false;
++	}
++	if (gpnd->assigned) {
++		owners = BIT_ULL(gpnd->self_vmid) | BIT_ULL(gpnd->peer_vmid);
++		ret = qcom_scm_assign_mem(gpnd->res.start, gpnd->size, &owners, &dst, 1);
++		if (ret)
++			return ret;
++		gpnd->assigned = false;
++	}
++	dma_free_coherent(gpnd->dev, gpnd->size, gpnd->base, gpnd->dma_handle);
++	gpnd->base = NULL;
++	gpnd->memparcel = 0;
++	return 0;
++}
++
++/* Drop pins only after any caller's CMA/device cleanup has finished. */
++static void gh_panic_notifier_drop_refs(struct gh_panic_notifier_dev *gpnd)
++{
++	if (gpnd->pins_held && !gpnd->base) {
++		gpnd->pins_held = false;
++		put_device(gpnd->dev);
++		module_put(THIS_MODULE);
++	}
++}
++
++/* SRCU VM callbacks may sleep. Never free a parcel still owned by its peer. */
++static int gh_panic_notifier_retry_quarantine(struct device *dev, gh_vmid_t peer)
++{
++	struct gh_panic_notifier_dev *gpnd, *next;
++	int ret, pending = 0;
++
++	mutex_lock(&gh_panic_quarantine_lock);
++	list_for_each_entry_safe(gpnd, next, &gh_panic_quarantine, quarantine_node) {
++		if (dev ? gpnd->dev != dev : gpnd->peer_vmid != peer)
++			continue;
++		ret = gh_panic_notifier_release_mem(gpnd);
++		if (ret) {
++			pending = -EBUSY;
++			continue;
++		}
++		list_del(&gpnd->quarantine_node);
++		if (gpnd->cma_initialized)
++			of_reserved_mem_device_release(gpnd->dev);
++		gh_panic_notifier_drop_refs(gpnd);
++		kfree(gpnd);
++	}
++	mutex_unlock(&gh_panic_quarantine_lock);
++	return pending;
++}
++
++static int gh_panic_notifier_quarantine_cb(struct notifier_block *nb,
++					 unsigned long cmd, void *data)
++{
++	if (data && (cmd == GH_VM_POWERUP_FAIL || cmd == GH_VM_EARLY_POWEROFF))
++		gh_panic_notifier_retry_quarantine(NULL, *(gh_vmid_t *)data);
++	return NOTIFY_DONE;
++}
++
++static struct notifier_block gh_panic_quarantine_nb = {
++	.notifier_call = gh_panic_notifier_quarantine_cb,
++	.priority = INT_MIN,
++};
+ 
+ static int gh_panic_notifier_share_mem(struct gh_panic_notifier_dev *gpnd,
+ 			gh_vmid_t self, gh_vmid_t peer)
+ {
+-	struct qcom_scm_vmperm dst_vmlist[] = {{self, PERM_READ | PERM_WRITE},
+-						{peer, PERM_READ | PERM_WRITE}};
+-	struct qcom_scm_vmperm src_vmlist[] = {{self,
+-					   PERM_READ | PERM_WRITE | PERM_EXEC}};
+-	u64 dst_vmid = BIT(dst_vmlist[0].vmid) | BIT(dst_vmlist[1].vmid);
+-	u64 src_vmid = BIT(src_vmlist[0].vmid);
++	struct qcom_scm_vmperm dst[] = {
++		{self, PERM_READ | PERM_WRITE}, {peer, PERM_READ | PERM_WRITE}
++	};
+ 	struct gh_acl_desc *acl;
+ 	struct gh_sgl_desc *sgl;
+-	int ret, assign_mem_ret;
+-
+-	ret = qcom_scm_assign_mem(gpnd->res.start, gpnd->size, &src_vmid,
+-				dst_vmlist, ARRAY_SIZE(dst_vmlist));
+-	if (ret) {
+-		dev_err(gpnd->dev, "qcom_scm_assign_mem addr=%llx size=%llu failed: %d\n",
+-		       gpnd->res.start, gpnd->size, ret);
+-		return ret;
+-	}
+-
+-	acl = kzalloc(offsetof(struct gh_acl_desc, acl_entries[2]), GFP_KERNEL);
++	u64 owners;
++	int ret;
++
++	if (self >= 64 || peer >= 64 || self == peer)
++		return -EINVAL;
++	if (gpnd->assigned || gpnd->shared || !gpnd->base)
++		return -EINVAL;
++	/* Descriptors must exist before changing the SCM ownership. */
++	acl = kzalloc(struct_size(acl, acl_entries, 2), GFP_KERNEL);
+ 	if (!acl)
+ 		return -ENOMEM;
+-	sgl = kzalloc(offsetof(struct gh_sgl_desc, sgl_entries[1]), GFP_KERNEL);
++	sgl = kzalloc(struct_size(sgl, sgl_entries, 1), GFP_KERNEL);
+ 	if (!sgl) {
+ 		kfree(acl);
+ 		return -ENOMEM;
+ 	}
+ 	acl->n_acl_entries = 2;
+-	acl->acl_entries[0].vmid = (u16)self;
++	acl->acl_entries[0].vmid = self;
+ 	acl->acl_entries[0].perms = GH_RM_ACL_R | GH_RM_ACL_W;
+-	acl->acl_entries[1].vmid = (u16)peer;
++	acl->acl_entries[1].vmid = peer;
+ 	acl->acl_entries[1].perms = GH_RM_ACL_R | GH_RM_ACL_W;
+-
+ 	sgl->n_sgl_entries = 1;
+ 	sgl->sgl_entries[0].ipa_base = gpnd->res.start;
+-	sgl->sgl_entries[0].size = resource_size(&gpnd->res);
+-
++	sgl->sgl_entries[0].size = gpnd->size;
++	gpnd->self_vmid = self;
++	gpnd->peer_vmid = peer;
++	owners = BIT_ULL(self);
++	ret = qcom_scm_assign_mem(gpnd->res.start, gpnd->size, &owners, dst, ARRAY_SIZE(dst));
++	if (ret)
++		goto out;
++	gpnd->assigned = true;
+ 	ret = ghd_rm_mem_share(GH_RM_MEM_TYPE_NORMAL, 0, gpnd->label,
+-			      acl, sgl, NULL, &gpnd->memparcel);
+-	if (ret) {
+-		dev_err(gpnd->dev, "Gunyah mem share addr=%llx size=%llu failed: %d\n",
+-		       gpnd->res.start, gpnd->size, ret);
+-		/* Attempt to give resource back to HLOS */
+-		assign_mem_ret = qcom_scm_assign_mem(gpnd->res.start, gpnd->size, &dst_vmid,
+-				src_vmlist, ARRAY_SIZE(src_vmlist));
+-		if (assign_mem_ret) {
+-			dev_err(gpnd->dev, "qcom_scm_assign_mem addr=%llx size=%llu failed: %d\n",
+-				gpnd->res.start, gpnd->size, ret);
+-		}
+-	}
+-
++			       acl, sgl, NULL, &gpnd->memparcel);
++	if (!ret)
++		gpnd->shared = true;
++	/* On error release_mem will restore only the ownership steps that succeeded. */
++out:
++	kfree(sgl);
+ 	kfree(acl);
+-	kfree(sgl);
+-
+ 	return ret;
+-}
+-
+-static void gh_panic_notifier_unshare_mem(struct gh_panic_notifier_dev *gpnd,
+-			gh_vmid_t self, gh_vmid_t peer)
+-{
+-	struct qcom_scm_vmperm dst_vmlist[] = {{self,
+-					       PERM_READ | PERM_WRITE | PERM_EXEC}};
+-	u64 src_vmid = BIT(self) | BIT(peer);
+-	int ret;
+-
+-	ret = ghd_rm_mem_reclaim(gpnd->memparcel, 0);
+-	if (ret)
+-		dev_err(gpnd->dev, "Gunyah mem reclaim failed: %d\n", ret);
+-
+-	ret = qcom_scm_assign_mem(gpnd->res.start, resource_size(&gpnd->res),
+-			&src_vmid, dst_vmlist, ARRAY_SIZE(dst_vmlist));
+-	if (ret) {
+-		dev_err(gpnd->dev, "unshare mem assign call failed with %d\n",
+-			ret);
+-	} else {
+-		dma_free_coherent(gpnd->dev, gpnd->size, gpnd->base,
+-				phys_to_dma(gpnd->dev, gpnd->res.start));
+-		gpnd->base = NULL;
+-	}
+ }
+ 
+ static int set_irqchip_state(struct irq_desc *desc, unsigned int irq,
+@@ -285,6 +339,7 @@
+ 	unsigned int i;
+ 	struct irq_desc *desc;
+ 
++	rcu_read_lock();
+ 	for_each_irq_desc(i, desc) {
+ 		struct irq_chip *chip;
+ 		int ret;
+@@ -308,6 +363,7 @@
+ 				chip->irq_disable(&desc->irq_data);
+ 		}
+ 	}
++	rcu_read_unlock();
+ }
+ 
+ static int gh_panic_notifier_notify(struct notifier_block *nb,
+@@ -324,10 +380,7 @@
+ 	if (!handle_done)
+ 		return NOTIFY_DONE;
+ 
+-	ret = ghd_rm_get_vmid(gpnd->peer_name, &peer_vmid);
+-	if (ret)
+-		return NOTIFY_DONE;
+-
++	peer_vmid = gpnd->peer_vmid;
+ 	ret = gh_panic_notifier_kick(gpnd->tx_dbl);
+ 	if (ret)
+ 		return NOTIFY_DONE;
+@@ -346,79 +399,102 @@
+ 			break;
+ 		}
+ 		retry_times--;
+-	} while (!(*handle_done) && retry_times > 0);
+-
+-	if (!(*handle_done))
++	} while (!READ_ONCE(*handle_done) && retry_times > 0);
++
++	if (!READ_ONCE(*handle_done))
+ 		printk_deferred("Notify the panic to VM fail\n");
+ 
+ 	return NOTIFY_DONE;
++}
++
++static void gh_panic_notifier_stop_panic(struct gh_panic_notifier_dev *gpnd)
++{
++	if (gpnd->panic_registered) {
++		atomic_notifier_chain_unregister(&panic_notifier_list, &gpnd->gh_panic_blk);
++		gpnd->panic_registered = false;
++	}
+ }
+ 
+ static int gh_panic_notifier_vm_cb(struct notifier_block *nb, unsigned long cmd,
+ 			     void *data)
+ {
+-	struct gh_panic_notifier_dev *gpnd;
++	struct gh_panic_notifier_dev *gpnd = container_of(nb, struct gh_panic_notifier_dev, vm_nb);
+ 	struct recovery_vm *vm;
+-	dma_addr_t dma_handle;
+-	gh_vmid_t *notify_vmid;
+-	gh_vmid_t peer_vmid;
+-	gh_vmid_t self_vmid;
+-	bool *handle_done;
+-
+-	gpnd = container_of(nb, struct gh_panic_notifier_dev, vm_nb);
+-	notify_vmid = data;
+-	if (ghd_rm_get_vmid(gpnd->peer_name, &peer_vmid))
++	gh_vmid_t peer, self, notified;
++	int ret;
++
++	if (!data)
+ 		return NOTIFY_DONE;
+-
+-	if (ghd_rm_get_vmid(GH_PRIMARY_VM, &self_vmid))
+-		return NOTIFY_DONE;
+-
++	notified = *(gh_vmid_t *)data;
++	mutex_lock(&gpnd->lock);
++	if (gpnd->stopping)
++		goto out;
+ 	switch (cmd) {
+ 	case GH_VM_BEFORE_POWERUP:
+-		if (peer_vmid == *notify_vmid) {
+-			gpnd->base = dma_alloc_coherent(gpnd->dev, gpnd->size,
+-							&dma_handle, GFP_KERNEL);
+-			if (!gpnd->base)
+-				return NOTIFY_DONE;
+-
+-			gpnd->res.start = dma_to_phys(gpnd->dev, dma_handle);
+-			gpnd->res.end = gpnd->res.start + gpnd->size - 1;
+-			handle_done = gpnd->base;
+-			*handle_done = false;
+-			if (gh_panic_notifier_share_mem(gpnd, self_vmid, peer_vmid)) {
+-				dev_err(gpnd->dev, "Failed to share memory\n");
+-				return NOTIFY_DONE;
+-			}
+-
++		if (ghd_rm_get_vmid(gpnd->peer_name, &peer) ||
++		    ghd_rm_get_vmid(GH_PRIMARY_VM, &self))
++			break;
++		if (peer != notified)
++			break;
++		/* A repeated event must not replace a live or unreclaimed allocation. */
++		if (gpnd->base)
++			break;
++		if (self >= 64 || peer >= 64 || self == peer)
++			break;
++		/* Unload may have started while an SRCU notification was in flight. */
++		if (!try_module_get(THIS_MODULE))
++			break;
++		gpnd->base = dma_alloc_coherent(gpnd->dev, gpnd->size, &gpnd->dma_handle, GFP_KERNEL);
++		if (!gpnd->base) {
++			module_put(THIS_MODULE);
++			break;
++		}
++		get_device(gpnd->dev);
++		gpnd->pins_held = true;
++		gpnd->res.start = dma_to_phys(gpnd->dev, gpnd->dma_handle);
++		gpnd->res.end = gpnd->res.start + gpnd->size - 1;
++		WRITE_ONCE(*(bool *)gpnd->base, false);
++		ret = gh_panic_notifier_share_mem(gpnd, self, peer);
++		if (!ret) {
+ 			gpnd->gh_panic_blk.notifier_call = gh_panic_notifier_notify;
+-			gpnd->gh_panic_blk.priority = 0;
+-			atomic_notifier_chain_register(&panic_notifier_list, &gpnd->gh_panic_blk);
++			ret = atomic_notifier_chain_register(&panic_notifier_list, &gpnd->gh_panic_blk);
++			if (!ret)
++				gpnd->panic_registered = true;
++		}
++		if (ret) {
++			dev_err(gpnd->dev, "Panic memory setup failed: %d\n", ret);
++			ret = gh_panic_notifier_release_mem(gpnd);
++			if (ret)
++				dev_err(gpnd->dev, "Panic memory ownership pending: %d\n", ret);
++			gh_panic_notifier_drop_refs(gpnd);
+ 		}
+ 		break;
++	case GH_VM_POWERUP_FAIL:
+ 	case GH_VM_EARLY_POWEROFF:
+-		if (peer_vmid == *notify_vmid) {
+-			atomic_notifier_chain_unregister(&panic_notifier_list, &gpnd->gh_panic_blk);
+-			gh_panic_notifier_unshare_mem(gpnd, self_vmid, peer_vmid);
+-		}
++		/* RM name lookup can already be unavailable during teardown. */
++		if (!gpnd->base || gpnd->peer_vmid != notified)
++			break;
++		gh_panic_notifier_stop_panic(gpnd);
++		ret = gh_panic_notifier_release_mem(gpnd);
++		if (ret)
++			dev_err(gpnd->dev, "Panic memory reclaim pending: %d\n", ret);
++		gh_panic_notifier_drop_refs(gpnd);
+ 		break;
+ 	case GH_VM_CRASH:
+-		dev_err(gpnd->dev, "VM: %d Crashed!\n", *notify_vmid);
+-		vm = get_recovery_vm_from_vmid(*notify_vmid);
+-		if (!vm) {
+-			dev_err(gpnd->dev, "Failed to get recovery vm for VM:%d!\n", *notify_vmid);
++		vm = get_recovery_vm_from_vmid(gpnd, notified);
++		if (vm && !READ_ONCE(vm->recovery)) {
++			if (gpnd->base && gpnd->peer_vmid == notified)
++				gh_panic_notifier_stop_panic(gpnd);
++			mutex_unlock(&gpnd->lock);
++			panic("Resetting the SoC");
+ 			return NOTIFY_DONE;
+ 		}
+-
+-		if (!vm->recovery) {
+-			if (peer_vmid == *notify_vmid)
+-				atomic_notifier_chain_unregister(&panic_notifier_list,
+-									&gpnd->gh_panic_blk);
+-
+-			panic("Resetting the SoC");
+-		}
+ 		break;
+-	}
+-
++	default:
++		break;
++	}
++out:
++	mutex_unlock(&gpnd->lock);
+ 	return NOTIFY_DONE;
+ }
+ 
+@@ -434,13 +510,11 @@
+ 	while ((np = of_find_compatible_node(np, NULL, compat))) {
+ 		ret = of_property_read_u32(np, "qcom,label", &label);
+ 		if (ret) {
+-			of_node_put(np);
+ 			continue;
+ 		}
+ 		if (label == gpnd->label)
+ 			break;
+ 
+-		of_node_put(np);
+ 	}
+ 	if (!np) {
+ 		dev_err(gpnd->dev, "can't find the label=%d memory!\n", gpnd->label);
+@@ -449,6 +523,8 @@
+ 
+ 	shm_np = of_parse_phandle(np, "memory-region", 0);
+ 	of_node_put(np);
++	if (!shm_np)
++		return -ENODEV;
+ 	ret = of_address_to_resource(shm_np, 0, &gpnd->res);
+ 	of_node_put(shm_np);
+ 	if (ret) {
+@@ -457,6 +533,8 @@
+ 	}
+ 
+ 	gpnd->size = resource_size(&gpnd->res);
++	if (!gpnd->size)
++		return -EINVAL;
+ 	res = devm_request_mem_region(gpnd->dev, gpnd->res.start, gpnd->size,
+ 				dev_name(gpnd->dev));
+ 	if (!res) {
+@@ -491,13 +569,20 @@
+ 		return ret;
+ 	}
+ 
++	gpnd->cma_initialized = true;
+ 	ret = of_property_read_u32(gpnd->dev->of_node, "shared-buffer-size", &size);
+ 	if (ret) {
+ 		dev_err(dev, "%s: Failed to get shared memory size, ret %d\n",
+ 				__func__, ret);
+-		return ret;
+-	}
+-
++		of_reserved_mem_device_release(dev);
++		gpnd->cma_initialized = false;
++		return ret;
++	}
++	if (!size || !IS_ALIGNED(size, PAGE_SIZE)) {
++		of_reserved_mem_device_release(dev);
++		gpnd->cma_initialized = false;
++		return -EINVAL;
++	}
+ 	gpnd->size = size;
+ 	return 0;
+ }
+@@ -507,12 +592,10 @@
+ {
+ 	struct recovery_vm *vm;
+ 
+-	vm = get_recovery_vm_from_name(attribute->attr.name);
+-	if (!vm)
+-		return -EINVAL;
++	vm = container_of(attribute, struct recovery_vm, recovery_attr);
+ 
+ 	return sysfs_emit(buf, "%s\n",
+-			vm->recovery ? "enabled" : "disabled");
++			READ_ONCE(vm->recovery) ? "enabled" : "disabled");
+ }
+ 
+ static ssize_t recovery_store(struct device *dev,
+@@ -521,142 +604,171 @@
+ {
+ 	struct recovery_vm *vm;
+ 
+-	vm = get_recovery_vm_from_name(attribute->attr.name);
+-	if (!vm)
+-		return -EINVAL;
++	vm = container_of(attribute, struct recovery_vm, recovery_attr);
+ 
+ 	if (sysfs_streq(buf, "enabled"))
+-		vm->recovery = true;
++		WRITE_ONCE(vm->recovery, true);
+ 	else if (sysfs_streq(buf, "disabled"))
+-		vm->recovery = false;
++		WRITE_ONCE(vm->recovery, false);
+ 	else
+ 		return -EINVAL;
+ 
+ 	return count;
+ }
+ 
+-static int init_recovery_vms(struct kobject *kobj)
++static int init_recovery_vms(struct gh_panic_notifier_dev *gpnd)
+ {
+ 	struct recovery_vm *vm;
+ 	int i, ret;
+ 
+ 	for (i = 0; i < GH_RECOVERY_VM_MAX; i++) {
+-		vm = &recovery_vms[i];
++		vm = &gpnd->recovery_vms[i];
+ 		sysfs_attr_init(&vm->recovery_attr.attr);
+-		vm->recovery = false;
++		WRITE_ONCE(vm->recovery, false);
+ 		vm->recovery_attr.show = recovery_show;
+ 		vm->recovery_attr.store = recovery_store;
+ 		vm->recovery_attr.attr.name = recovery_name_to_vm_name[i].str;
+ 		vm->recovery_attr.attr.mode = 0600;
+-		sysfs_attr_init(&vm->recovery_attr.attr);
+-		ret = sysfs_create_file(kobj, &vm->recovery_attr.attr);
++		ret = sysfs_create_file(&gpnd->dev->kobj, &vm->recovery_attr.attr);
+ 		if (ret) {
+ 			pr_err("Create recovery sysfs entry for vm:%d  failed: %d\n",
+ 				recovery_name_to_vm_name[i].val, ret);
++			while (gpnd->recovery_files)
++				sysfs_remove_file(&gpnd->dev->kobj,
++					&gpnd->recovery_vms[--gpnd->recovery_files].recovery_attr.attr);
+ 			return ret;
+ 		}
+-	}
+-
++		gpnd->recovery_files++;
++	}
+ 	return 0;
+ }
+ 
+-static int gh_panic_notifier_probe(struct platform_device *pdev)
+-{
+-	struct device_node *node = pdev->dev.of_node;
+-	struct gh_panic_notifier_dev *gpnd;
+-	enum gh_dbl_label dbl_label;
+-	struct device *dev;
+-	int ret;
+-
+-	gpnd = devm_kzalloc(&pdev->dev, sizeof(*gpnd), GFP_KERNEL);
+-	if (!gpnd)
+-		return -ENOMEM;
+-
+-	gpnd->dev = &pdev->dev;
+-	platform_set_drvdata(pdev, gpnd);
+-
+-	dev = gpnd->dev;
+-	ret = of_property_read_u32(node, "gunyah-label", &gpnd->label);
+-	if (ret) {
+-		dev_err(dev, "Failed to read label %d\n", ret);
+-		return ret;
+-	}
+-
+-	dbl_label = gpnd->label;
+-
+-	gpnd->primary_vm = of_property_read_bool(node, "qcom,primary-vm");
++static int gh_panic_notifier_probe_resources(struct platform_device *pdev,
++					   struct gh_panic_notifier_dev *gpnd)
++{
++	int ret;
++	ret = of_property_read_u32(pdev->dev.of_node, "gunyah-label", &gpnd->label);
++	if (ret)
++		return ret;
++	if (gpnd->label >= GH_DBL_LABEL_MAX)
++		return -EINVAL;
+ 	if (gpnd->primary_vm) {
+ 		ret = gh_panic_notifier_pvm_mem_probe(gpnd);
+ 		if (ret)
+ 			return ret;
+-
+-		ret = of_property_read_u32(node, "peer-name", &gpnd->peer_name);
++		ret = of_property_read_u32(pdev->dev.of_node, "peer-name", &gpnd->peer_name);
+ 		if (ret)
+ 			gpnd->peer_name = GH_SELF_VM;
+-
+-		gpnd->tx_dbl = gh_dbl_tx_register(dbl_label);
++		gpnd->tx_dbl = gh_dbl_tx_register(gpnd->label);
+ 		if (IS_ERR_OR_NULL(gpnd->tx_dbl)) {
+-			ret = PTR_ERR(gpnd->tx_dbl);
+-			dev_err(dev, "%s:Failed to get gunyah tx dbl %d\n", __func__, ret);
+-			return ret;
+-		}
+-
+-		recovery_vms = kcalloc(GH_RECOVERY_VM_MAX, sizeof(struct recovery_vm), GFP_KERNEL);
+-		if (!recovery_vms) {
+-			ret = -ENOMEM;
+-			gh_dbl_tx_unregister(gpnd->tx_dbl);
+-			return ret;
+-		}
+-
+-		ret = init_recovery_vms(&pdev->dev.kobj);
+-		if (ret) {
+-			gh_dbl_tx_unregister(gpnd->tx_dbl);
+-			kfree(recovery_vms);
+-			return ret;
+-		}
+-
++			ret = gpnd->tx_dbl ? PTR_ERR(gpnd->tx_dbl) : -ENODEV;
++			goto release_cma;
++		}
++		ret = init_recovery_vms(gpnd);
++		if (ret)
++			goto unregister_tx;
+ 		gpnd->vm_nb.notifier_call = gh_panic_notifier_vm_cb;
+ 		gpnd->vm_nb.priority = INT_MAX;
+-		gh_register_vm_notifier(&gpnd->vm_nb);
+-	} else {
+-		ret = gh_panic_notifier_svm_mem_map(gpnd);
++		ret = gh_register_vm_notifier(&gpnd->vm_nb);
++		if (!ret)
++			return 0;
++		while (gpnd->recovery_files)
++			sysfs_remove_file(&gpnd->dev->kobj,
++				&gpnd->recovery_vms[--gpnd->recovery_files].recovery_attr.attr);
++unregister_tx:
++		gh_dbl_tx_unregister(gpnd->tx_dbl);
++release_cma:
++		of_reserved_mem_device_release(gpnd->dev);
++		gpnd->cma_initialized = false;
++		return ret;
++	}
++	ret = gh_panic_notifier_svm_mem_map(gpnd);
++	if (ret)
++		return ret;
++	gpnd->ws = wakeup_source_register(gpnd->dev, dev_name(gpnd->dev));
++	if (!gpnd->ws)
++		return -ENOMEM;
++	mutex_lock(&gpnd->lock);
++	gpnd->rx_dbl = gh_dbl_rx_register(gpnd->label, gh_panic_notify_receiver, gpnd);
++	mutex_unlock(&gpnd->lock);
++	if (IS_ERR_OR_NULL(gpnd->rx_dbl)) {
++		ret = gpnd->rx_dbl ? PTR_ERR(gpnd->rx_dbl) : -ENODEV;
++		wakeup_source_unregister(gpnd->ws);
++		return ret;
++	}
++	return 0;
++}
++
++static int gh_panic_notifier_probe(struct platform_device *pdev)
++{
++	struct gh_panic_notifier_dev *gpnd;
++	bool primary = of_property_read_bool(pdev->dev.of_node, "qcom,primary-vm");
++	int ret;
++
++	if (primary) {
++		ret = gh_panic_notifier_retry_quarantine(&pdev->dev, 0);
+ 		if (ret)
+ 			return ret;
+-
+-		gpnd->rx_dbl = gh_dbl_rx_register(dbl_label, gh_panic_notify_receiver,
+-							gpnd);
+-		if (IS_ERR_OR_NULL(gpnd->rx_dbl)) {
+-			ret = PTR_ERR(gpnd->rx_dbl);
+-			dev_err(dev, "%s:Failed to get gunyah rx dbl %d\n", __func__, ret);
+-			return ret;
+-		}
+-
+-		gpnd->ws = wakeup_source_register(dev, dev_name(dev));
+-		if (!gpnd->ws) {
+-			dev_err(dev, "%s:Failed to register wakeup source\n", __func__);
+-			gh_dbl_rx_unregister(gpnd->rx_dbl);
+-			return -ENOMEM;
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static int gh_panic_notifier_remove(struct platform_device *pdev)
+-{
+-	struct gh_panic_notifier_dev *gpnd;
+-
+-	gpnd = platform_get_drvdata(pdev);
++		/* Primary ownership records may outlive device removal. */
++		gpnd = kzalloc(sizeof(*gpnd), GFP_KERNEL);
++	} else {
++		gpnd = devm_kzalloc(&pdev->dev, sizeof(*gpnd), GFP_KERNEL);
++	}
++	if (!gpnd)
++		return -ENOMEM;
++	gpnd->dev = &pdev->dev;
++	gpnd->primary_vm = primary;
++	mutex_init(&gpnd->lock);
++	INIT_LIST_HEAD(&gpnd->quarantine_node);
++	platform_set_drvdata(pdev, gpnd);
++	ret = gh_panic_notifier_probe_resources(pdev, gpnd);
++	if (ret) {
++		platform_set_drvdata(pdev, NULL);
++		if (primary)
++			kfree(gpnd);
++	}
++	return ret;
++}
++
++static void gh_panic_notifier_remove(struct platform_device *pdev)
++{
++	struct gh_panic_notifier_dev *gpnd = platform_get_drvdata(pdev);
++	int ret;
++
+ 	if (gpnd->primary_vm) {
++		mutex_lock(&gpnd->lock);
++		gpnd->stopping = true;
++		mutex_unlock(&gpnd->lock);
++		gh_unregister_vm_notifier(&gpnd->vm_nb);
++		mutex_lock(&gpnd->lock);
++		gh_panic_notifier_stop_panic(gpnd);
++		ret = gh_panic_notifier_release_mem(gpnd);
++		mutex_unlock(&gpnd->lock);
++		while (gpnd->recovery_files)
++			sysfs_remove_file(&gpnd->dev->kobj,
++				&gpnd->recovery_vms[--gpnd->recovery_files].recovery_attr.attr);
+ 		gh_dbl_tx_unregister(gpnd->tx_dbl);
+-		gh_unregister_vm_notifier(&gpnd->vm_nb);
+-		kfree(recovery_vms);
++		if (ret) {
++			/* Keep both the DMA allocation and its non-devm ownership record. */
++			dev_err(gpnd->dev, "Panic memory quarantined until peer teardown/reprobe: %d\n", ret);
++			mutex_lock(&gh_panic_quarantine_lock);
++			list_add_tail(&gpnd->quarantine_node, &gh_panic_quarantine);
++			mutex_unlock(&gh_panic_quarantine_lock);
++		} else {
++			if (gpnd->cma_initialized)
++				of_reserved_mem_device_release(gpnd->dev);
++			gh_panic_notifier_drop_refs(gpnd);
++			kfree(gpnd);
++		}
+ 	} else {
++		mutex_lock(&gpnd->lock);
++		gpnd->stopping = true;
++		mutex_unlock(&gpnd->lock);
++		/* The repaired provider drains callbacks without holding gpnd->lock. */
+ 		gh_dbl_rx_unregister(gpnd->rx_dbl);
+ 		wakeup_source_unregister(gpnd->ws);
+ 	}
+-
+-	return 0;
++	platform_set_drvdata(pdev, NULL);
+ }
+ 
+ static const struct of_device_id gh_panic_notifier_match_table[] = {
+@@ -668,6 +780,7 @@
+ 	.driver = {
+ 		.name = "gh_panic_notifier",
+ 		.of_match_table = gh_panic_notifier_match_table,
++		.suppress_bind_attrs = true,
+ 	 },
+ 	.probe = gh_panic_notifier_probe,
+ 	.remove = gh_panic_notifier_remove,
+@@ -675,7 +788,15 @@
+ 
+ static int __init gh_panic_notifier_init(void)
+ {
+-	return platform_driver_register(&gh_panic_notifier_driver);
++	int ret;
++
++	ret = gh_register_vm_notifier(&gh_panic_quarantine_nb);
++	if (ret)
++		return ret;
++	ret = platform_driver_register(&gh_panic_notifier_driver);
++	if (ret)
++		gh_unregister_vm_notifier(&gh_panic_quarantine_nb);
++	return ret;
+ }
+ 
+ #if IS_ENABLED(CONFIG_ARCH_QTI_VM)
+@@ -687,6 +808,7 @@
+ static __exit void gh_panic_notifier_exit(void)
+ {
+ 	platform_driver_unregister(&gh_panic_notifier_driver);
++	gh_unregister_vm_notifier(&gh_panic_quarantine_nb);
+ }
+ module_exit(gh_panic_notifier_exit);
+ 

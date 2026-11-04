@@ -74970,7 +74970,7 @@
     "executable": false
   },
   "arch/arm64/configs/gki_defconfig": {
-    "sha256": "4237bcef4a241e4bf8448ee3030fae0d7a21529ab9766719a2c5ce100aec9898",
+    "sha256": "21ceae0240dd9d685c8824bc7da0378592df32550189dcda462de21124c06232",
     "executable": false
   },
   "arch/arm64/configs/hardening.config": {
@@ -116911,7 +116911,7 @@
     "executable": false
   },
   "certs/system_certificates.S": {
-    "sha256": "23b927e393266e50fc790f4763dc6558c81df8cd62f91baf418960b21aeb87cb",
+    "sha256": "f1a9fc749d302147ad302dc75a1a5bcc6cc64b73a63a6ca116e6b94ffdd531d6",
     "executable": false
   },
   "certs/system_keyring.c": {
@@ -255275,7 +255275,7 @@
     "executable": false
   },
   "drivers/tty/hvc/hvc_console.c": {
-    "sha256": "69fb3de81e04e9897d6add781541f461e0fe239e31288611205039fa6f929e42",
+    "sha256": "408d093e002848b13975a244eafeb6d66302ab51e86f05d36643ea0aec334dec",
     "executable": false
   },
   "drivers/tty/hvc/hvc_console.h": {
@@ -262907,7 +262907,7 @@
     "executable": false
   },
   "drivers/virt/gunyah/rsc_mgr.c": {
-    "sha256": "7d0ee761e376fa3c44f9e433c21651f1edd5da48c654f89d2d15f54ec6525bb1",
+    "sha256": "b50961f952f56bfa3560ccced66775ddf6984006d4c19d0291c9d0f4387926eb",
     "executable": false
   },
   "drivers/virt/gunyah/rsc_mgr.h": {
@@ -367219,6 +367219,14 @@
   },
   "virt/lib/irqbypass.c": {
     "sha256": "b11e29b9f5cc63c288c429b2c50c8c4c6ea60f886a5eaeb4e5618cdd09f0640f",
+    "executable": false
+  },
+  "certs/onyx-accepted-gki.pem": {
+    "sha256": "f43da0db6b640a37b18e8e8a863b91cae3543210f6f897285a2137bf72111759",
+    "executable": false
+  },
+  "include/linux/hvc_backend.h": {
+    "sha256": "5acdf31e54db1c5a2c4e9b194dfaa87b7e916e31c2aee57166b932de906132c8",
     "executable": false
   }
 }

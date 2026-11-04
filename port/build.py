@@ -10,10 +10,34 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from verify_modules import verify
 
 HERE = Path(__file__).resolve().parent
+
+
+def verify_standalone_provider(verifier, harness, receipt, staged, artifacts):
+    """Run a source-based harness without overwriting checked-in receipts."""
+    with tempfile.TemporaryDirectory(prefix="onyx-provider-host-") as temporary:
+        root = Path(temporary)
+        runner = root / "port" / (verifier + ".py")
+        runner.parent.mkdir()
+        (runner.parent / "tests").mkdir()
+        (root / "modules").symlink_to(staged.resolve(), target_is_directory=True)
+        shutil.copyfile(HERE / runner.name, runner)
+        shutil.copyfile(HERE / "tests" / harness, runner.parent / "tests" / harness)
+        result = subprocess.run([sys.executable, str(runner)], capture_output=True,
+                                text=True, check=False)
+        (artifacts / receipt.replace(".json", ".log")).write_text(
+            result.stdout + result.stderr)
+        if result.returncode:
+            raise RuntimeError(f"{verifier} failed; see {receipt.replace('.json', '.log')}")
+        report = json.loads((runner.parent / receipt).read_text())
+        if report.get("status") != "PASS":
+            raise ValueError(f"{verifier} did not produce a passing host receipt")
+    (artifacts / receipt).write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def main():
@@ -88,6 +112,20 @@ def main():
         provider_validations[name + "_host_validation"] = result
         (artifacts / (name.replace("_", "-") + "-host-validation.json")).write_text(
             json.dumps(result, indent=2) + "\n")
+    standalone_provider_verifiers = {
+        "edac": ("verify_edac", "edac_harness.c", "edac-host-validation.json"),
+        "cpufreq_debug": ("verify_cpufreq_debug", "cpufreq_debug_harness.c", "cpufreq-debug-host-validation.json"),
+        "sysmon_stats": ("verify_sysmon_stats", "sysmon_stats_harness.c", "sysmon-stats-host-validation.json"),
+        "sys_pm_vx": ("verify_sys_pm_vx", "sys_pm_vx_harness.c", "sys-pm-vx-host-validation.json"),
+        "i2c_pmic": ("verify_i2c_pmic", "i2c_pmic_harness.c", "i2c-pmic-host-validation.json"),
+        "regmap_debugfs": ("verify_regmap_debugfs", "regmap_debugfs_harness.c", "regmap-debugfs-host-validation.json"),
+        "pmic_glink_address": ("verify_pmic_glink_address", "pmic_glink_address_harness.c", "pmic-glink-address-host-validation.json"),
+        "battery_debug": ("verify_battery_debug", "battery_debug_harness.c", "battery-debug-host-validation.json"),
+        "hung_task_enh": ("verify_hung_task_enh", "hung_task_enh_harness.c", "hung-task-enh-host-validation.json"),
+    }
+    for name, inputs in standalone_provider_verifiers.items():
+        provider_validations[name + "_host_validation"] = verify_standalone_provider(
+            *inputs, workspace / "onyx", artifacts)
     command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
@@ -161,6 +199,8 @@ def main():
     shutil.copytree(HERE / "tests", inputs / "tests",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     for verifier in provider_verifiers.values():
+        shutil.copyfile(HERE / (verifier + ".py"), inputs / (verifier + ".py"))
+    for verifier, _, _ in standalone_provider_verifiers.values():
         shutil.copyfile(HERE / (verifier + ".py"), inputs / (verifier + ".py"))
     ksu_inputs = inputs / "kernelsu-next"
     ksu_inputs.mkdir()
