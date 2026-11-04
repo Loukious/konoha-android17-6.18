@@ -1,0 +1,80 @@
+name: Recover a verified GKI release
+run-name: Recover release from build ${{ inputs.build_run_id }} attempt ${{ inputs.build_attempt }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Original Actions run whose full build job succeeded
+        type: string
+        required: true
+      build_attempt:
+        description: Exact successful build attempt that uploaded the bundle
+        type: string
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  KONOHA_SOURCE_ROOT: ${{ github.workspace }}/source
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/ci'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: release-android17-6.18
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      BUILD_RUN_ATTEMPT: ${{ inputs.build_attempt }}
+    steps:
+      - name: Checkout current CI automation
+        uses: actions/checkout@v4
+      - name: Validate automation
+        run: python3 -m unittest discover -s ci/tests -v
+      - name: Select the exact successful owned build artifact
+        id: build
+        run: python3 ci/recover_release.py select "$BUILD_RUN_ID" "$BUILD_RUN_ATTEMPT"
+      - name: Download the original immutable build artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.build.outputs.artifact_id }}
+          run-id: ${{ steps.build.outputs.build_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: artifacts
+      - name: Read the original exact build inputs
+        id: inputs
+        run: python3 ci/recover_release.py inputs artifacts "$BUILD_RUN_ID" "$BUILD_RUN_ATTEMPT"
+      - name: Checkout the exact built source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.inputs.outputs.source_revision }}
+          path: source
+      - name: Publish all verified release assets with current CI code
+        id: release
+        env:
+          SOURCE_REVISION: ${{ steps.inputs.outputs.source_revision }}
+          KERNEL_REVISION: ${{ steps.inputs.outputs.kernel_revision }}
+          KERNELSU_REVISION: ${{ steps.inputs.outputs.kernelsu_revision }}
+        run: |
+          python3 ci/publish_release.py artifacts "$SOURCE_REVISION" "$KERNEL_REVISION" "$KERNELSU_REVISION" \
+            --build-run-id "$BUILD_RUN_ID" --build-run-attempt "$BUILD_RUN_ATTEMPT"
+      - name: Record released source and KernelSU revisions
+        env:
+          SOURCE_REVISION: ${{ steps.inputs.outputs.source_revision }}
+          KERNEL_REVISION: ${{ steps.inputs.outputs.kernel_revision }}
+          KERNELSU_REVISION: ${{ steps.inputs.outputs.kernelsu_revision }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: python3 ci/record_success.py "$KERNEL_REVISION" "$KERNELSU_REVISION" "$SOURCE_REVISION" --release-tag "$RELEASE_TAG"

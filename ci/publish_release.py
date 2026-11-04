@@ -31,6 +31,38 @@ def api(path, optional=False):
     return json.loads(result.stdout)
 
 
+def listed(path, key=None):
+    """Read all pages; authenticated inventories include unpublished drafts."""
+    page = 1
+    while True:
+        response = api(path + ('&' if '?' in path else '?') + f'per_page=100&page={page}')
+        entries = response[key] if key else response
+        if not isinstance(entries, list):
+            raise ValueError('GitHub inventory is not a list')
+        yield from entries
+        if len(entries) < 100:
+            return
+        page += 1
+
+
+def release_by_tag(prefix, tag):
+    release = api(prefix + '/releases/tags/' + tag, optional=True)
+    if release:
+        return release
+    matches = [release for release in listed(prefix + '/releases') if release.get('tag_name') == tag]
+    if len(matches) > 1:
+        raise ValueError('Release tag matches multiple releases')
+    return matches[0] if matches else None
+
+
+def release_inputs(release, tag, source, kernel, kernelsu):
+    if (type(release.get('id')) is not int or release['id'] < 1 or release.get('tag_name') != tag or
+            release.get('target_commitish') != source or
+            not isinstance(release.get('body'), str) or
+            any(value not in release.get('body', '') for value in (source, kernel, kernelsu))):
+        raise ValueError('Existing release tag identifies different inputs')
+
+
 def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attempt):
     identity = json.loads((bundle / 'release.json').read_text())
     expected = {'source_revision': source, 'common_revision': kernel, 'kernelsu_revision': kernelsu,
@@ -107,10 +139,9 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
     tag = f'gki-{version}-s{source[:12]}-k{kernelsu[:12]}'
     assets = sorted(bundle / name for name in FILES | {'release.json', 'SHA256SUMS'})
     asset_names = {path.name for path in assets}
-    existing = api(prefix + '/releases/tags/' + tag, optional=True)
+    existing = release_by_tag(prefix, tag)
     if existing:
-        if existing['target_commitish'] != source or any(value not in existing.get('body', '') for value in (source, kernel, kernelsu)):
-            raise ValueError('Existing release tag identifies different inputs')
+        release_inputs(existing, tag, source, kernel, kernelsu)
         if not existing['draft']:
             if {asset['name'] for asset in existing['assets']} != asset_names or any(asset['size'] < 1 for asset in existing['assets']):
                 raise ValueError('Published release has incomplete assets; refusing to overwrite it')
@@ -133,8 +164,20 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
         if not existing:
             run(['gh', 'release', 'create', tag, '--repo', repository, '--target', source, '--draft',
                  '--title', f'Android 17 GKI {version} / KernelSU Next', '--notes-file', str(path)])
+            existing = release_by_tag(prefix, tag)
+            if not existing:
+                raise ValueError('Created draft release is missing from the authenticated inventory')
+            release_inputs(existing, tag, source, kernel, kernelsu)
+        release_id = existing['id']
+        draft = api(prefix + '/releases/' + str(release_id))
+        release_inputs(draft, tag, source, kernel, kernelsu)
+        if draft['id'] != release_id or draft.get('draft') is not True:
+            raise ValueError('Selected release is no longer the expected draft')
         run(['gh', 'release', 'upload', tag, *map(str, assets), '--repo', repository, '--clobber'])
-        uploaded = api(prefix + '/releases/tags/' + tag)
+        uploaded = api(prefix + '/releases/' + str(release_id))
+        release_inputs(uploaded, tag, source, kernel, kernelsu)
+        if uploaded['id'] != release_id or uploaded.get('draft') is not True:
+            raise ValueError('Uploaded release is no longer the expected draft')
         if {asset['name'] for asset in uploaded['assets']} != asset_names:
             raise ValueError('Draft release upload is incomplete')
         for asset in uploaded['assets']:
@@ -157,10 +200,12 @@ def main():
     parser.add_argument('source')
     parser.add_argument('kernel')
     parser.add_argument('kernelsu')
+    parser.add_argument('--build-run-id', default=os.environ.get('GITHUB_RUN_ID'))
+    parser.add_argument('--build-run-attempt', default=os.environ.get('BUILD_RUN_ATTEMPT'))
     args = parser.parse_args()
     result = publish(os.environ['GITHUB_REPOSITORY'], args.bundle,
                      Path(os.environ['KONOHA_SOURCE_ROOT']), args.source, args.kernel, args.kernelsu,
-                     os.environ['GITHUB_RUN_ID'], os.environ['BUILD_RUN_ATTEMPT'])
+                     args.build_run_id, args.build_run_attempt)
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
             stream.write('release_tag=' + result['tag'] + '\n')

@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dispatch_build
 import export_artifacts
 import publish_release
+import recover_release
 import track_upstream
 import verify_artifacts
 
@@ -179,7 +180,8 @@ class ArtifactTests(unittest.TestCase):
 
 class ReleaseTests(unittest.TestCase):
     def exercise(self, failed_build=False, stale_source=False, upload_failure=False, incomplete=False, existing=False,
-                 advance_during_upload=False):
+                 advance_during_upload=False, hidden_draft=False, draft_exists=False, later_page=False,
+                 wrong_draft=False, drift_after_upload=False, wrong_digest=False, api_calls=None):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, workspace, artifact, report = fixture(root)
@@ -190,8 +192,18 @@ class ReleaseTests(unittest.TestCase):
                        'digest': 'sha256:' + verify_artifacts.digest(p)} for p in paths]
             commands = []
             head_reads = 0
+            created, uploaded = draft_exists, False
+            tag = f'gki-6.18.38-s{SOURCE[:12]}-k{KSU[:12]}'
+            def release():
+                return {'id': 77, 'tag_name': tag, 'draft': not existing,
+                        'target_commitish': 'd' * 40 if wrong_draft or (drift_after_upload and uploaded) else SOURCE,
+                        'body': SOURCE + KERNEL + KSU,
+                        'assets': assets[:-1] if incomplete and uploaded else assets,
+                        'html_url': 'release-url'}
             def api(path, optional=False):
                 nonlocal head_reads
+                if api_calls is not None:
+                    api_calls.append(path)
                 if path.endswith('/attempts/1'):
                     return {'head_branch': 'ci', 'path': '.github/workflows/build.yml'}
                 if path.endswith('/jobs'):
@@ -201,15 +213,30 @@ class ReleaseTests(unittest.TestCase):
                     changed = stale_source or (advance_during_upload and head_reads > 1)
                     return {'object': {'sha': 'd' * 40 if changed else SOURCE}}
                 if '/releases/tags/' in path:
-                    if optional and not existing:
+                    if hidden_draft:
+                        if not optional:
+                            raise RuntimeError('gh: Not Found (HTTP 404)')
                         return None
-                    return {'draft': not existing, 'target_commitish': SOURCE, 'body': SOURCE + KERNEL + KSU,
-                            'assets': assets[:-1] if incomplete else assets, 'html_url': 'release-url'}
+                    return release() if created or existing else None
+                if '/releases?per_page=100&page=' in path:
+                    if later_page and path.endswith('page=1'):
+                        return [{'id': 100 + i, 'tag_name': 'unrelated-' + str(i)} for i in range(100)]
+                    return [release()] if created else []
+                if path.endswith('/releases/77'):
+                    value = release()
+                    if wrong_digest and uploaded:
+                        value = {**value, 'assets': [{**asset, 'digest': 'sha256:' + '0' * 64} for asset in assets]}
+                    return value
                 raise AssertionError(path)
             def run(args):
+                nonlocal created, uploaded
                 commands.append(args)
+                if args[:3] == ['gh', 'release', 'create']:
+                    created = True
                 if upload_failure and args[:3] == ['gh', 'release', 'upload']:
                     raise subprocess.CalledProcessError(1, args)
+                if args[:3] == ['gh', 'release', 'upload']:
+                    uploaded = True
                 return ''
             with patch.object(publish_release, 'api', side_effect=api), patch.object(publish_release, 'run', side_effect=run):
                 try:
@@ -274,6 +301,141 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result['status'], 'verified inputs already released')
         self.assertEqual(commands, [])
 
+    def test_new_hidden_draft_tag_404_publishes_only_after_immutable_id_checks(self):
+        calls = []
+        result, commands = self.exercise(hidden_draft=True, api_calls=calls)
+        self.assertEqual(result['status'], 'verified build released')
+        self.assertEqual([args[2] for args in commands], ['create', 'upload', 'edit'])
+        self.assertEqual(sum(path.endswith('/releases/77') for path in calls), 2)
+
+    def test_existing_hidden_draft_retry_uses_paginated_inventory_without_recreate(self):
+        calls = []
+        result, commands = self.exercise(hidden_draft=True, draft_exists=True, later_page=True, api_calls=calls)
+        self.assertEqual(result['status'], 'verified build released')
+        self.assertEqual([args[2] for args in commands], ['upload', 'edit'])
+        self.assertTrue(any('/releases?per_page=100&page=2' in path for path in calls))
+
+    def test_wrong_hidden_draft_is_rejected_before_upload(self):
+        result, commands = self.exercise(hidden_draft=True, draft_exists=True, wrong_draft=True)
+        self.assertIn('different inputs', result['error'])
+        self.assertEqual(commands, [])
+
+    def test_immutable_draft_input_drift_or_bad_server_digest_prevents_publication(self):
+        for flags, reason in [({'drift_after_upload': True}, 'different inputs'),
+                              ({'wrong_digest': True}, 'Uploaded release asset differs')]:
+            with self.subTest(flags=flags):
+                result, commands = self.exercise(hidden_draft=True, draft_exists=True, **flags)
+                self.assertIn(reason, result['error'])
+                self.assertEqual([args[2] for args in commands], ['upload'])
+
+    def test_ambiguous_hidden_draft_inventory_is_rejected(self):
+        prefix, tag = 'repos/owner/repo', 'expected-tag'
+        with patch.object(publish_release, 'api', side_effect=[None, [{'tag_name': tag}, {'tag_name': tag}]]), \
+                self.assertRaisesRegex(ValueError, 'multiple releases'):
+            publish_release.release_by_tag(prefix, tag)
+
+    def test_recovery_cli_uses_original_build_run_without_overriding_ci_context(self):
+        environment = {'GITHUB_REPOSITORY': 'owner/repo', 'KONOHA_SOURCE_ROOT': '/fixture/source',
+                       'GITHUB_RUN_ID': '999', 'GITHUB_RUN_ATTEMPT': '3', 'GITHUB_SHA': 'd' * 40}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(sys, 'argv', ['publish_release.py', 'bundle', SOURCE, KERNEL, KSU,
+                                          '--build-run-id', '123', '--build-run-attempt', '1']), \
+                patch.object(publish_release, 'publish', return_value={'tag': 'verified-tag'}) as publish, \
+                patch('builtins.print'):
+            publish_release.main()
+            self.assertEqual(os.environ['GITHUB_SHA'], 'd' * 40)
+            self.assertEqual(os.environ['GITHUB_RUN_ID'], '999')
+        self.assertEqual(publish.call_args.args[-2:], ('123', '1'))
+
+
+class RecoveryTests(unittest.TestCase):
+    def fixture(self):
+        repository = {'id': 10, 'full_name': 'owner/repo'}
+        run = {'id': 123, 'run_attempt': 1, 'repository': repository, 'head_repository': repository,
+               'head_branch': 'ci', 'head_sha': 'd' * 40, 'path': '.github/workflows/build.yml',
+               'status': 'completed', 'conclusion': 'failure'}
+        jobs = [{'name': 'build', 'status': 'completed', 'conclusion': 'success'},
+                {'name': 'release', 'status': 'completed', 'conclusion': 'failure'}]
+        artifact = {'id': 456, 'name': 'Konoha-Android17-6.18-123-1', 'expired': False, 'size_in_bytes': 100,
+                    'workflow_run': {'id': 123, 'repository_id': 10, 'head_repository_id': 10,
+                                     'head_branch': 'ci', 'head_sha': 'd' * 40}}
+        return run, jobs, artifact
+
+    def select(self, run=None, jobs=None, artifacts=None, paginate=False):
+        original_run, original_jobs, artifact = self.fixture()
+        run = original_run if run is None else run
+        jobs = original_jobs if jobs is None else jobs
+        artifacts = [artifact] if artifacts is None else artifacts
+        def api(path, optional=False):
+            if path.endswith('/attempts/1'):
+                return run
+            if '/jobs?' in path:
+                if paginate and path.endswith('page=1'):
+                    return {'jobs': [{'name': 'other'}] * 100}
+                return {'jobs': jobs}
+            if '/artifacts?' in path:
+                if paginate and path.endswith('page=1'):
+                    return {'artifacts': [{'name': 'other'}] * 100}
+                return {'artifacts': artifacts}
+            raise AssertionError(path)
+        with patch.object(publish_release, 'api', side_effect=api):
+            return recover_release.select('owner/repo', '123', '1')
+
+    def test_failed_release_run_can_recover_successful_build_and_later_page_artifact(self):
+        result = self.select(paginate=True)
+        self.assertEqual(result, {'build_run_id': '123', 'build_attempt': '1', 'artifact_id': '456',
+                                  'artifact_name': 'Konoha-Android17-6.18-123-1', 'ci_revision': 'd' * 40})
+
+    def test_wrong_run_attempt_workflow_branch_or_fork_is_rejected(self):
+        for changed in [{'id': 999}, {'run_attempt': 2}, {'head_branch': 'android17-6.18'},
+                        {'path': '.github/workflows/other.yml'},
+                        {'repository': {'id': 11, 'full_name': 'other/repo'}},
+                        {'head_repository': {'id': 11, 'full_name': 'fork/repo'}},
+                        {'repository': {'full_name': 'owner/repo'}},
+                        {'head_repository': {'id': True, 'full_name': 'owner/repo'}}, {'head_sha': None}]:
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'owned CI workflow'):
+                self.select(run={**self.fixture()[0], **changed})
+
+    def test_failed_missing_duplicate_or_running_build_job_is_rejected(self):
+        for jobs in [[], [{'name': 'build', 'status': 'completed', 'conclusion': 'failure'}],
+                     [{'name': 'build', 'status': 'in_progress', 'conclusion': None}],
+                     [self.fixture()[1][0]] * 2]:
+            with self.subTest(jobs=jobs), self.assertRaisesRegex(ValueError, 'successful full build'):
+                self.select(jobs=jobs)
+
+    def test_expired_duplicate_wrong_attempt_or_wrong_owner_artifact_is_rejected(self):
+        artifact = self.fixture()[2]
+        changed = [{**artifact, 'expired': True}, {**artifact, 'size_in_bytes': 0},
+                   {**artifact, 'size_in_bytes': '100'}, {**artifact, 'size_in_bytes': True},
+                   {**artifact, 'id': '456'}, {**artifact, 'name': 'Konoha-Android17-6.18-123-2'}]
+        for field, value in [('id', 999), ('head_sha', 'e' * 40), ('repository_id', 11),
+                             ('head_repository_id', 11), ('head_branch', 'other')]:
+            changed.append({**artifact, 'workflow_run': {**artifact['workflow_run'], field: value}})
+        for artifacts in [[], [artifact, artifact], *[[value] for value in changed]]:
+            with self.subTest(artifacts=artifacts), self.assertRaises(ValueError):
+                self.select(artifacts=artifacts)
+
+    def test_inputs_binds_exact_attempt_and_requires_full_revisions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, workspace, _, _ = fixture(root)
+            bundle = root / 'bundle'
+            identity = export_artifacts.export(workspace, bundle, source, SOURCE, '123', '1')
+            self.assertEqual(recover_release.inputs(bundle, '123', '1'),
+                             {'source_revision': SOURCE, 'kernel_revision': KERNEL, 'kernelsu_revision': KSU})
+            for changed in [{'run_id': '999'}, {'run_attempt': '2'}, {'artifact_name': 'other'},
+                            {'source_revision': 'main'}, {'common_revision': 'bad'}, {'kernelsu_revision': None}]:
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    write_json(bundle / 'release.json', {**identity, **changed})
+                    recover_release.inputs(bundle, '123', '1')
+
+    def test_invalid_run_numbers_are_rejected_before_api_calls(self):
+        for run_id, attempt in [('0', '1'), ('123', '0'), ('../123', '1'), ('123', '-1'), ('123', '01')]:
+            with self.subTest(values=(run_id, attempt)), patch.object(publish_release, 'api') as api, \
+                    self.assertRaises(ValueError):
+                recover_release.select('owner/repo', run_id, attempt)
+            api.assert_not_called()
+
 
 class DispatchTests(unittest.TestCase):
     def test_retry_policy_handles_unchanged_inputs_and_failures(self):
@@ -302,6 +464,18 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn('name: ${{ needs.build.outputs.artifact_name }}', release_job)
         self.assertIn('name: ${{ steps.export.outputs.artifact_name }}', workflow)
         self.assertIn('build_attempt: ${{ steps.export.outputs.build_attempt }}', workflow)
+
+    def test_recovery_reuses_publication_and_state_under_same_lock_and_original_identity(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/recover-release.yml').read_text()
+        self.assertIn('if: github.ref == \'refs/heads/ci\'', workflow)
+        self.assertIn('concurrency:\n      group: release-android17-6.18\n      cancel-in-progress: false', workflow)
+        self.assertIn('artifact-ids: ${{ steps.build.outputs.artifact_id }}', workflow)
+        self.assertIn('run-id: ${{ steps.build.outputs.build_run_id }}', workflow)
+        self.assertIn('--build-run-id "$BUILD_RUN_ID" --build-run-attempt "$BUILD_RUN_ATTEMPT"', workflow)
+        self.assertIn('python3 ci/record_success.py', workflow)
+        self.assertNotIn('source/port/build.py', workflow)
+        self.assertNotIn('GITHUB_SHA:', workflow)
+        self.assertNotIn('GITHUB_RUN_ID:', workflow)
 
 
 class RealGitDetectionTests(unittest.TestCase):

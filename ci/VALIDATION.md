@@ -100,3 +100,34 @@ accepted each refreshed recipe and restored the clean fixture after application.
 Late common and QDSS diagnostic conflicts left the recipe and common fixture
 unchanged. These are source-replay checks; hosted compilation, release publication
 and device behavior remain separate validation steps.
+
+## Hidden draft release recovery — 2026-11-04
+
+Build `41893930367`, attempt 1, completed compilation, complete artifact
+verification and upload. Its release job uploaded all eight assets but then
+failed because GitHub's release-by-tag endpoint returned HTTP 404 for the
+unpublished draft. Authenticated release inventory and immutable release ID
+`434429464` exposed the existing draft and all eight server SHA256 digests.
+
+The publisher keeps normal published-tag lookup and falls back to paginated
+authenticated inventory for drafts. Exact tag, target and source/GKI/KernelSU
+identities are checked before upload; the same immutable draft ID is checked
+again after upload, followed by complete inventory, size, digest and accepted
+source-head checks. Existing complete published releases remain untouched.
+
+`recover-release.yml` runs current CI code against an original successful build
+attempt without compiling again. Its selector requires an owned CI build run,
+one completed successful full build job and one unexpired attempt-specific
+artifact with matching run, repository and CI commit identities. Download uses
+the immutable artifact ID. Full bundle/source/ABI validation and publication
+reuse the publisher, with the original build run and attempt passed explicitly.
+Recovery shares the existing serial release lock and records state only after
+publication, retaining the current recovery CI commit for the state lease.
+
+All 94 host tests, actionlint, Python compilation and whitespace checks pass.
+New regressions cover hidden draft tag-404 creation/retry, later pages,
+ambiguous or changed draft identity, bad upload digests, original-run recovery,
+failed/running/duplicate build jobs, expired or mismatched artifacts and unsafe
+revision inputs. Independent read-only live checks resolved artifact
+`13359984661` for the original attempt and found the existing hidden draft.
+Hosted recovery publication still requires its first manual run.
