@@ -76,7 +76,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         cleanup = next(call for call in calls if call[:2] == ['sudo', 'rm'])
         self.assertEqual(cleanup[:4], ['sudo', 'rm', '-rf', '--'])
-        for path in ('/opt/hostedtoolcache', '/usr/share/dotnet', '/usr/local/lib/android',
+        for path in ('/opt/hostedtoolcache', '/usr/share/dotnet', '/usr/local/lib/android', '/usr/local/.ghcup',
                      '/usr/share/swift', '/opt/microsoft/powershell', '/usr/lib/jvm', '/opt/az'):
             self.assertIn(path, cleanup)
         for path in cleanup[4:]:

@@ -12,7 +12,7 @@ task_disk_before=$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -1)
 # are used by this build. Keep apt, system Python, gh and runner Node externals.
 task_unused_tools=(
   /opt/hostedtoolcache
-  /usr/share/dotnet /usr/local/lib/android /opt/android /opt/ghc
+  /usr/share/dotnet /usr/local/lib/android /opt/android /opt/ghc /usr/local/.ghcup
   /usr/share/swift /usr/local/swift /opt/swift
   /opt/microsoft/powershell /usr/local/share/powershell
   /usr/lib/jvm /usr/local/lib/jvm /opt/az /usr/share/az
