@@ -10,7 +10,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 CONTROL = HERE.parents[1]
 sys.path.insert(0, str(CONTROL))
-from common_fixes import applied
+from common_fixes import _contents, applied
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('workspace', type=Path)
@@ -166,14 +166,14 @@ with tempfile.TemporaryDirectory(prefix='coresight-remove-test-') as temporary:
         if label == 'candidate':
             (HERE / 'platform-remove-harness.c').write_text(source.read_text())
     # The required patch must restore pinned source even on a failing build.
-    before = {name: (common / name).read_bytes() for name in
+    before = {name: _contents(common / name) for name in
               json.loads((CONTROL / 'common-patches/manifest.json').read_text())['files']}
     try:
         with applied(common, root / 'failure-receipt'):
             raise RuntimeError('simulated compiler failure')
     except RuntimeError:
         pass
-    assert all((common / name).read_bytes() == contents for name, contents in before.items())
+    assert all(_contents(common / name) == contents for name, contents in before.items())
     (HERE / 'platform-remove-validation.json').write_text(json.dumps({
         'status': 'PASS', 'variants': results, 'restore_after_build_failure': True,
         'tnoc_platform_driver_present': False,
