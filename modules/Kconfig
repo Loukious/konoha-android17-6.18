@@ -302,6 +302,10 @@ config QCOM_PMU_LIB
 	tristate "Onyx CPU performance counter service"
 	depends on PERF_EVENTS && QCOM_LLCC_PMU && QCOM_CPU_PHYS_LOG_MAP && QTI_QCOM_SCMI_CLIENT
 
+config QCOM_MEMLAT
+	tristate "Onyx CPU memory latency monitors"
+	depends on QCOM_DCVS && QCOM_PMU_LIB && QCOM_CPU_PHYS_LOG_MAP
+
 config ARM_QCOM_CPUFREQ_THERMAL
 	tristate "Onyx CPU frequency thermal notification"
 	depends on CPU_FREQ && MAILBOX
@@ -1333,3 +1337,278 @@ config MI_THERMAL_MULTI_CHARGE
 config HAVE_MULTI_SCREEN
 	bool "Xiaomi thermal secondary screen reporting"
 	depends on MI_THERMAL_INTERFACE
+
+config SPS
+    tristate "Qualcomm native Smart Peripheral Switch"
+    select GENERIC_ALLOCATOR
+
+config SPS_SUPPORT_NDP_BAM
+    bool "SPS supports no-data-path BAM"
+    depends on SPS
+
+config CRYPTO_DEV_QCEDEV
+    tristate "Qualcomm crypto userspace interface"
+
+config CRYPTO_DEV_QCRYPTO
+    tristate "Qualcomm crypto API interface"
+
+config CDSPRM_VTCM_DYNAMIC_DEBUG
+    bool "CDSP resource manager VTCM debug interface"
+    default n
+
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# QCOM MPAM drivers
+#
+
+config QTI_MPAM
+	tristate "Qualcomm Technologies Inc. MPAM Interface Driver"
+	depends on QTI_SCMI_VENDOR_PROTOCOL
+	default n
+	help
+	  This driver exports all the available APIs to config MPAM
+	  parameters. These APIs will relay the configurations to
+	  CPUCP via SCMI communication. It is intended to be used by
+	  clients familiar with modifying the MPAM configuration
+	  settings.
+
+config QTI_CPU_MPAM_INTERFACE
+	tristate "Enable QCOM CPU MPAM configfs support"
+	depends on QTI_MPAM && CONFIGFS_FS
+	default n
+	help
+	  This enables QCOM CPU MPAM configfs interface support. User
+	  can config CPU MPAM feature inlcuding CMAX, CPBM, PRIO and
+	  tasks in a partition. Monitors inlcuding CSU and MBWU are
+	  also available. Configfs interface allows user to create and
+	  remove MPAM partition according to use cases.
+
+config QTI_PLATFORM_MPAM_INTERFACE
+	tristate "Enable QCOM Platform MPAM configfs support"
+	depends on QTI_MPAM && CONFIGFS_FS
+	default n
+	help
+	  This enables QCOM Platform MPAM configfs interface support.
+	  User can config Platform MPAM gear for NOC bandwidth control.
+	  Byte count monitors are also available to help to the
+	  setting.
+
+config QTI_MPAM_MSC
+	tristate "Enable QCOM MSC parent driver"
+	depends on QTI_MPAM
+	default n
+	help
+	MSC parent driver to support generic API for MPAM functionality
+	to configure Gears, monitor the allocations, read misses etc.
+	Also enable abstraction of different MSC device and can child
+	nodes can use the top layer API abstraction to implement MAPM
+	functionality.
+
+config QTI_MPAM_MSC_SLC
+	tristate "Enable QCOM MSC SLC driver"
+	depends on QTI_MPAM && QTI_MPAM_MSC
+	default n
+	help
+	MSC driver support for SLC MPAM functionality. Enables SLC
+	gear configuration support and configuration support for
+	generic SLC cache monitors like Capacity, read miss, etc.
+	Also module take care of getting device SLC gear config
+	capability from device by querying and take care of reset
+	the settings on module removal.
+
+config QTI_SLC_MPAM_INTERFACE
+	tristate "Enable QCOM SLC MPAM configfs support"
+	depends on QTI_MPAM_MSC_SLC && CONFIGFS_FS
+	default n
+	help
+	  This enables QCOM SLC MPAM configfs interface support.
+	  User can config SLC MPAM gear for SLC size control.
+	  Miss count and capacity monitors are also available to
+	  help to the setting.
+
+config QCOM_LLCC_HEURISTICS
+    tristate "Onyx LLCC firmware heuristics"
+
+config QCOM_QTI_PMIC_GLINK_DEBUG
+    tristate "Onyx PMIC GLINK diagnostics"
+
+config QCOM_GH_TLMM_VM_MEM_ACCESS
+    tristate "Onyx TLMM VM sharing"
+
+config MSM_BOOT_STATS
+	tristate "Qualcomm bootloader statistics"
+	depends on OF && HAS_IOMEM
+
+config SHOW_SUSPEND_EPOCH
+	tristate "Qualcomm suspend epoch logging"
+	depends on ANDROID_VENDOR_HOOKS
+
+config QTI_CPUFREQ_STATS_SCMI_V2
+	tristate "Onyx cpufreq_stats_scmi_v2 native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QTI_CPUFREQ_STATS_SCMI_V3
+	tristate "Onyx cpufreq_stats_scmi_v3 native provider"
+	depends on ARM_SCMI_PROTOCOL
+
+config CORESIGHT_QMI
+	tristate "Onyx CoreSight QMI firmware control"
+	depends on CORESIGHT
+
+config CORESIGHT_TGU
+	tristate "Onyx CoreSight trigger generation unit"
+	depends on CORESIGHT
+
+config QTI_CPUCP_LOG
+	tristate "Onyx cpucp_log native provider"
+	depends on MAILBOX && QCOM_CPUCP && QTI_QCOM_SCMI_CLIENT
+
+config QTI_C1DCVS_SCMI_V2
+	tristate "Onyx c1dcvs_scmi_v2 native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QTI_DYNPF_SCMI
+	tristate "Onyx dynpf_scmi native provider"
+	depends on ARM_SCMI_PROTOCOL && QTI_QCOM_SCMI_CLIENT
+
+config QCOM_CPUCP_FAST
+	tristate "Onyx cpucp_fast native provider"
+	depends on MAILBOX && QCOM_CPUCP && SCHED_WALT
+
+config CORESIGHT_DUMMY
+	tristate "Onyx CoreSight subsystem-owned source and sink endpoints"
+	depends on CORESIGHT
+
+config CORESIGHT_REMOTE_ETM
+	tristate "Onyx remote processor ETM control"
+	depends on CORESIGHT && CORESIGHT_QMI
+
+config QCOM_GLINK_PKT
+	tristate "Onyx native GLINK packet devices"
+	depends on RPMSG_QCOM_GLINK_SMEM
+
+config QCOM_CPUSS_SLEEP_STATS_V4
+	tristate "Onyx native CPUSS v4 sleep statistics"
+	depends on OF && DEBUG_FS
+
+config QCOM_CPUSS_SLEEP_STATS
+	tristate "Onyx native CPUSS sleep statistics"
+	depends on OF && DEBUG_FS && QCOM_SCM
+
+config CPU_IDLE_GOV_QCOM_LPM
+    tristate "Qualcomm CPU and cluster idle governor"
+    depends on CPU_IDLE && ARCH_QCOM && ARM_PSCI_CPUIDLE
+    help
+      Full LineageOS qcom_lpm CPU and cluster prediction governor.
+      The governor is selected automatically by its cpuidle rating.
+
+config QCOM_MEM_HOOKS
+    tristate "Qualcomm memory trace hook callbacks"
+    depends on ANDROID_VENDOR_HOOKS
+
+config GH_RM_BOOSTER
+    tristate "Gunyah resource manager boost driver"
+    depends on GH_RM_DRV
+
+config MSM_TMECOM_QMP
+    tristate "TMECom QMP interface"
+    select MSM_QMP
+
+config GH_PANIC_NOTIFIER
+    tristate "Gunyah panic notification"
+    depends on GH_RM_DRV
+
+config ARM_QCOM_CPUFREQ_HW_DEBUG
+    tristate "QCOM CPUFreq HW debug"
+    depends on ARM_QCOM_CPUFREQ_HW
+    help
+      Read native CPUFreq hardware debug registers for normal sysfs
+      queries and the existing panic diagnostic callback.
+
+config QTI_CHARGER_ULOG_GLINK
+    tristate "QTI charger firmware logging"
+    depends on QTI_PMIC_GLINK && DEBUG_FS
+    help
+      Native charger and ADSP logs over the existing PMIC logs channel.
+
+config QCOM_SYSMON_SUBSYSTEM_STATS
+    tristate "Qualcomm SysMon DSP subsystem statistics"
+    depends on QCOM_SMEM
+    help
+      Query the native DSP load, power, bandwidth and sleep statistics
+      from firmware-owned SMEM, with the existing debugfs interfaces.
+
+config QTI_SYS_PM_VX
+    tristate "Qualcomm system power-violator diagnostics"
+    depends on QCOM_AOSS_QMP && QCOM_STATS
+    help
+      Read the native firmware driver-vote logs and expose the existing
+      debugfs/sysfs monitoring controls. Monitoring and crash dumps
+      remain disabled until explicitly requested through those controls.
+
+config MFD_I2C_PMIC
+    tristate "Qualcomm I2C PMIC register and interrupt driver"
+    depends on I2C && REGMAP_QTI_DEBUGFS
+    help
+      Provide the native PMIC regmap and optional nested interrupt controller.
+      The Onyx debug clients expose registers without enabling IRQ self-tests.
+
+config QTI_PMIC_GLINK_CLIENT_DEBUG
+	depends on QTI_PMIC_GLINK && DEBUG_FS
+	bool "Enable debugfs features in PMIC GLINK client drivers"
+	help
+	  This option enables the generation of debugfs files in PMIC GLINK
+	  client drivers that are strictly meant for internal debugging only.
+	  Writing to these debug files changes key physical parameters of a
+	  system, which may lead to instability. Therefore, this option should
+	  never be enabled on production devices.
+
+
+config QTI_BATTERY_GLINK_DEBUG
+	tristate "Enable support for QTI battery glink debug driver"
+	depends on QTI_PMIC_GLINK
+	help
+	  Qualcomm Technologies, Inc. battery glink debug driver helps to
+	  obtain debug information for battery charging and gauging over PMIC
+	  Glink from charger and gauging firmware running on a remote subsystem
+	  (e.g. DSP).
+
+
+config QCOM_HUNG_TASK_ENH
+        tristate "QTI Hung Task Enhancement"
+        depends on ARCH_QCOM && DETECT_HUNG_TASK && SCHED_WALT
+        help
+          Add options at sysfs to enhance khungtask, allow user to
+          select and monitor tasks in black/white list mode. Also
+          processes in iowait for specific situation will be monitored
+          to avoid devices long time no response.
+
+
+config QCOM_IOMMU_DEBUG
+	tristate "IOMMU debugging and testing"
+	depends on QCOM_IOMMU_UTIL
+	depends on DEBUG_FS
+	help
+	  This option is used to enable profiling and debugging in
+	  the IOMMU framework code. IOMMU profiling and debugging
+	  can be done through the debugfs nodes which this option
+	  makes available.
+
+config HVC_GUNYAH
+	tristate "Gunyah inter-VM console support"
+	depends on HVC_DRIVER && GH_RM_DRV && GH_SECURE_VM_LOADER
+	help
+	  Expose the native Gunyah virtual machine consoles through HVC TTYs.
+	  This removable backend requires the native HVC lifecycle API and RM
+	  console-notification bounds validation. Printk console mode is disabled.
+
+# SPDX-License-Identifier: GPL-2.0-only
+config ONYX_MTD_CORE
+    tristate "Matching 6.18 MTD archive core"
+    select MTD
+config ONYX_BLOCK2MTD
+    tristate "Native Onyx block-backed archive"
+    depends on MTD && BLOCK
+config ONYX_MTDOOPS
+    tristate "Native Xiaomi reboot and power-key archive"
+    depends on MTD && PSTORE_RAM

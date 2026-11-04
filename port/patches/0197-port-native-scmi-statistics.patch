@@ -1,0 +1,1090 @@
+--- a/drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v2.c
++++ b/drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v2.c
+@@ -5,355 +5,64 @@
+ 
+ #include <linux/scmi_protocol.h>
+ #include <linux/qcom_scmi_vendor.h>
+-#include <linux/kernel.h>
+-#include <linux/module.h>
+-#include <linux/init.h>
+-#include <linux/err.h>
+-#include <linux/errno.h>
++#include <linux/platform_device.h>
+ #include <linux/of.h>
+-#include <linux/platform_device.h>
+-#include <linux/cpu.h>
+-#include <linux/slab.h>
+-#include <linux/io.h>
+-#include <linux/fs.h>
+-#include <linux/debugfs.h>
++#include "cpufreq_stats_common.h"
+ 
+-#define MAX_CLK_DOMAIN 8
+-#define SCMI_CPUFREQ_STATS_MSG_ID_PROTOCOL_ATTRIBUTES (16)
+-#define SCMI_CPUFREQ_STATS_DIR_STRING "cpufreq_stats"
+-#define CPUFREQ_STATS_USAGE_FILENAME "usage"
+-#define CPUFREQ_STATS_RESIDENCY_FILENAME "time_in_state"
+-#define SCMI_CPUFREQ_STATS_STR (5045524653544154) /*PERFSTAT ASCII*/
+-static struct scmi_device *sdev;
+-
+-enum cpufreq_stat_param_ids {
+-	PARAM_LOG_LVL = 1,
+-	PARAM_PROTOCOL_ATTRIBUTE,
+-};
++/* Preserve the pinned native numeric identifier and response layout. */
++#define SCMI_CPUFREQ_STATS_STR (5045524653544154)
++#define PARAM_PROTOCOL_ATTRIBUTE 2
+ struct cpufreq_stats_prot_attr {
+-	uint32_t attributes;
+-	uint32_t statistics_address_low;
+-	uint32_t statistics_address_high;
+-	uint32_t statistics_len;
+-};
+-static const struct qcom_scmi_vendor_ops *ops;
+-static struct scmi_protocol_handle *ph;
+-
+-enum entry_type {
+-	usage = 0,
+-	residency,
+-	ENTRY_MAX,
++	__le32 attributes;
++	__le32 statistics_address_low;
++	__le32 statistics_address_high;
++	__le32 statistics_len;
+ };
+ 
+-/* structure to uniquely identify a fs entry */
+-struct clkdom_entry {
+-	enum entry_type entry;
+-	u16 clkdom;
+-};
+-
+-static struct dentry *dir;
+-
+-struct scmi_stats {
+-	u32 signature;
+-	u16 revision;
+-	u16 attributes;
+-	u16 num_domains;
+-	u16 reserved0;
+-	u32 match_sequence;
+-	u32 perf_dom_entry_off_arr[];
+-} __packed;
+-
+-struct perf_lvl_entry {
+-	u32 perf_lvl;
+-	u32 reserved0;
+-	u64 usage;
+-	u64 residency;
+-} __packed;
+-
+-struct perf_dom_entry {
+-	u16 num_perf_levels;
+-	u16 curr_perf_idx;
+-	u32 ext_tbl_off;
+-	u64 ts_last_change;
+-	struct perf_lvl_entry perf_lvl_arr[];
+-} __packed;
+-
+-struct stats_info {
+-	u32 stats_size;
+-	void __iomem *stats_iomem;
+-	u16 num_clkdom;
+-	struct clkdom_entry *entries;
+-	u32 *freq_info;
+-};
+-
+-static struct stats_info *pinfo;
+-
+-static u32 get_num_opps_for_clkdom(u32 clkdom)
++static void cpufreq_stats_protocol_put(void *arg)
+ {
+-	u32 dom_data_off;
+-	void __iomem *dom_data;
+-
+-	dom_data_off = 4 * readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  perf_dom_entry_off_arr) +
+-					 4 * clkdom);
+-	dom_data = pinfo->stats_iomem + dom_data_off;
+-	return readl_relaxed(dom_data) & 0xFF;
+-}
+-
+-static u32 get_freq_at_idx_for_clkdom(u32 clkdom, u32 idx)
+-{
+-	u32 dom_data_off;
+-	void __iomem *dom_data;
+-
+-	dom_data_off = 4 * readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  perf_dom_entry_off_arr) +
+-					 4 * clkdom);
+-	dom_data = pinfo->stats_iomem + dom_data_off +
+-		   offsetof(struct perf_dom_entry, perf_lvl_arr) +
+-		   idx * sizeof(struct perf_lvl_entry) +
+-		   offsetof(struct perf_lvl_entry, perf_lvl);
+-	return readl_relaxed(dom_data);
+-}
+-
+-static ssize_t stats_get(struct file *file, char __user *user_buf, size_t count,
+-			 loff_t *ppos)
+-{
+-	u16 clkdom, num_lvl, i;
+-	u32 match_old = 0, match_new = 0;
+-	ssize_t r, bytes = 0;
+-	u64 *vals;
+-	void __iomem *dom_data;
+-	struct clkdom_entry *entry = (struct clkdom_entry *)file->private_data;
+-	struct dentry *dentry = file->f_path.dentry;
+-	ssize_t off = 0, perf_lvl_off = 0;
+-	char *str;
+-
+-	r = debugfs_file_get(dentry);
+-	if (unlikely(r))
+-		return r;
+-	if (!entry)
+-		return -ENOENT;
+-	clkdom = entry->clkdom;
+-	dom_data = pinfo->stats_iomem +
+-		   4 * readl_relaxed(pinfo->stats_iomem +
+-				     offsetof(struct scmi_stats,
+-					      perf_dom_entry_off_arr) +
+-				     4 * clkdom);
+-	num_lvl = get_num_opps_for_clkdom(clkdom);
+-	if (!num_lvl)
+-		return 0;
+-
+-	vals = kcalloc(num_lvl, sizeof(u64), GFP_KERNEL);
+-	if (!vals)
+-		return -ENOMEM;
+-	str = kzalloc(4096, GFP_KERNEL);
+-	if (!str)
+-		return -ENOMEM;
+-
+-	/* which offset within each perf_lvl entry */
+-	if (entry->entry == usage)
+-		off = offsetof(struct perf_lvl_entry, usage);
+-	else if (entry->entry == residency)
+-		off = offsetof(struct perf_lvl_entry, residency);
+-
+-	/* read the iomem data for clkdom */
+-	do {
+-		match_old = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, match_sequence));
+-		if (match_old % 2)
+-			continue;
+-		for (i = 0; i < num_lvl; i++) {
+-			perf_lvl_off =
+-				i * sizeof(struct perf_lvl_entry) +
+-				offsetof(struct perf_dom_entry, perf_lvl_arr);
+-			vals[i] = readl_relaxed(dom_data + perf_lvl_off + off) |
+-				  (u64)readl_relaxed(dom_data + perf_lvl_off +
+-						     off + 4)
+-					  << 32;
+-		}
+-		match_new = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, match_sequence));
+-	} while (match_old != match_new);
+-
+-	for (i = 0; i < num_lvl; i++) {
+-		bytes += scnprintf(str + bytes, 4096 - bytes, "%u %llu\n",
+-				 pinfo->freq_info[pinfo->freq_info[clkdom] + i],
+-				 vals[i]);
+-	}
+-
+-	r += simple_read_from_buffer(user_buf, count, ppos, str, bytes);
+-	debugfs_file_put(dentry);
+-	kfree(vals);
+-	kfree(str);
+-	return r;
+-}
+-
+-static const struct file_operations stats_ops = {
+-	.read = stats_get,
+-	.open = simple_open,
+-	.llseek = default_llseek,
+-};
+-
+-static int scmi_cpufreq_stats_create_fs_entries(struct device *dev)
+-{
+-	int i;
+-	struct dentry *ret;
+-	struct dentry *clkdom_dir = NULL;
+-	char clkdom_name[MAX_CLK_DOMAIN];
+-
+-	dir = debugfs_create_dir(SCMI_CPUFREQ_STATS_DIR_STRING, 0);
+-	if (IS_ERR(dir)) {
+-		dev_err(dev, "Debugfs directory creation failed\n");
+-		return -ENOENT;
+-	}
+-
+-	for (i = 0; i < pinfo->num_clkdom; i++) {
+-		snprintf(clkdom_name, MAX_CLK_DOMAIN, "clkdom%d", i);
+-
+-		clkdom_dir = debugfs_create_dir(clkdom_name, dir);
+-		if (IS_ERR(clkdom_dir)) {
+-			dev_err(dev,
+-				"Debugfs directory creation for %s failed\n",
+-				clkdom_name);
+-			return -ENOENT;
+-		}
+-
+-		ret = debugfs_create_file(
+-			CPUFREQ_STATS_USAGE_FILENAME, 0400, clkdom_dir,
+-			pinfo->entries + i * ENTRY_MAX + usage, &stats_ops);
+-		ret = debugfs_create_file(
+-			CPUFREQ_STATS_RESIDENCY_FILENAME, 0400, clkdom_dir,
+-			pinfo->entries + i * ENTRY_MAX + residency, &stats_ops);
+-	}
+-	return 0;
+-}
+-
+-static int qcom_cpufreq_stats_init(struct scmi_handle *handle, struct device *dev)
+-{
+-	u32 stats_signature;
+-	u16 num_clkdom = 0, revision, num_lvl = 0;
+-	int i, j, ret;
+-	struct cpufreq_stats_prot_attr prot_attr;
+-	struct clkdom_entry *entry;
+-
+-	ret = ops->get_param(ph, &prot_attr, SCMI_CPUFREQ_STATS_STR,
+-			PARAM_PROTOCOL_ATTRIBUTE, 0, sizeof(prot_attr));
+-	if (ret) {
+-		dev_err(handle->dev,
+-		"SCMI CPUFREQ Stats CPUFREQSTATS_GET_MEM_INFO error: %d\n", ret);
+-		return ret;
+-	}
+-	if (prot_attr.statistics_len) {
+-		pinfo = devm_kzalloc(dev, sizeof(struct stats_info), GFP_KERNEL);
+-		if (!pinfo)
+-			return -ENOMEM;
+-		pinfo->stats_iomem = devm_ioremap(
+-			handle->dev,
+-			prot_attr.statistics_address_low |
+-				(u64)prot_attr.statistics_address_high << 32,
+-			prot_attr.statistics_len);
+-		if (IS_ERR(pinfo->stats_iomem))
+-			return -ENOMEM;
+-		stats_signature = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, signature));
+-		revision = readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  revision)) & 0xFF;
+-		num_clkdom = readl_relaxed(pinfo->stats_iomem +
+-					   offsetof(struct scmi_stats,
+-						    num_domains)) & 0xFF;
+-		if (stats_signature != 0x50455246) {
+-			dev_err(handle->dev,
+-				"SCMI stats mem signature check failed\n");
+-			return -EPERM;
+-		}
+-		if (revision != 1) {
+-			dev_err(handle->dev,
+-				"SCMI stats revision not supported\n");
+-			return -EPERM;
+-		}
+-		if (!num_clkdom) {
+-			dev_err(handle->dev,
+-				"SCMI cpufreq stats number of clock domains are zero\n");
+-			return -EPERM;
+-		}
+-		pinfo->num_clkdom = num_clkdom;
+-	} else {
+-		dev_err(handle->dev,
+-			"SCMI cpufreq stats length is zero\n");
+-		return -EPERM;
+-	}
+-	/* allocate structures for each clkdom/entry pair */
+-	pinfo->entries = devm_kcalloc(dev, num_clkdom * ENTRY_MAX,
+-				 sizeof(struct clkdom_entry), GFP_KERNEL);
+-	if (!pinfo->entries)
+-		return -ENOMEM;
+-	/* initialize structures for each clkdom/entry pair */
+-	for (i = 0; i < num_clkdom; i++) {
+-		entry = pinfo->entries + (i * ENTRY_MAX);
+-		for (j = 0; j < ENTRY_MAX; j++) {
+-			entry[j].entry = j;
+-			entry[j].clkdom = i;
+-		}
+-	}
+-	if (scmi_cpufreq_stats_create_fs_entries(handle->dev)) {
+-		dev_err(handle->dev, "Failed to create debugfs entries\n");
+-		return -ENOENT;
+-	}
+-	/*find the number of frequencies in platform and allocate memory for storing them */
+-	for (i = 0; i < num_clkdom; i++)
+-		num_lvl += get_num_opps_for_clkdom(i);
+-	pinfo->freq_info =
+-		devm_kcalloc(dev, num_lvl + num_clkdom, sizeof(u32), GFP_KERNEL);
+-	if (!pinfo->freq_info) {
+-		dev_err(handle->dev, "Failed to allocate memory for freq entries\n");
+-		return -ENOMEM;
+-	}
+-	/* Cache the cpufreq values */
+-	for (i = 0; i < num_clkdom; i++) {
+-		/* find the no. of freq lvls of all preceding clkdoms */
+-		pinfo->freq_info[i] = num_clkdom;
+-		for (j = 0; j < i; j++)
+-			pinfo->freq_info[i] += get_num_opps_for_clkdom(j);
+-
+-		num_lvl = get_num_opps_for_clkdom(i);
+-		if (!num_lvl)
+-			continue;
+-		for (j = 0; j < num_lvl; j++) {
+-			pinfo->freq_info[pinfo->freq_info[i] + j] =
+-				get_freq_at_idx_for_clkdom(i, j);
+-		}
+-	}
+-	return 0;
++	struct scmi_device *sdev = arg;
++	sdev->handle->devm_protocol_put(sdev, QCOM_SCMI_VENDOR_PROTOCOL);
++	put_device(&sdev->dev);
+ }
+ 
+ static int scmi_cpufreq_stats_probe(struct platform_device *pdev)
+ {
++	struct cpufreq_stats_prot_attr attributes = { };
++	const struct qcom_scmi_vendor_ops *ops;
++	struct scmi_protocol_handle *ph;
++	struct scmi_device *sdev;
+ 	int ret;
+ 
+ 	sdev = get_qcom_scmi_device();
+-	if (IS_ERR(sdev)) {
+-		ret = PTR_ERR(sdev);
+-		if (ret != -EPROBE_DEFER)
+-			dev_err(&pdev->dev, "Error getting scmi_dev ret = %d\n", ret);
++	if (IS_ERR(sdev))
++		return dev_err_probe(&pdev->dev, PTR_ERR(sdev), "SCMI device unavailable\n");
++	if (!sdev || !sdev->handle)
++		return -ENODEV;
++	get_device(&sdev->dev);
++	ops = sdev->handle->devm_protocol_get(sdev, QCOM_SCMI_VENDOR_PROTOCOL, &ph);
++	if (IS_ERR(ops)) {
++		put_device(&sdev->dev);
++		return PTR_ERR(ops);
++	}
++	ret = devm_add_action_or_reset(&pdev->dev, cpufreq_stats_protocol_put, sdev);
++	if (ret)
+ 		return ret;
+-	}
+-	ops = sdev->handle->devm_protocol_get(sdev, QCOM_SCMI_VENDOR_PROTOCOL, &ph);
+-	if (IS_ERR(ops))
+-		return PTR_ERR(ops);
+-	return qcom_cpufreq_stats_init(sdev->handle, &pdev->dev);
++	ret = ops->get_param(ph, &attributes, SCMI_CPUFREQ_STATS_STR,
++			    PARAM_PROTOCOL_ATTRIBUTE, 0, sizeof(attributes));
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "PERF statistics metadata unavailable\n");
++	return cpufreq_stats_map(&pdev->dev,
++		le32_to_cpu(attributes.statistics_address_low) |
++		(u64)le32_to_cpu(attributes.statistics_address_high) << 32,
++		le32_to_cpu(attributes.statistics_len));
+ }
+ 
+ static const struct of_device_id cpufreq_stats_v2[] = {
+-	{.compatible = "qcom,cpufreq-stats-v2"},
+-	{}
++	{ .compatible = "qcom,cpufreq-stats-v2" },
++	{ }
+ };
+-
++MODULE_DEVICE_TABLE(of, cpufreq_stats_v2);
+ static struct platform_driver cpufreq_stats_v2_driver = {
+ 	.driver = {
+ 		.name = "cpufreq-stats-v2",
+@@ -362,7 +71,7 @@
+ 	},
+ 	.probe = scmi_cpufreq_stats_probe,
+ };
+-
+ module_platform_driver(cpufreq_stats_v2_driver);
++MODULE_SOFTDEP("pre: qcom_scmi_client");
+ MODULE_DESCRIPTION("Qcom SCMI CPUFREQ STATS V2 driver");
+ MODULE_LICENSE("GPL");
+--- a/drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v3.c
++++ b/drivers/soc/qcom/dcvs/cpufreq_stats_scmi_v3.c
+@@ -1,353 +1,80 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+-/*
+- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
++/* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved. */
++#include <linux/scmi_protocol.h>
++#include "../../../firmware/arm_scmi/protocols.h"
++#include "cpufreq_stats_common.h"
++
++/* Standard SCMI PERF PROTOCOL_ATTRIBUTES command and pinned 6.18 response.
++ * Query the real protocol instead of interpreting a private provider structure.
+  */
+-
+-#include <linux/debugfs.h>
+-#include <linux/errno.h>
+-#include <linux/fs.h>
+-#include <linux/init.h>
+-#include <linux/io.h>
+-#include <linux/scmi_protocol.h>
+-#include <linux/slab.h>
+-
+-#define PERF_STR 0x50455246 /* 'PERF' */
+-#define NAME_LEN 20
+-#define SCALING_FACTOR 4
+-
+-struct scmi_perf_info {
+-	u32 version;
+-	u16 num_domains;
+-	enum scmi_power_scale power_scale;
+-	u64 stats_addr;
+-	u32 stats_size;
+-	struct perf_dom_info *dom_info;
++#define PERF_PROTOCOL_ATTRIBUTES 1
++struct scmi_perf_stats_attributes {
++	__le16 num_domains;
++	__le16 flags;
++	__le32 stats_addr_low;
++	__le32 stats_addr_high;
++	__le32 stats_size;
+ };
+ 
+-struct scmi_protocol_handle {
+-	struct device *dev;
+-	const struct scmi_xfer_ops *xops;
+-	const struct scmi_proto_helpers_ops *hops;
+-	int (*set_priv)(const struct scmi_protocol_handle *ph, void *priv);
+-	void *(*get_priv)(const struct scmi_protocol_handle *ph);
+-};
++static int cpufreq_stats_perf_metadata(const struct scmi_protocol_handle *ph,
++				       u64 *address, u32 *size)
++{
++	struct scmi_perf_stats_attributes attributes;
++	struct scmi_xfer *transfer;
++	int ret;
+ 
+-enum entry_type {
+-	ENTRY_USAGE = 0,
+-	ENTRY_RESIDENCY,
+-	ENTRY_MAX,
+-};
+-
+-/* structure to uniquely identify a fs entry */
+-struct clkdom_entry {
+-	enum entry_type entry;
+-	u16 clkdom;
+-};
+-
+-struct scmi_stats {
+-	u32 signature;
+-	u16 revision;
+-	u16 attributes;
+-	u16 num_domains;
+-	u16 reserved;
+-	u32 match_sequence;
+-	u32 perf_dom_entry_off_arr[];
+-} __packed;
+-
+-struct perf_lvl_entry {
+-	u32 perf_lvl;
+-	u32 reserved;
+-	u64 usage;
+-	u64 residency;
+-} __packed;
+-
+-struct perf_dom_entry {
+-	u16 num_perf_levels;
+-	u16 curr_perf_idx;
+-	u32 ext_tbl_off;
+-	u64 ts_last_change;
+-	struct perf_lvl_entry perf_lvl_arr[];
+-} __packed;
+-
+-struct stats_info {
+-	u32 stats_size;
+-	void __iomem *stats_iomem;
+-	u16 num_clkdom;
+-	struct clkdom_entry *entries;
+-	u32 *freq_info;
+-};
+-
+-static struct stats_info *pinfo;
+-
+-static u32 get_num_opps_for_clkdom(u32 clkdom)
+-{
+-	__le32 dom_data_off;
+-	void __iomem *dom_data;
+-
+-	dom_data_off = SCALING_FACTOR * readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  perf_dom_entry_off_arr) +
+-					 SCALING_FACTOR * clkdom);
+-	dom_data = pinfo->stats_iomem + dom_data_off;
+-	return readl_relaxed(dom_data) & 0xFF;
+-}
+-
+-static u32 get_freq_at_idx_for_clkdom(u32 clkdom, u32 idx)
+-{
+-	__le32 dom_data_off;
+-	void __iomem *dom_data;
+-
+-	dom_data_off = SCALING_FACTOR * readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  perf_dom_entry_off_arr) +
+-					 SCALING_FACTOR * clkdom);
+-	dom_data = pinfo->stats_iomem + dom_data_off +
+-		   offsetof(struct perf_dom_entry, perf_lvl_arr) +
+-		   idx * sizeof(struct perf_lvl_entry) +
+-		   offsetof(struct perf_lvl_entry, perf_lvl);
+-	return readl_relaxed(dom_data);
+-}
+-
+-static ssize_t cpufreq_stats_get(struct file *file, char __user *user_buf, size_t count,
+-			 loff_t *ppos)
+-{
+-	struct clkdom_entry *entry = (struct clkdom_entry *)file->private_data;
+-	struct dentry *dentry = file->f_path.dentry;
+-	ssize_t off = 0, perf_lvl_off = 0;
+-	u32 match_old = 0, match_new = 0;
+-	u16 clkdom, num_lvl, i;
+-	void __iomem *dom_data_off;
+-	ssize_t r, bytes = 0;
+-	char *str;
+-	u64 *vals;
+-
+-	r = debugfs_file_get(dentry);
+-	if (unlikely(r))
+-		return r;
+-	if (!entry) {
+-		debugfs_file_put(dentry);
+-		return -ENOENT;
+-	}
+-	clkdom = entry->clkdom;
+-	dom_data_off = pinfo->stats_iomem +
+-			SCALING_FACTOR * readl_relaxed(pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, perf_dom_entry_off_arr) +
+-				     SCALING_FACTOR * clkdom);
+-	num_lvl = get_num_opps_for_clkdom(clkdom);
+-	if (!num_lvl) {
+-		debugfs_file_put(dentry);
+-		return 0;
+-	}
+-
+-	vals = kcalloc(num_lvl, sizeof(u64), GFP_KERNEL);
+-	if (!vals) {
+-		debugfs_file_put(dentry);
+-		return -ENOMEM;
+-	}
+-	str = kzalloc(PAGE_SIZE, GFP_KERNEL);
+-	if (!str) {
+-		kfree(vals);
+-		debugfs_file_put(dentry);
+-		return -ENOMEM;
+-	}
+-
+-	/* which offset within each perf_lvl entry */
+-	if (entry->entry == ENTRY_USAGE)
+-		off = offsetof(struct perf_lvl_entry, usage);
+-	else if (entry->entry == ENTRY_RESIDENCY)
+-		off = offsetof(struct perf_lvl_entry, residency);
+-
+-	/* read the iomem data for clkdom */
+-	do {
+-		match_old = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, match_sequence));
+-		if (match_old & 1)
+-			continue;
+-		for (i = 0; i < num_lvl; i++) {
+-			perf_lvl_off =
+-				i * sizeof(struct perf_lvl_entry) +
+-				offsetof(struct perf_dom_entry, perf_lvl_arr);
+-			vals[i] = readl_relaxed(dom_data_off + perf_lvl_off + off) |
+-				  (u64)readl_relaxed(dom_data_off + perf_lvl_off +
+-						     off + 4) << 32;
+-		}
+-		match_new = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, match_sequence));
+-	} while (match_old != match_new);
+-
+-	for (i = 0; i < num_lvl; i++) {
+-		bytes += scnprintf(str + bytes, PAGE_SIZE - bytes, "%u %llu\n",
+-				 pinfo->freq_info[pinfo->freq_info[clkdom] + i],
+-				 vals[i]);
+-	}
+-
+-	r = simple_read_from_buffer(user_buf, count, ppos, str, bytes);
+-	kfree(vals);
+-	kfree(str);
+-	debugfs_file_put(dentry);
+-	return r;
+-}
+-
+-static const struct file_operations stats_ops = {
+-	.read = cpufreq_stats_get,
+-	.open = simple_open,
+-	.llseek = default_llseek,
+-};
+-
+-static int scmi_cpufreq_stats_create_fs_entries(struct device *dev)
+-{
+-	struct dentry *clkdom_dir = NULL;
+-	char clkdom_name[NAME_LEN];
+-	struct dentry *dir, *ret;
+-	int i;
+-
+-	dir = debugfs_create_dir("cpufreq_stats", 0);
+-	if (IS_ERR(dir)) {
+-		pr_err("Failed to create cpufreq_stats debugfs %ld\n", PTR_ERR(dir));
+-		return PTR_ERR(dir);
+-	}
+-	for (i = 0; i < pinfo->num_clkdom; i++) {
+-		snprintf(clkdom_name, NAME_LEN, "clkdom%d", i);
+-
+-		clkdom_dir = debugfs_create_dir(clkdom_name, dir);
+-		if (IS_ERR(clkdom_dir)) {
+-			dev_err(dev,
+-				"Debugfs directory creation for %s failed\n",
+-				clkdom_name);
+-			return PTR_ERR(clkdom_dir);
+-		}
+-
+-		ret = debugfs_create_file(
+-			"usage", 0400, clkdom_dir,
+-			pinfo->entries + i * ENTRY_MAX + ENTRY_USAGE, &stats_ops);
+-		if (IS_ERR(ret)) {
+-			pr_err("Failed to create cpufreq_stats debugfs %ld\n", PTR_ERR(ret));
+-			return PTR_ERR(ret);
+-		}
+-		ret = debugfs_create_file(
+-			"time_in_state", 0400, clkdom_dir,
+-			pinfo->entries + i * ENTRY_MAX + ENTRY_RESIDENCY, &stats_ops);
+-		if (IS_ERR(ret)) {
+-			pr_err("Failed to create cpufreq_stats debugfs %ld\n", PTR_ERR(ret));
+-			return PTR_ERR(ret);
++	if (!ph || !ph->xops || !ph->xops->xfer_get_init ||
++	    !ph->xops->do_xfer || !ph->xops->xfer_put)
++		return -EOPNOTSUPP;
++	ret = ph->xops->xfer_get_init(ph, PERF_PROTOCOL_ATTRIBUTES, 0,
++				    sizeof(attributes), &transfer);
++	if (ret)
++		return ret;
++	ret = ph->xops->do_xfer(ph, transfer);
++	if (!ret) {
++		if (transfer->rx.len < sizeof(attributes)) {
++			ret = -EPROTO;
++		} else {
++			memcpy(&attributes, transfer->rx.buf, sizeof(attributes));
++			*address = le32_to_cpu(attributes.stats_addr_low) |
++				   (u64)le32_to_cpu(attributes.stats_addr_high) << 32;
++			*size = le32_to_cpu(attributes.stats_size);
++			if (!*size)
++				ret = -ENODATA;
+ 		}
+ 	}
+-	return 0;
+-}
+-
+-static int qcom_cpufreq_stats_init(struct scmi_perf_info *pi, struct scmi_protocol_handle *ph)
+-{
+-	u32 stats_signature;
+-	u16 num_clkdom = 0, revision, num_lvl = 0;
+-	int i, j;
+-	struct clkdom_entry *entry;
+-
+-	if (pi->stats_size) {
+-		pinfo = devm_kzalloc(ph->dev, sizeof(struct stats_info), GFP_KERNEL);
+-		if (!pinfo)
+-			return -ENOMEM;
+-		pinfo->stats_iomem = devm_ioremap(
+-			ph->dev, pi->stats_addr, pi->stats_size);
+-		if (!pinfo->stats_iomem)
+-			return -ENOMEM;
+-		stats_signature = readl_relaxed(
+-			pinfo->stats_iomem +
+-			offsetof(struct scmi_stats, signature));
+-		revision = readl_relaxed(pinfo->stats_iomem +
+-					 offsetof(struct scmi_stats,
+-						  revision)) & 0xFF;
+-		num_clkdom = readl_relaxed(pinfo->stats_iomem +
+-					   offsetof(struct scmi_stats,
+-						    num_domains)) & 0xFF;
+-		if (stats_signature != PERF_STR) {
+-			dev_err(ph->dev, "SCMI stats mem signature check failed\n");
+-			return -EPERM;
+-		}
+-		if (revision != 1) {
+-			dev_err(ph->dev, "SCMI stats revision not supported\n");
+-			return -EPERM;
+-		}
+-		if (!num_clkdom) {
+-			dev_err(ph->dev, "SCMI cpufreq stats number of clock domains are zero\n");
+-			return -EPERM;
+-		}
+-		pinfo->num_clkdom = num_clkdom;
+-	} else {
+-		dev_err(ph->dev, "SCMI cpufreq stats length is zero\n");
+-		return -EPERM;
+-	}
+-	/* allocate structures for each clkdom/entry pair */
+-	pinfo->entries = devm_kcalloc(ph->dev, num_clkdom * ENTRY_MAX,
+-				 sizeof(struct clkdom_entry), GFP_KERNEL);
+-	if (!pinfo->entries)
+-		return -ENOMEM;
+-	/* initialize structures for each clkdom/entry pair */
+-	for (i = 0; i < num_clkdom; i++) {
+-		entry = pinfo->entries + (i * ENTRY_MAX);
+-		for (j = 0; j < ENTRY_MAX; j++) {
+-			entry[j].entry = j;
+-			entry[j].clkdom = i;
+-		}
+-	}
+-	if (scmi_cpufreq_stats_create_fs_entries(ph->dev)) {
+-		dev_err(ph->dev, "Failed to create debugfs entries\n");
+-		return -ENOENT;
+-	}
+-	/*find the number of frequencies in platform and allocate memory for storing them */
+-	for (i = 0; i < num_clkdom; i++)
+-		num_lvl += get_num_opps_for_clkdom(i);
+-	pinfo->freq_info =
+-		devm_kcalloc(ph->dev, num_lvl + num_clkdom, sizeof(u32), GFP_KERNEL);
+-	if (!pinfo->freq_info)
+-		return -ENOMEM;
+-	/* Cache the cpufreq values */
+-	for (i = 0; i < num_clkdom; i++) {
+-		/* find the no. of freq lvls of all preceding clkdoms */
+-		pinfo->freq_info[i] = num_clkdom;
+-		for (j = 0; j < i; j++)
+-			pinfo->freq_info[i] += get_num_opps_for_clkdom(j);
+-
+-		num_lvl = get_num_opps_for_clkdom(i);
+-		if (!num_lvl)
+-			continue;
+-		for (j = 0; j < num_lvl; j++) {
+-			pinfo->freq_info[pinfo->freq_info[i] + j] =
+-				get_freq_at_idx_for_clkdom(i, j);
+-		}
+-	}
+-	return 0;
++	ph->xops->xfer_put(ph, transfer);
++	return ret;
+ }
+ 
+ static int scmi_cpufreq_stats_probe(struct scmi_device *sdev)
+ {
+-	static const struct scmi_perf_proto_ops *perf_ops;
+-	const struct scmi_handle *handle = sdev->handle;
++	const struct scmi_perf_proto_ops *ops;
+ 	struct scmi_protocol_handle *ph;
+-	struct scmi_perf_info *pi;
++	u64 address;
++	u32 size;
++	int ret;
+ 
+-	if (!handle)
++	if (!sdev->handle)
+ 		return -ENODEV;
+-	perf_ops = handle->devm_protocol_get(sdev, SCMI_PROTOCOL_PERF, &ph);
+-	if (IS_ERR(perf_ops))
+-		return PTR_ERR(perf_ops);
+-	pi = ph->get_priv(ph);
+-	return qcom_cpufreq_stats_init(pi, ph);
++	ops = sdev->handle->devm_protocol_get(sdev, SCMI_PROTOCOL_PERF, &ph);
++	if (IS_ERR(ops))
++		return PTR_ERR(ops);
++	ret = cpufreq_stats_perf_metadata(ph, &address, &size);
++	if (ret)
++		return dev_err_probe(&sdev->dev, ret, "PERF statistics metadata unavailable\n");
++	return cpufreq_stats_map(&sdev->dev, address, size);
+ }
+-
+ static const struct scmi_device_id scmi_id_table[] = {
+ 	{ SCMI_PROTOCOL_PERF, "cpufreqstats" },
+-	{ },
++	{ }
+ };
+ MODULE_DEVICE_TABLE(scmi, scmi_id_table);
+-
+ static struct scmi_driver scmi_cpufreq_stats_driver = {
+ 	.name = "scmi-cpufreq-stats",
+ 	.probe = scmi_cpufreq_stats_probe,
+ 	.id_table = scmi_id_table,
+ };
+-
+ module_scmi_driver(scmi_cpufreq_stats_driver);
+ MODULE_DESCRIPTION("QTI SCMI CPUFREQ STATS driver");
+ MODULE_LICENSE("GPL");
+--- /dev/null
++++ b/drivers/soc/qcom/dcvs/cpufreq_stats_common.h
+@@ -0,0 +1,271 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Native PERF statistics memory layout shared by the V2 and V3 consumers. */
++#ifndef _QCOM_CPUFREQ_STATS_COMMON_H
++#define _QCOM_CPUFREQ_STATS_COMMON_H
++#include <linux/debugfs.h>
++#include <linux/fs.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/overflow.h>
++#include <linux/slab.h>
++
++#define PERF_STATS_SIGNATURE 0x50455246
++#define PERF_STATS_ATTEMPTS 128
++
++enum entry_type { ENTRY_USAGE, ENTRY_RESIDENCY, ENTRY_MAX };
++struct scmi_stats {
++	u32 signature;
++	u16 revision;
++	u16 attributes;
++	u16 num_domains;
++	u16 reserved;
++	u32 match_sequence;
++	u32 perf_dom_entry_off_arr[];
++} __packed;
++struct perf_lvl_entry {
++	u32 perf_lvl;
++	u32 reserved;
++	u64 usage;
++	u64 residency;
++} __packed;
++struct perf_dom_entry {
++	u16 num_perf_levels;
++	u16 curr_perf_idx;
++	u32 ext_tbl_off;
++	u64 ts_last_change;
++	struct perf_lvl_entry perf_lvl_arr[];
++} __packed;
++struct stats_info;
++struct clkdom_entry {
++	enum entry_type entry;
++	u16 clkdom;
++	struct stats_info *info;
++};
++struct stats_domain {
++	u32 offset;
++	u16 num_levels;
++	u32 *frequencies;
++};
++struct stats_info {
++	u32 stats_size;
++	void __iomem *stats_iomem;
++	u16 num_clkdom;
++	struct stats_domain *domains;
++	struct clkdom_entry *entries;
++	struct dentry *dir;
++};
++
++static bool stats_range_valid(struct stats_info *info, u64 offset, u64 bytes)
++{
++	return offset <= info->stats_size && bytes <= info->stats_size - offset;
++}
++
++static int stats_domain_geometry(struct stats_info *info, u32 clkdom,
++				 u32 *offset, u16 *levels)
++{
++	u64 start, header = offsetof(struct scmi_stats, perf_dom_entry_off_arr);
++
++	if (clkdom >= info->num_clkdom ||
++	    !stats_range_valid(info, header + sizeof(u32) * (u64)clkdom, sizeof(u32)))
++		return -EINVAL;
++	start = (u64)readl(info->stats_iomem + header + sizeof(u32) * clkdom) * 4;
++	if (start < header + sizeof(u32) * (u64)info->num_clkdom ||
++	    !stats_range_valid(info, start, sizeof(struct perf_dom_entry)))
++		return -EPROTO;
++	*levels = readl(info->stats_iomem + start) & U16_MAX;
++	if (!stats_range_valid(info, start + sizeof(struct perf_dom_entry),
++			      (u64)*levels * sizeof(struct perf_lvl_entry)))
++		return -EPROTO;
++	*offset = start;
++	return 0;
++}
++
++static int stats_read_values(struct stats_info *info, struct clkdom_entry *entry,
++			    u64 *values)
++{
++	struct stats_domain *domain;
++	u32 before, after, offset;
++	u16 levels;
++	unsigned int attempt, i;
++	size_t field;
++	int ret;
++
++	if (entry->clkdom >= info->num_clkdom || entry->entry >= ENTRY_MAX)
++		return -EINVAL;
++	domain = &info->domains[entry->clkdom];
++	field = entry->entry == ENTRY_USAGE ? offsetof(struct perf_lvl_entry, usage) :
++					     offsetof(struct perf_lvl_entry, residency);
++	for (attempt = 0; attempt < PERF_STATS_ATTEMPTS; attempt++) {
++		before = readl(info->stats_iomem + offsetof(struct scmi_stats, match_sequence));
++		if (before & 1)
++			continue;
++		ret = stats_domain_geometry(info, entry->clkdom, &offset, &levels);
++		if (!ret && (offset != domain->offset || levels != domain->num_levels))
++			ret = -ESTALE;
++		if (!ret) {
++			for (i = 0; i < levels; i++) {
++				void __iomem *row = info->stats_iomem + offset +
++					offsetof(struct perf_dom_entry, perf_lvl_arr) +
++					i * sizeof(struct perf_lvl_entry);
++				if (readl(row + offsetof(struct perf_lvl_entry, perf_lvl)) !=
++				    domain->frequencies[i]) {
++					ret = -ESTALE;
++					break;
++				}
++				values[i] = readl(row + field) | (u64)readl(row + field + 4) << 32;
++			}
++		}
++		after = readl(info->stats_iomem + offsetof(struct scmi_stats, match_sequence));
++		if (before == after)
++			return ret;
++	}
++	return -EAGAIN;
++}
++
++static ssize_t cpufreq_stats_get(struct file *file, char __user *user_buf,
++				 size_t count, loff_t *ppos)
++{
++	struct clkdom_entry *entry;
++	struct stats_domain *domain;
++	struct dentry *dentry = file->f_path.dentry;
++	u64 *values = NULL;
++	char *buffer = NULL;
++	size_t length, bytes = 0;
++	unsigned int i;
++	ssize_t ret;
++
++	ret = debugfs_file_get(dentry);
++	if (ret)
++		return ret;
++	entry = file->private_data;
++	if (!entry || !entry->info || entry->clkdom >= entry->info->num_clkdom) {
++		ret = -ENOENT;
++		goto out;
++	}
++	domain = &entry->info->domains[entry->clkdom];
++	if (!domain->num_levels) {
++		ret = 0;
++		goto out;
++	}
++	length = (size_t)domain->num_levels * 40 + 1;
++	values = kcalloc(domain->num_levels, sizeof(*values), GFP_KERNEL);
++	buffer = kzalloc(length, GFP_KERNEL);
++	if (!values || !buffer) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	ret = stats_read_values(entry->info, entry, values);
++	if (ret)
++		goto out;
++	for (i = 0; i < domain->num_levels; i++)
++		bytes += scnprintf(buffer + bytes, length - bytes, "%u %llu\n",
++				   domain->frequencies[i], values[i]);
++	ret = simple_read_from_buffer(user_buf, count, ppos, buffer, bytes);
++out:
++	kfree(buffer);
++	kfree(values);
++	debugfs_file_put(dentry);
++	return ret;
++}
++
++static const struct file_operations stats_ops = {
++	.owner = THIS_MODULE,
++	.read = cpufreq_stats_get,
++	.open = simple_open,
++	.llseek = default_llseek,
++};
++
++static void cpufreq_stats_debugfs_cleanup(void *arg)
++{
++	struct stats_info *info = arg;
++	debugfs_remove_recursive(info->dir);
++}
++
++static int cpufreq_stats_create_fs(struct device *dev, struct stats_info *info)
++{
++	struct dentry *directory, *file;
++	char name[24];
++	int i, ret;
++
++	info->dir = debugfs_create_dir("cpufreq_stats", NULL);
++	if (IS_ERR_OR_NULL(info->dir))
++		return info->dir ? PTR_ERR(info->dir) : -ENOMEM;
++	ret = devm_add_action_or_reset(dev, cpufreq_stats_debugfs_cleanup, info);
++	if (ret)
++		return ret;
++	for (i = 0; i < info->num_clkdom; i++) {
++		snprintf(name, sizeof(name), "clkdom%d", i);
++		directory = debugfs_create_dir(name, info->dir);
++		if (IS_ERR_OR_NULL(directory))
++			return directory ? PTR_ERR(directory) : -ENOMEM;
++		file = debugfs_create_file("usage", 0400, directory,
++					  &info->entries[i * ENTRY_MAX + ENTRY_USAGE], &stats_ops);
++		if (IS_ERR_OR_NULL(file))
++			return file ? PTR_ERR(file) : -ENOMEM;
++		file = debugfs_create_file("time_in_state", 0400, directory,
++					  &info->entries[i * ENTRY_MAX + ENTRY_RESIDENCY], &stats_ops);
++		if (IS_ERR_OR_NULL(file))
++			return file ? PTR_ERR(file) : -ENOMEM;
++	}
++	return 0;
++}
++
++static int cpufreq_stats_map(struct device *dev, u64 address, u32 size)
++{
++	struct stats_info *info;
++	struct stats_domain *domain;
++	u64 last;
++	u32 sequence;
++	int ret, i, j;
++
++	if (!size)
++		return -ENODATA;
++	if (size < sizeof(struct scmi_stats))
++		return -EPROTO;
++	if ((u64)(phys_addr_t)address != address ||
++	    check_add_overflow(address, (u64)size - 1, &last))
++		return -ERANGE;
++	info = devm_kzalloc(dev, sizeof(*info), GFP_KERNEL);
++	if (!info)
++		return -ENOMEM;
++	info->stats_size = size;
++	info->stats_iomem = devm_ioremap(dev, address, size);
++	if (!info->stats_iomem)
++		return -ENOMEM;
++	sequence = readl(info->stats_iomem + offsetof(struct scmi_stats, match_sequence));
++	if (sequence & 1)
++		return -EAGAIN;
++	if (readl(info->stats_iomem + offsetof(struct scmi_stats, signature)) != PERF_STATS_SIGNATURE)
++		return -EPROTO;
++	if ((readl(info->stats_iomem + offsetof(struct scmi_stats, revision)) & U16_MAX) != 1)
++		return -EOPNOTSUPP;
++	info->num_clkdom = readl(info->stats_iomem + offsetof(struct scmi_stats, num_domains)) & U16_MAX;
++	if (!info->num_clkdom || !stats_range_valid(info, sizeof(struct scmi_stats),
++						  (u64)info->num_clkdom * sizeof(u32)))
++		return -EPROTO;
++	info->domains = devm_kcalloc(dev, info->num_clkdom, sizeof(*info->domains), GFP_KERNEL);
++	info->entries = devm_kcalloc(dev, info->num_clkdom * ENTRY_MAX, sizeof(*info->entries), GFP_KERNEL);
++	if (!info->domains || !info->entries)
++		return -ENOMEM;
++	for (i = 0; i < info->num_clkdom; i++) {
++		domain = &info->domains[i];
++		ret = stats_domain_geometry(info, i, &domain->offset, &domain->num_levels);
++		if (ret)
++			return ret;
++		domain->frequencies = devm_kcalloc(dev, domain->num_levels, sizeof(u32), GFP_KERNEL);
++		if (!domain->frequencies && domain->num_levels)
++			return -ENOMEM;
++		for (j = 0; j < domain->num_levels; j++)
++			domain->frequencies[j] = readl(info->stats_iomem + domain->offset +
++				offsetof(struct perf_dom_entry, perf_lvl_arr) + j * sizeof(struct perf_lvl_entry));
++		for (j = 0; j < ENTRY_MAX; j++) {
++			info->entries[i * ENTRY_MAX + j].info = info;
++			info->entries[i * ENTRY_MAX + j].clkdom = i;
++			info->entries[i * ENTRY_MAX + j].entry = j;
++		}
++	}
++	if (sequence != readl(info->stats_iomem + offsetof(struct scmi_stats, match_sequence)))
++		return -EAGAIN;
++	return cpufreq_stats_create_fs(dev, info);
++}
++#endif

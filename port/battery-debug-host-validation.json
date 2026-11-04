@@ -1,0 +1,36 @@
+{
+  "status": "PASS",
+  "cases": 10575,
+  "child_sha256": "3d6133c76d3e7f3139aaf06b0ee97f88cd9e29019584072e5683af5c7bbcc953",
+  "parent_sha256": "4067f36718dcfb4bfe974aee1db3adf19c900c835c68b2577cd62949476cd820",
+  "harness_sha256": "2dd992cd92cb3fc3edded393ccfed0542f97aef9d0134d26d945bd17f579a675",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "short-stock-aggregator-request": "REJECTED",
+    "nonzero-stock-aggregator-word": "REJECTED",
+    "ignore-qbg-payload-extent": "REJECTED",
+    "discard-rejected-reply-fence": "REJECTED",
+    "ignore-requested-votable-id": "REJECTED",
+    "ignore-orphan-key": "REJECTED",
+    "route-detached-reply-to-replacement": "REJECTED",
+    "orphan-before-callback-drain": "REJECTED",
+    "retain-failed-submit-fence": "REJECTED",
+    "drop-full-count-boundary": "REJECTED",
+    "release-lock-before-formatting": "REJECTED",
+    "unprotected-override-file": "REJECTED",
+    "hide-protocol-error-as-timeout": "REJECTED",
+    "release-rejected-fence": "REJECTED",
+    "complete-unrelated-opcode": "REJECTED",
+    "publish-invalid-vote": "REJECTED",
+    "drop-qbg-after-aggregator-failure": "REJECTED",
+    "hide-aggregation-error-status": "REJECTED",
+    "release-guard-on-availability-fallback": "REJECTED"
+  },
+  "limits": [
+    "Complete native battery driver C and actual transport reply-fence/unregister C; debugfs, sysfs, devres, RPMSG and callback drain are mocked.",
+    "Native charging override and QBG commands exercised only against host mocks; no live charging override, firmware malformed packet or SSR."
+  ]
+}

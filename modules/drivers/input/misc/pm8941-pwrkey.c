@@ -23,6 +23,7 @@
 #include <linux/printk.h>
 #include <linux/srcu.h>
 #include <linux/mutex.h>
+#include <linux/notifier.h>
 
 #define PON_REV2			0x01
 
@@ -95,6 +96,44 @@ struct pm8941_pwrkey {
 
 RAW_NOTIFIER_HEAD(pwrkey_irq_notifier_list);
 EXPORT_SYMBOL_GPL(pwrkey_irq_notifier_list);
+
+/* This chain runs in the threaded bark IRQ and may sleep. New clients use
+ * these wrappers so registration and unload cannot race an archive callback.
+ * The raw head remains exported for the retained native ABI.
+ */
+static DEFINE_MUTEX(pwrkey_irq_notifier_lock);
+
+int pwrkey_register_irq_notifier(struct notifier_block *nb);
+int pwrkey_unregister_irq_notifier(struct notifier_block *nb);
+
+int pwrkey_register_irq_notifier(struct notifier_block *nb)
+{
+	int ret;
+
+	mutex_lock(&pwrkey_irq_notifier_lock);
+	ret = raw_notifier_chain_register(&pwrkey_irq_notifier_list, nb);
+	mutex_unlock(&pwrkey_irq_notifier_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(pwrkey_register_irq_notifier);
+
+int pwrkey_unregister_irq_notifier(struct notifier_block *nb)
+{
+	int ret;
+
+	mutex_lock(&pwrkey_irq_notifier_lock);
+	ret = raw_notifier_chain_unregister(&pwrkey_irq_notifier_list, nb);
+	mutex_unlock(&pwrkey_irq_notifier_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(pwrkey_unregister_irq_notifier);
+
+static void pwrkey_notify_irq(void)
+{
+	mutex_lock(&pwrkey_irq_notifier_lock);
+	raw_notifier_call_chain(&pwrkey_irq_notifier_list, 0, NULL);
+	mutex_unlock(&pwrkey_irq_notifier_lock);
+}
 static int pm8941_reboot_notify(struct notifier_block *nb,
 				unsigned long code, void *unused)
 {
@@ -226,8 +265,7 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 		sts &= pwrkey->data->status_bit;
 		if (sts) {
 			mi_display_pwrkey_notify(PMIC_PWRKEY_BARK_TRIGGER);
-			raw_notifier_call_chain(&pwrkey_irq_notifier_list, 0,
-						NULL);
+			pwrkey_notify_irq();
 		}
 		return IRQ_HANDLED;
 	}

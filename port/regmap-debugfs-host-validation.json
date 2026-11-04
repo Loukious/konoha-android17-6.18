@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "cases": 268358,
+  "driver_sha256": "8ac4067e26dc54a4354ee3da9beb91b5816c7e40f39870703d1e5db0b3d9228f",
+  "harness_sha256": "504c5bd4a3d6efb4ec6f1f810058d3dc9cf8c8f309723cc9da27e125a1ab7097",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "restore-unprotected-data-file": "REJECTED",
+    "match-wrong-managed-release-callback": "REJECTED",
+    "accept-count-overflow": "REJECTED",
+    "accept-address-overflow": "REJECTED",
+    "skip-data-extent-bound": "REJECTED"
+  },
+  "limits": [
+    "Complete actual native diagnostic/register-cache/read/public registration C; Linux debugfs proxy, devres and regmap hardware are simulated.",
+    "Hardware writes remain gated by the existing kernel configuration and are not exercised live."
+  ]
+}

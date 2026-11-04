@@ -77,6 +77,13 @@ static int battery_status(union power_supply_propval *value)
 		value->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		return 0;
 	}
+	/* A wired handle hold inhibits both charging paths while USB stays online. */
+	if (usb.intval &&
+	    mca_get_named_client_vote("chg_enable", "handle") == 0 &&
+	    mca_get_named_client_vote("quick_chg_en", "handle") == 0) {
+		value->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		return 0;
+	}
 	soc = strategy_class_fg_ops_get_soc();
 	if (soc < 0)
 		return soc;

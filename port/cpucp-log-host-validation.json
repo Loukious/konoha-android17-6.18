@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "cases": 41,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/soc/qcom/cpucp_log.c": "5eb0b411adcf0d436b939150e56a1fe91450045e683e4b23707687fd71fd1d71"
+  },
+  "limits": [
+    "Stubbed mailbox/SCMI control flow and native payloads; physical firmware delivery needs device validation."
+  ]
+}

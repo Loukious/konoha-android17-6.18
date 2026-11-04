@@ -1,0 +1,197 @@
+--- a/drivers/soc/qcom/dcvs/dynpf_scmi.c
++++ b/drivers/soc/qcom/dcvs/dynpf_scmi.c
+@@ -14,6 +14,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/cpu.h>
+ #include <linux/slab.h>
++#include <linux/mutex.h>
++#include <linux/completion.h>
+ 
+ #define DYNPF_ALGO_STR	0x53434d495f444750 /* "SCMI_DGP" */
+ 
+@@ -21,6 +23,9 @@
+ static struct scmi_protocol_handle *ph;
+ static const struct qcom_scmi_vendor_ops *ops;
+ static struct scmi_device *sdev;
++static DEFINE_MUTEX(dynpf_lock);
++static DECLARE_COMPLETION(dynpf_released);
++static bool dynpf_ready;
+ 
+ struct qcom_dynpf_attr {
+ 	struct attribute		attr;
+@@ -82,70 +87,135 @@
+ static ssize_t attr_show(struct kobject *kobj, struct attribute *attr,
+ 			 char *buf)
+ {
+-	struct qcom_dynpf_attr *dynpf_attr = to_dynpf_attr(attr);
++	struct qcom_dynpf_attr *entry = to_dynpf_attr(attr);
+ 	ssize_t ret = -EIO;
+-
+-	if (dynpf_attr->show)
+-		ret = dynpf_attr->show(kobj, attr, buf);
+-
++	mutex_lock(&dynpf_lock);
++	if (!dynpf_ready || !ops)
++		ret = -ENODEV;
++	else if (entry->show)
++		ret = entry->show(kobj, attr, buf);
++	mutex_unlock(&dynpf_lock);
+ 	return ret;
+ }
+ 
++
+ static ssize_t attr_store(struct kobject *kobj, struct attribute *attr,
+-			  const char *buf, size_t count)
+-{
+-	struct qcom_dynpf_attr *dynpf_attr = to_dynpf_attr(attr);
++			 const char *buf, size_t count)
++{
++	struct qcom_dynpf_attr *entry = to_dynpf_attr(attr);
+ 	ssize_t ret = -EIO;
+-
+-	if (dynpf_attr->store)
+-		ret = dynpf_attr->store(kobj, attr, buf, count);
+-
++	mutex_lock(&dynpf_lock);
++	if (!dynpf_ready || !ops)
++		ret = -ENODEV;
++	else if (entry->store)
++		ret = entry->store(kobj, attr, buf, count);
++	mutex_unlock(&dynpf_lock);
+ 	return ret;
+ }
++
+ 
+ static const struct sysfs_ops dynpf_sysfs_ops = {
+ 	.show	= attr_show,
+ 	.store	= attr_store,
+ };
+ 
++static void dynpf_kobject_release(struct kobject *kobj)
++{
++	complete(&dynpf_released);
++}
++
+ static const struct kobj_type dynpf_settings_ktype = {
++	.release = dynpf_kobject_release,
+ 	.sysfs_ops		= &dynpf_sysfs_ops,
+ 	.default_groups		= dynpf_settings_groups,
+ };
+ 
++static void dynpf_kobject_cleanup(void *arg)
++{
++	mutex_lock(&dynpf_lock);
++	dynpf_ready = false;
++	mutex_unlock(&dynpf_lock);
++	kobject_del(&dynpf_kobj);
++	kobject_put(&dynpf_kobj);
++	wait_for_completion(&dynpf_released);
++}
++
++static void dynpf_protocol_cleanup(void *arg)
++{
++	mutex_lock(&dynpf_lock);
++	sdev->handle->devm_protocol_put(sdev, QCOM_SCMI_VENDOR_PROTOCOL);
++	put_device(&sdev->dev);
++	sdev = NULL;
++	ops = NULL;
++	ph = NULL;
++	mutex_unlock(&dynpf_lock);
++}
++
+ static int qcom_dynpf_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev_root;
+ 	int ret;
+ 
++	mutex_lock(&dynpf_lock);
++	if (ops) {
++		ret = -EBUSY;
++		goto unlock;
++	}
+ 	sdev = get_qcom_scmi_device();
+-	if (IS_ERR(sdev))
+-		return dev_err_probe(&pdev->dev, PTR_ERR(sdev), "Error getting scmi_dev\n");
+-
++	if (IS_ERR(sdev)) {
++		ret = PTR_ERR(sdev);
++		sdev = NULL;
++		goto unlock;
++	}
++	if (!sdev || !sdev->handle) {
++		ret = -ENODEV;
++		goto unlock;
++	}
++	get_device(&sdev->dev);
+ 	ops = sdev->handle->devm_protocol_get(sdev, QCOM_SCMI_VENDOR_PROTOCOL, &ph);
+ 	if (IS_ERR(ops)) {
+ 		ret = PTR_ERR(ops);
+ 		ops = NULL;
+-		return ret;
+-	}
+-
++		put_device(&sdev->dev);
++		sdev = NULL;
++		goto unlock;
++	}
++	ret = devm_add_action(&pdev->dev, dynpf_protocol_cleanup, NULL);
++	if (ret) {
++		sdev->handle->devm_protocol_put(sdev, QCOM_SCMI_VENDOR_PROTOCOL);
++		put_device(&sdev->dev);
++		sdev = NULL;
++		ops = NULL;
++		goto unlock;
++	}
+ 	dev_root = bus_get_dev_root(&cpu_subsys);
+-	if (dev_root) {
+-		ret = kobject_init_and_add(&dynpf_kobj, &dynpf_settings_ktype,
+-						&dev_root->kobj, "dynpf");
+-		put_device(dev_root);
+-	} else {
+-		dev_err(&pdev->dev, "failed to get cpu_subsys dev_root\n");
+-		return -ENODEV;
+-	}
+-	if (ret < 0) {
+-		dev_err(&pdev->dev, "failed to init dynpf kobj: %d\n", ret);
++	if (!dev_root) {
++		ret = -ENODEV;
++		goto unlock;
++	}
++	reinit_completion(&dynpf_released);
++	/* No callback can access protocol state before the owner is ready. */
++	ret = kobject_init_and_add(&dynpf_kobj, &dynpf_settings_ktype,
++				   &dev_root->kobj, "dynpf");
++	put_device(dev_root);
++	mutex_unlock(&dynpf_lock);
++	if (ret) {
+ 		kobject_put(&dynpf_kobj);
+-		return ret;
+-	}
+-
++		wait_for_completion(&dynpf_released);
++		return ret;
++	}
++	ret = devm_add_action_or_reset(&pdev->dev, dynpf_kobject_cleanup, NULL);
++	if (ret)
++		return ret;
++	mutex_lock(&dynpf_lock);
++	dynpf_ready = true;
++	mutex_unlock(&dynpf_lock);
+ 	return 0;
+-}
++unlock:
++	mutex_unlock(&dynpf_lock);
++	return ret;
++}
++
+ 
+ static const struct of_device_id dynpf_table[] = {
+ 	{.compatible = "qcom,dynpf"},
+@@ -160,6 +230,7 @@
+ 	.probe = qcom_dynpf_probe,
+ };
+ 
++MODULE_DEVICE_TABLE(of, dynpf_table);
+ module_platform_driver(dynpf_driver);
+ MODULE_SOFTDEP("pre: qcom_scmi_client");
+ MODULE_DESCRIPTION("QCOM DYNPF SCMI driver");

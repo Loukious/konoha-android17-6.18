@@ -1,0 +1,6334 @@
+--- a/drivers/soc/qcom/mpam/mpam.c
++++ b/drivers/soc/qcom/mpam/mpam.c
+@@ -157,9 +157,8 @@
+ 	return 0;
+ }
+ 
+-static int qcom_mpam_remove(struct platform_device *pdev)
++static void qcom_mpam_remove(struct platform_device *pdev)
+ {
+-	return 0;
+ }
+ 
+ static const struct of_device_id qcom_mpam_table[] = {
+--- a/drivers/soc/qcom/mpam/cpu_mpam.c
++++ b/drivers/soc/qcom/mpam/cpu_mpam.c
+@@ -5,6 +5,8 @@
+  #define pr_fmt(fmt) "cpu_mpam: " fmt
+ 
+ #include <linux/io.h>
++#include <asm/cpufeature.h>
++#include <asm/sysreg.h>
+ #include <linux/of.h>
+ #include <linux/configfs.h>
+ #include <linux/string.h>
+@@ -32,6 +34,7 @@
+ static struct cpu_mpam_msc *mpam_mscs;
+ static int mpam_msc_cnt;
+ static bool can_monitor;
++static DEFINE_MUTEX(cpu_mpam_lock);
+ 
+ static inline struct cpu_mpam_partition *to_partition(
+ 					   struct config_item *item)
+@@ -74,18 +77,27 @@
+ 	for_each_process_thread(p, t) {
+ 		wts = (struct walt_task_struct *) t->android_vendor_data1;
+ 		if (wts->mpam_part_id == old)
+-			wts->mpam_part_id = new;
++			WRITE_ONCE(wts->mpam_part_id, new);
+ 	}
+ 	rcu_read_unlock();
+ }
+ 
++static ssize_t cpu_mpam_part_id_show_locked(struct config_item *item, char *page)
++{
++	return scnprintf(page, PAGE_SIZE, "%d\n", get_part_id(item));
++}
+ static ssize_t cpu_mpam_part_id_show(struct config_item *item, char *page)
+ {
+-	return scnprintf(page, PAGE_SIZE, "%d\n", get_part_id(item));
+-}
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_part_id_show_locked(item, page);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR_RO(cpu_mpam_, part_id);
+ 
+-static void cpu_mpam_set_param(struct config_item *item,
++static int cpu_mpam_set_param(struct config_item *item,
+ 		enum msc_id mscid, char *buf)
+ {
+ 	int ret;
+@@ -104,14 +116,15 @@
+ 	mpam_param.slc_partition_id = partition->val[mscid].slc_partition_id;
+ 	mpam_param.mpam_config_ctrl = SET_ALL_CPU_TUNABLE;
+ 
+-	strscpy(temp, buf, sizeof(temp));
++	if (strscpy(temp, buf, sizeof(temp)) < 0)
++		return -E2BIG;
+ 	while ((token = strsep(&param, ",")) != NULL) {
+ 		param_name = strsep(&token, "=");
+ 		if (param_name == NULL || token == NULL)
+-			continue;
++			return -EINVAL;
+ 		if (kstrtouint(token, 0, &input) < 0) {
+ 			pr_err("invalid argument for %s\n", param_name);
+-			continue;
++			return -EINVAL;
+ 		}
+ 
+ 		if (!strcmp("cmax", param_name))
+@@ -122,6 +135,8 @@
+ 			mpam_param.dspri = input;
+ 		else if (!strcmp("slc_partid", param_name))
+ 			mpam_param.slc_partition_id = input;
++		else
++			return -EINVAL;
+ 	}
+ 
+ 	/*
+@@ -147,24 +162,24 @@
+ 			partition->val[mscid].cpbm = mpam_param.cpbm_mask;
+ 	} else
+ 		pr_err("set msc mpam settings failed, ret = %d\n", ret);
+-}
+-
+-static void cpu_mpam_set_by_schemata(struct config_item *item,
+-		char *msc_name, char *param)
+-{
+-	int i;
+-
+-	/*
+-	 * Go through all MSCs, set specific MSC if msc_name exists, or
+-	 * set all MSCs if msc_name not exists.
+-	 */
+-	for (i = 0; i < mpam_msc_cnt; i++)
+-		if ((msc_name == NULL) || (!strcmp(msc_name,
+-				mpam_mscs[i].msc_name)))
+-			cpu_mpam_set_param(item, mpam_mscs[i].msc_id, param);
+-}
+-
+-static ssize_t cpu_mpam_schemata_show(struct config_item *item,
++	return ret;
++}
++
++static int cpu_mpam_set_by_schemata(struct config_item *item, char *name, char *param)
++{
++	int ret, found = 0;
++	for (int i = 0; i < mpam_msc_cnt; i++) {
++		if (name && strcmp(name, mpam_mscs[i].msc_name))
++			continue;
++		ret = cpu_mpam_set_param(item, mpam_mscs[i].msc_id, param);
++		if (ret)
++			return ret;
++		found++;
++	}
++	return found ? 0 : -EINVAL;
++}
++
++static ssize_t cpu_mpam_schemata_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	int i, ret = 0;
+@@ -176,12 +191,12 @@
+ 		msc_id = mpam_mscs[i].msc_id;
+ 		mpam_val = &partition->val[msc_id];
+ 		if (can_monitor)
+-			ret += scnprintf(page + ret, PAGE_SIZE,
++			ret += scnprintf(page + ret, PAGE_SIZE - ret,
+ 				"%s:cmax=%d,cpbm=0x%x,prio=%d,slc_partid=%d\n",
+ 				mpam_mscs[i].msc_name, mpam_val->capacity,
+ 				mpam_val->cpbm, mpam_val->dspri, mpam_val->slc_partition_id);
+ 		else
+-			ret += scnprintf(page + ret, PAGE_SIZE, "%s:cpbm=0x%x,slc_partid=%d\n",
++			ret += scnprintf(page + ret, PAGE_SIZE - ret, "%s:cpbm=0x%x,slc_partid=%d\n",
+ 				mpam_mscs[i].msc_name, mpam_val->cpbm, mpam_val->slc_partition_id);
+ 	}
+ 
+@@ -217,25 +232,49 @@
+  * cmax=40 and prio=1 for L2_0, and prio=2 for L2_1.
+  */
+ 
+-static ssize_t cpu_mpam_schemata_store(struct config_item *item,
++static ssize_t cpu_mpam_schemata_store_locked(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+-	char *token, *buf;
+-
+-	/* Separate multiple parameter lines */
+-	while ((token = strsep((char **)&page, ";")) != NULL) {
++	char *token, *buf, *copy, *cursor;
++	int ret = 0;
++
++	copy = kmemdup_nul(page, count, GFP_KERNEL);
++	if (!copy)
++		return -ENOMEM;
++	cursor = copy;
++	while ((token = strsep(&cursor, ";")) != NULL) {
+ 		buf = strsep(&token, ":");
+ 		if (token == NULL)
+-			cpu_mpam_set_by_schemata(item, NULL, buf);
++			ret = cpu_mpam_set_by_schemata(item, NULL, buf);
+ 		else
+-			cpu_mpam_set_by_schemata(item, buf, token);
+-	}
+-
+-	return count;
+-}
++			ret = cpu_mpam_set_by_schemata(item, buf, token);
++		if (ret)
++			break;
++	}
++	kfree(copy);
++	return ret ? ret : count;
++}
++static ssize_t cpu_mpam_schemata_store(struct config_item *item, const char *page, size_t count)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_schemata_store_locked(item, page, count);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
++static ssize_t cpu_mpam_schemata_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_schemata_show_locked(item, page);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR(cpu_mpam_, schemata);
+ 
+-static ssize_t cpu_mpam_tasks_show(struct config_item *item, char *page)
++static ssize_t cpu_mpam_tasks_show_locked(struct config_item *item, char *page)
+ {
+ 	int part_id;
+ 	ssize_t len = 0;
+@@ -255,44 +294,67 @@
+ 	return len;
+ }
+ 
+-static ssize_t cpu_mpam_tasks_store(struct config_item *item,
++static ssize_t cpu_mpam_tasks_store_locked(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+-	int ret, part_id;
++	int ret = 0, part_id = get_part_id(item);
+ 	pid_t pid_input;
+-	char *kbuf, *token;
++	char *copy, *cursor, *token;
+ 	struct task_struct *p;
+ 	struct walt_task_struct *wts;
+ 
+-	part_id = get_part_id(item);
+-	kbuf = (char *)page;
+-	while ((token = strsep(&kbuf, " ")) != NULL) {
+-		ret = kstrtouint(token, 10, &pid_input);
+-		if (ret < 0) {
+-			pr_err("invalid argument\n");
+-			goto err;
++	copy = kmemdup_nul(page, count, GFP_KERNEL);
++	if (!copy)
++		return -ENOMEM;
++	cursor = copy;
++	while ((token = strsep(&cursor, " \n\t")) != NULL) {
++		if (!*token)
++			continue;
++		ret = kstrtoint(token, 10, &pid_input);
++		if (ret || pid_input <= 0) {
++			ret = -EINVAL;
++			break;
+ 		}
+-
++		rcu_read_lock();
+ 		p = find_task_by_vpid(pid_input);
+-		if (IS_ERR_OR_NULL(p)) {
+-			pr_err("pid %d not exist\n", pid_input);
+-			continue;
++		if (p) {
++			wts = (struct walt_task_struct *)p->android_vendor_data1;
++			WRITE_ONCE(wts->mpam_part_id, part_id);
++		} else {
++			ret = -ESRCH;
+ 		}
+-
+-		wts = (struct walt_task_struct *) p->android_vendor_data1;
+-		wts->mpam_part_id = part_id;
+-	}
+-
+-err:
+-	return count;
+-}
++		rcu_read_unlock();
++		if (ret)
++			break;
++	}
++	kfree(copy);
++	return ret ? ret : count;
++}
++static ssize_t cpu_mpam_tasks_store(struct config_item *item, const char *page, size_t count)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_tasks_store_locked(item, page, count);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
++static ssize_t cpu_mpam_tasks_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_tasks_show_locked(item, page);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR(cpu_mpam_, tasks);
+ 
+-static void cpu_mpam_enable_monitor(int monitor_id, int part_id,
++static int cpu_mpam_enable_monitor(int monitor_id, int part_id,
+ 		enum mpam_monitor_type type)
+ {
+-	int i;
+-	struct mpam_monitor_configuration monitor_param;
++	int i, ret;
++	struct mpam_monitor_configuration monitor_param = {};
+ 
+ 	monitor_param.part_id = part_id + PARTID_RESERVED;
+ 	monitor_param.mon_instance = monitor_id;
+@@ -302,15 +364,18 @@
+ 
+ 	for (i = 0; i < mpam_msc_cnt; i++) {
+ 		monitor_param.msc_id = mpam_mscs[i].msc_id;
+-		qcom_mpam_config_monitor(&monitor_param);
+-	}
+-}
+-
+-static void cpu_mpam_disable_monitor(int monitor_id,
++		ret = qcom_mpam_config_monitor(&monitor_param);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++static int cpu_mpam_disable_monitor(int monitor_id,
+ 		enum mpam_monitor_type type)
+ {
+-	int i;
+-	struct mpam_monitor_configuration monitor_param;
++	int i, ret;
++	struct mpam_monitor_configuration monitor_param = {};
+ 
+ 	monitor_param.mon_instance = monitor_id;
+ 	monitor_param.mon_type = type;
+@@ -318,11 +383,14 @@
+ 
+ 	for (i = 0; i < mpam_msc_cnt; i++) {
+ 		monitor_param.msc_id = mpam_mscs[i].msc_id;
+-		qcom_mpam_config_monitor(&monitor_param);
+-	}
+-}
+-
+-static ssize_t cpu_mpam_enable_monitor_show(struct config_item *item,
++		ret = qcom_mpam_config_monitor(&monitor_param);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++static ssize_t cpu_mpam_enable_monitor_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	int monitor_id;
+@@ -332,48 +400,64 @@
+ 		"disabled" : "enabled");
+ }
+ 
+-static ssize_t cpu_mpam_enable_monitor_store(struct config_item *item,
++static ssize_t cpu_mpam_enable_monitor_store_locked(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+-	int ret, monitor_id, part_id;
+-	bool input;
+-
+-	part_id = get_part_id(item);
+-	monitor_id = get_monitor_id(item);
+-
+-	ret = kstrtobool(page, &input);
+-	if (ret) {
+-		pr_err("invalid param\n");
+-		goto exit;
+-	}
+-
+-	if (!input && monitor_id != INT_MAX) {
+-		bitmap_clear(monitor_free_bitmap, monitor_id, 1);
++	int ret, index = get_monitor_id(item);
++	bool enable;
++	ret = kstrtobool(page, &enable);
++	if (ret)
++		return ret;
++	if (!!enable == (index != INT_MAX))
++		return count;
++	if (enable) {
++		index = bitmap_find_next_zero_area(monitor_free_bitmap, MONITOR_MAX, 0, 1, 0);
++		if (index >= MONITOR_MAX)
++			return -ENOSPC;
++		bitmap_set(monitor_free_bitmap, index, 1);
++		ret = cpu_mpam_enable_monitor(index, get_part_id(item), MPAM_TYPE_CSU_MONITOR);
++		if (!ret)
++			ret = cpu_mpam_enable_monitor(index, get_part_id(item), MPAM_TYPE_MBW_MONITOR);
++		if (ret) {
++			int csu = cpu_mpam_disable_monitor(index, MPAM_TYPE_CSU_MONITOR);
++			int mbw = cpu_mpam_disable_monitor(index, MPAM_TYPE_MBW_MONITOR);
++			if (!csu && !mbw)
++				bitmap_clear(monitor_free_bitmap, index, 1);
++			return ret;
++		}
++		set_monitor_id(item, index);
++	} else {
++		ret = cpu_mpam_disable_monitor(index, MPAM_TYPE_CSU_MONITOR);
++		if (!ret)
++			ret = cpu_mpam_disable_monitor(index, MPAM_TYPE_MBW_MONITOR);
++		if (ret)
++			return ret;
++		bitmap_clear(monitor_free_bitmap, index, 1);
+ 		set_monitor_id(item, INT_MAX);
+-		cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_CSU_MONITOR);
+-		cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_MBW_MONITOR);
+-	} else if (input && monitor_id == INT_MAX) {
+-		monitor_id = bitmap_find_next_zero_area(monitor_free_bitmap,
+-				MONITOR_MAX, 0, 1, 0);
+-		if (monitor_id > MONITOR_MAX) {
+-			pr_err("no available monitor\n");
+-			goto exit;
+-		}
+-
+-		bitmap_set(monitor_free_bitmap, monitor_id, 1);
+-		set_monitor_id(item, monitor_id);
+-		cpu_mpam_enable_monitor(monitor_id, part_id,
+-				MPAM_TYPE_CSU_MONITOR);
+-		cpu_mpam_enable_monitor(monitor_id, part_id,
+-				MPAM_TYPE_MBW_MONITOR);
+-	}
+-
+-exit:
++	}
+ 	return count;
+ }
++static ssize_t cpu_mpam_enable_monitor_store(struct config_item *item, const char *page, size_t count)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_enable_monitor_store_locked(item, page, count);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
++static ssize_t cpu_mpam_enable_monitor_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_enable_monitor_show_locked(item, page);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR(cpu_mpam_, enable_monitor);
+ 
+-static ssize_t cpu_mpam_monitor_data_show(struct config_item *item,
++static ssize_t cpu_mpam_monitor_data_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	int i, monitor_id, retry_cnt = 0;
+@@ -387,15 +471,18 @@
+ 		for (i = 0; i < mpam_msc_cnt; i++) {
+ 			mscid = mpam_mscs[i].msc_id;
+ 			mpam_mon_data = &mpam_mon_base[mscid];
+-			do {
+-				while (unlikely((capture_status =
+-						mpam_mon_data->capture_status) % 2) &&
+-						(retry_cnt < MPAM_MAX_RETRY))
+-					retry_cnt++;
+-				timestamp = mpam_mon_data->last_capture_time;
+-				csu_value = mpam_mon_data->csu_mon_value[monitor_id];
+-				mbw_value = mpam_mon_data->mbw_mon_value[monitor_id];
+-			} while (capture_status != mpam_mon_data->capture_status);
++			for (retry_cnt = 0; retry_cnt < MPAM_MAX_RETRY; retry_cnt++) {
++				capture_status = readl_relaxed(&mpam_mon_data->capture_status);
++				if (capture_status & 1)
++					continue;
++				timestamp = readq_relaxed(&mpam_mon_data->last_capture_time);
++				csu_value = readl_relaxed(&mpam_mon_data->csu_mon_value[monitor_id]);
++				mbw_value = readq_relaxed(&mpam_mon_data->mbw_mon_value[monitor_id]);
++				if (capture_status == readl_relaxed(&mpam_mon_data->capture_status))
++					break;
++			}
++			if (retry_cnt == MPAM_MAX_RETRY)
++				return -EAGAIN;
+ 			len += scnprintf(page + len, PAGE_SIZE - len,
+ 				"%s:timestamp=%llu,csu=%u,mbwu=%llu\n",
+ 				mpam_mscs[i]. msc_name, timestamp,
+@@ -405,6 +492,15 @@
+ 	} else
+ 		return scnprintf(page, PAGE_SIZE, "monitor not enabled\n");
+ }
++static ssize_t cpu_mpam_monitor_data_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&cpu_mpam_lock);
++	ret = cpu_mpam_monitor_data_show_locked(item, page);
++	mutex_unlock(&cpu_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR_RO(cpu_mpam_, monitor_data);
+ 
+ static struct configfs_attribute *cpu_mpam_attrs[] = {
+@@ -423,9 +519,9 @@
+ 	NULL,
+ };
+ 
+-static void cpu_mpam_reset_param(int part_id)
+-{
+-	int i;
++static int cpu_mpam_reset_param(int part_id)
++{
++	int i, ret;
+ 	struct mpam_set_cache_partition mpam_param;
+ 
+ 	mpam_param.part_id = part_id + PARTID_RESERVED;
+@@ -437,8 +533,11 @@
+ 
+ 	for (i = 0; i < mpam_msc_cnt; i++) {
+ 		mpam_param.msc_id = mpam_mscs[i].msc_id;
+-		qcom_mpam_set_cache_partition(&mpam_param);
+-	}
++		ret = qcom_mpam_set_cache_partition(&mpam_param);
++		if (ret)
++			return ret;
++	}
++	return 0;
+ }
+ 
+ static void cpu_mpam_drop_item(struct config_group *group,
+@@ -446,40 +545,55 @@
+ {
+ 	int part_id, monitor_id;
+ 
++	mutex_lock(&cpu_mpam_lock);
+ 	part_id = get_part_id(item);
+ 	monitor_id = get_monitor_id(item);
+ 
+ 	cpu_mpam_partition_transfer(part_id, PARTID_DEFAULT);
+-	bitmap_clear(part_id_free_bitmap, part_id, 1);
+ 	if (monitor_id != INT_MAX) {
+-		bitmap_clear(monitor_free_bitmap, monitor_id, 1);
+-		cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_CSU_MONITOR);
+-		cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_MBW_MONITOR);
+-	}
+-	cpu_mpam_reset_param(part_id);
+-
++		int csu = cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_CSU_MONITOR);
++		int mbw = cpu_mpam_disable_monitor(monitor_id, MPAM_TYPE_MBW_MONITOR);
++		if (!csu && !mbw)
++			bitmap_clear(monitor_free_bitmap, monitor_id, 1);
++	}
++	if (!cpu_mpam_reset_param(part_id))
++		bitmap_clear(part_id_free_bitmap, part_id, 1);
++	mutex_unlock(&cpu_mpam_lock);
++	config_item_put(item);
++}
++
++static void cpu_mpam_item_release(struct config_item *item)
++{
+ 	kfree(to_partition(item)->val);
+ 	kfree(to_partition(item));
+ }
+ 
++static struct configfs_item_operations cpu_mpam_item_ops = {
++	.release = cpu_mpam_item_release,
++};
++
+ static const struct config_item_type cpu_mpam_item_type = {
+ 	.ct_attrs	= cpu_mpam_attrs,
++	.ct_item_ops = &cpu_mpam_item_ops,
++	.ct_owner = THIS_MODULE,
+ };
+ 
+ static const struct config_item_type cpu_mpam_item_type_legacy = {
+ 	.ct_attrs	= cpu_mpam_attrs_legacy,
+-};
+-
+-static struct config_group *cpu_mpam_make_group(
++	.ct_item_ops = &cpu_mpam_item_ops,
++	.ct_owner = THIS_MODULE,
++};
++
++static struct config_group *cpu_mpam_make_group_locked(
+ 		struct config_group *group, const char *name)
+ {
+-	int i, part_id;
++	int i, part_id, ret;
+ 	struct cpu_mpam_partition *partition;
+ 
+ 	part_id = bitmap_find_next_zero_area(part_id_free_bitmap,
+ 				   PARTID_AVAILABLE, 0, 1, 0);
+ 
+-	if (part_id > PARTID_AVAILABLE)
++	if (part_id >= PARTID_AVAILABLE)
+ 		return ERR_PTR(-ENOMEM);
+ 
+ 	partition = kzalloc(sizeof(struct cpu_mpam_partition), GFP_KERNEL);
+@@ -490,15 +604,22 @@
+ 	partition->part_id = part_id;
+ 	partition->monitor_id = INT_MAX;
+ 
+-	partition->val = kcalloc(mpam_msc_cnt, sizeof(struct mpam_config_val), GFP_KERNEL);
+-	if (!partition->val)
++	partition->val = kcalloc(MSC_MAX, sizeof(struct mpam_config_val), GFP_KERNEL);
++	if (!partition->val) {
++		bitmap_clear(part_id_free_bitmap, part_id, 1);
++		kfree(partition);
+ 		return ERR_PTR(-ENOMEM);
+-
+-	for (i = 0; i < mpam_msc_cnt; i++)
++	}
++
++	for (i = 0; i < MSC_MAX; i++)
+ 		memcpy(&(partition->val[i]), &mpam_default_val, sizeof(struct mpam_config_val));
+ 
+-	cpu_mpam_reset_param(part_id);
+-
++	ret = cpu_mpam_reset_param(part_id);
++	if (ret) {
++		kfree(partition->val);
++		kfree(partition);
++		return ERR_PTR(ret);
++	}
+ 	if (can_monitor)
+ 		config_group_init_type_name(&partition->group, name,
+ 				   &cpu_mpam_item_type);
+@@ -507,6 +628,15 @@
+ 			&cpu_mpam_item_type_legacy);
+ 
+ 	return &partition->group;
++}
++
++static struct config_group *cpu_mpam_make_group(struct config_group *group, const char *name)
++{
++	struct config_group *result;
++	mutex_lock(&cpu_mpam_lock);
++	result = cpu_mpam_make_group_locked(group, name);
++	mutex_unlock(&cpu_mpam_lock);
++	return result;
+ }
+ 
+ static struct configfs_group_operations cpu_mpam_group_ops = {
+@@ -545,7 +675,7 @@
+ 	struct walt_task_struct *wts;
+ 
+ 	wts = (struct walt_task_struct *) next->android_vendor_data1;
+-	cpu_mpam_write_partid(wts->mpam_part_id);
++	cpu_mpam_write_partid(READ_ONCE(wts->mpam_part_id));
+ }
+ 
+ static int cpu_mpam_configfs_init(void)
+@@ -555,37 +685,41 @@
+ 
+ 	part_id_free_bitmap = bitmap_zalloc(PARTID_AVAILABLE, GFP_KERNEL);
+ 	monitor_free_bitmap = bitmap_zalloc(MONITOR_MAX, GFP_KERNEL);
+-	if (!part_id_free_bitmap) {
+-		pr_err("Error alloc bitmap\n");
+-		return -ENOMEM;
+-	}
+-
++	if (!part_id_free_bitmap || !monitor_free_bitmap) {
++		ret = -ENOMEM;
++		goto free_maps;
++	}
+ 	config_group_init(&cpu_mpam_subsys.su_group);
+ 	mutex_init(&cpu_mpam_subsys.su_mutex);
+-
+ 	default_group = cpu_mpam_make_group(NULL, "default");
+ 	if (IS_ERR(default_group)) {
+-		pr_err("Error create group\n");
+-		return PTR_ERR(default_group);
++		ret = PTR_ERR(default_group);
++		goto free_maps;
+ 	}
+ 	configfs_add_default_group(default_group, &cpu_mpam_subsys.su_group);
+-
+ 	ret = configfs_register_subsystem(&cpu_mpam_subsys);
+-	if (ret) {
+-		mutex_destroy(&cpu_mpam_subsys.su_mutex);
+-		pr_err("Error while registering subsystem %d\n", ret);
+-		return ret;
+-	}
+-
+-	register_trace_android_vh_mpam_set(cpu_mpam_switch_task, NULL);
+-
+-	return 0;
++	if (ret)
++		goto free_groups;
++	ret = register_trace_android_vh_mpam_set(cpu_mpam_switch_task, NULL);
++	if (!ret)
++		return 0;
++	configfs_unregister_subsystem(&cpu_mpam_subsys);
++free_groups:
++	configfs_remove_default_groups(&cpu_mpam_subsys.su_group);
++free_maps:
++	bitmap_free(monitor_free_bitmap);
++	bitmap_free(part_id_free_bitmap);
++	return ret;
+ }
+ 
+ static void cpu_mpam_configfs_remove(void)
+ {
++	unregister_trace_android_vh_mpam_set(cpu_mpam_switch_task, NULL);
++	tracepoint_synchronize_unregister();
+ 	configfs_unregister_subsystem(&cpu_mpam_subsys);
+-	unregister_trace_android_vh_mpam_set(cpu_mpam_switch_task, NULL);
++	configfs_remove_default_groups(&cpu_mpam_subsys.su_group);
++	bitmap_free(monitor_free_bitmap);
++	bitmap_free(part_id_free_bitmap);
+ }
+ 
+ static int cpu_mpam_probe(struct platform_device *pdev)
+@@ -594,10 +728,14 @@
+ 	uint32_t mscid;
+ 	struct resource *res;
+ 	struct device_node *node;
+-	const char *msc_name_dt;
++	const char *msc_name_dt = NULL;
+ 	struct mpam_ver_ret mpam_version;
+ 	struct mpam_read_cache_portion mpam_param;
+ 
++	/* The shared feature value covers every CPU, including future hotplug. */
++	if (!cpuid_feature_extract_unsigned_field(read_sanitised_ftr_reg(SYS_ID_AA64PFR0_EL1),
++						 ID_AA64PFR0_EL1_MPAM_SHIFT))
++		return -ENODEV;
+ 	ret = qcom_mpam_get_version(&mpam_version);
+ 	if (ret || mpam_version.version < 0x10000) {
+ 		dev_err(&pdev->dev, "CPU MPAM is not available\n");
+@@ -617,7 +755,7 @@
+ 
+ 	for_each_child_of_node(pdev->dev.of_node, node) {
+ 		ret = of_property_read_u32(node, "qcom,msc-id", &mscid);
+-		of_property_read_string(node, "qcom,msc-name", &msc_name_dt);
++		ret |= of_property_read_string(node, "qcom,msc-name", &msc_name_dt);
+ 		if (ret || mscid >= MSC_MAX || IS_ERR_OR_NULL(msc_name_dt))
+ 			continue;
+ 		mpam_mscs[i].msc_id = mscid;
+@@ -625,19 +763,23 @@
+ 		i++;
+ 	}
+ 	mpam_msc_cnt = i;
++	if (!i)
++		return -ENODEV;
+ 
+ 	mpam_param.msc_id = 0;
+ 	mpam_param.part_id = PARTID_MAX - 1;
+ 	ret = qcom_mpam_get_cache_partition(&mpam_param, &mpam_default_val);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "Error getting default value %d\n", ret);
+-		mpam_default_val.cpbm = UINT_MAX;
++		return ret;
+ 	}
+ 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mon-base");
+ 	if (!res) {
+ 		dev_err(&pdev->dev, "cpu mpam does not have monitoring support\n");
+ 		can_monitor = false;
+ 	} else {
++		if (resource_size(res) < MSC_MAX * sizeof(*mpam_mon_base))
++			return -EINVAL;
+ 		mpam_mon_base = devm_ioremap_resource(&pdev->dev, res);
+ 		if (IS_ERR_OR_NULL(mpam_mon_base)) {
+ 			dev_err(&pdev->dev, "Error ioremap mpam_mon_base\n");
+@@ -657,10 +799,9 @@
+ 	return ret;
+ }
+ 
+-static int cpu_mpam_remove(struct platform_device *pdev)
++static void cpu_mpam_remove(struct platform_device *pdev)
+ {
+ 	cpu_mpam_configfs_remove();
+-	return 0;
+ }
+ 
+ static const struct of_device_id cpu_mpam_table[] = {
+--- a/drivers/soc/qcom/mpam/platform_mpam.c
++++ b/drivers/soc/qcom/mpam/platform_mpam.c
+@@ -32,7 +32,9 @@
+ static struct mpam_ver_ret mpam_version;
+ static struct config_group *root_group;
+ static struct platform_mpam_gear *support_gears;
+-static void *mpam_mon_base;
++static void __iomem *mpam_mon_base;
++static struct config_group *msc_group;
++static DEFINE_MUTEX(platform_mpam_lock);
+ 
+ static inline struct platform_mpam_item *get_pm_item(
+ 					   struct config_item *item)
+@@ -41,70 +43,81 @@
+ 				struct platform_mpam_item, group);
+ }
+ 
+-static ssize_t platform_mpam_schemata_show(struct config_item *item,
++static ssize_t platform_mpam_schemata_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	return scnprintf(page, PAGE_SIZE, "gear=%d\n",
+ 		get_pm_item(item)->cfg->platform_mpam_gear);
+ }
+ 
+-static ssize_t platform_mpam_schemata_store(struct config_item *item,
++static ssize_t platform_mpam_schemata_store_locked(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+-	int ret, input;
+-	char *token, *param_name;
+-	struct platform_mpam_bw_ctrl_cfg cfg;
++	int ret, i;
++	u32 gear;
++	struct platform_mpam_bw_ctrl_cfg cfg = {};
+ 	struct platform_mpam_item *pm_item = get_pm_item(item);
+ 
++	ret = qcom_mpam_parse_gear(page, count, &gear);
++	if (ret)
++		return ret;
++	for (i = 0; i < support_gear_cnt; i++)
++		if (support_gears[i].gear_id == gear)
++			break;
++	if (i == support_gear_cnt)
++		return -EINVAL;
+ 	cfg.msc_id = pm_item->msc_id;
+ 	cfg.client_id = pm_item->client_id;
+-	cfg.config_ctrl = 0;
+-
+-	while ((token = strsep((char **)&page, ",")) != NULL) {
+-		param_name = strsep(&token, "=");
+-		if (param_name == NULL || token == NULL)
+-			continue;
+-		if (kstrtouint(token, 0, &input) < 0) {
+-			pr_err("invalid argument for %s\n", param_name);
+-			continue;
+-		}
+-
+-		if (!strcmp("gear", param_name))
+-			cfg.platform_mpam_gear = input;
+-	}
+-
++	cfg.platform_mpam_gear = gear;
+ 	ret = qcom_mpam_set_platform_bw_ctrl(&cfg);
+ 	if (!ret)
+-		pm_item->cfg->platform_mpam_gear = cfg.platform_mpam_gear;
+-	else
+-		pr_err("set platform bw ctrl failed, ret=%d\n", ret);
+-
+-	return count;
+-}
++		pm_item->cfg->platform_mpam_gear = gear;
++	return ret ? ret : count;
++}
++static ssize_t platform_mpam_schemata_store(struct config_item *item, const char *page, size_t count)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_schemata_store_locked(item, page, count);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
++static ssize_t platform_mpam_schemata_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_schemata_show_locked(item, page);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR(platform_mpam_, schemata);
+ 
+-static ssize_t platform_mpam_enable_monitor_show(struct config_item *item,
++static ssize_t platform_mpam_enable_monitor_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	return scnprintf(page, PAGE_SIZE, "%s\n",
+ 		(get_pm_item(item)->monitor_enabled) ? "enabled" : "disabled");
+ }
+ 
+-static ssize_t platform_mpam_enable_monitor_store(struct config_item *item,
++static ssize_t platform_mpam_enable_monitor_store_locked(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+ 	int ret;
+ 	bool input;
+-	struct platform_mpam_bw_monitor_cfg monitor_param;
++	struct platform_mpam_bw_monitor_cfg monitor_param = {};
+ 	struct platform_mpam_item *pm_item = get_pm_item(item);
+ 
+ 	monitor_param.msc_id = pm_item->msc_id;
+ 	monitor_param.client_id = pm_item->client_id;
++	monitor_param.mon_instance = pm_item->monitor_index;
++	monitor_param.mon_type = MPAM_TYPE_MBW_MONITOR;
+ 
+ 	ret = kstrtobool(page, &input);
+ 	if (ret) {
+ 		pr_err("invalid argument\n");
+-		goto exit;
++		return ret;
+ 	}
+ 
+ 	if (!input && pm_item->monitor_enabled)
+@@ -118,50 +131,72 @@
+ 	if (ret) {
+ 		pr_err("monitor %s failed %d\n",
+ 			(input) ? "enable" : "disable", ret);
+-		goto exit;
++		return ret;
+ 	}
+ 	pm_item->monitor_enabled = input;
+ 
+ exit:
+ 	return count;
+ }
++static ssize_t platform_mpam_enable_monitor_store(struct config_item *item, const char *page, size_t count)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_enable_monitor_store_locked(item, page, count);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
++static ssize_t platform_mpam_enable_monitor_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_enable_monitor_show_locked(item, page);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR(platform_mpam_, enable_monitor);
+ 
+-static ssize_t platform_mpam_monitor_data_show(struct config_item *item,
++static ssize_t platform_mpam_monitor_data_show_locked(struct config_item *item,
+ 		char *page)
+ {
+-	int index, retry_cnt = 0, match_seq_cnt = 0;
+-	uint64_t byte_cnt, timestamp, capture_status;
+-	union platform_monitor_value data, *pdata;
+-
+-	if (get_pm_item(item)->monitor_enabled) {
+-		index = get_pm_item(item)->monitor_index;
+-		pdata = mpam_mon_base + index * ((mpam_version.version >= 0x10002) ?
+-				sizeof(data.V2) : sizeof(data.V1));
+-		do {
+-			while (unlikely((capture_status = platform_mpam_get(
+-					pdata, capture_status)) % 2) &&
+-					(retry_cnt < MPAM_MAX_RETRY))
+-				retry_cnt++;
+-			timestamp = platform_mpam_get(
+-				pdata, last_capture_time);
+-			byte_cnt = platform_mpam_get(
+-				pdata, bwmon_byte_count);
+-		} while ((capture_status !=
+-			platform_mpam_get(pdata, capture_status)) &&
+-			(match_seq_cnt++ < MPAM_MAX_MATCH_SEQ_RETRY));
+-
+-		if (match_seq_cnt == MPAM_MAX_MATCH_SEQ_RETRY)
+-			return scnprintf(page, PAGE_SIZE, "get monitor data failed\n");
+-
+-		return scnprintf(page, PAGE_SIZE, "timestamp=%llu,byte_cnt=%llu\n",
+-			timestamp, byte_cnt);
+-	} else
++	int index, retry;
++	u32 seq;
++	u64 byte_cnt, timestamp;
++	void __iomem *data;
++	bool v2 = mpam_version.version >= 0x10002;
++
++	if (!get_pm_item(item)->monitor_enabled)
+ 		return scnprintf(page, PAGE_SIZE, "monitor not enabled\n");
+-}
++	index = get_pm_item(item)->monitor_index;
++	data = mpam_mon_base + index * (v2 ?
++		sizeof(((union platform_monitor_value *)0)->V2) :
++		sizeof(((union platform_monitor_value *)0)->V1));
++	for (retry = 0; retry < MPAM_MAX_RETRY; retry++) {
++		seq = readl_relaxed(data);
++		if (seq & 1)
++			continue;
++		byte_cnt = v2 ? readq_relaxed(data + 16) : readl_relaxed(data + 12);
++		timestamp = readq_relaxed(data + (v2 ? 24 : 16));
++		if (seq == readl_relaxed(data))
++			return scnprintf(page, PAGE_SIZE, "timestamp=%llu,byte_cnt=%llu\n",
++					 timestamp, byte_cnt);
++	}
++	return -EAGAIN;
++}
++static ssize_t platform_mpam_monitor_data_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_monitor_data_show_locked(item, page);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR_RO(platform_mpam_, monitor_data);
+ 
+-static ssize_t platform_mpam_available_gear_show(struct config_item *item,
++static ssize_t platform_mpam_available_gear_show_locked(struct config_item *item,
+ 		char *page)
+ {
+ 	int i;
+@@ -175,6 +210,15 @@
+ 
+ 	return len;
+ }
++static ssize_t platform_mpam_available_gear_show(struct config_item *item, char *page)
++{
++	ssize_t ret;
++	mutex_lock(&platform_mpam_lock);
++	ret = platform_mpam_available_gear_show_locked(item, page);
++	mutex_unlock(&platform_mpam_lock);
++	return ret;
++}
++
+ CONFIGFS_ATTR_RO(platform_mpam_, available_gear);
+ 
+ static struct configfs_attribute *platform_mpam_attrs[] = {
+@@ -185,8 +229,21 @@
+ 	NULL,
+ };
+ 
++static void platform_mpam_item_release(struct config_item *item)
++{
++	struct platform_mpam_item *pm_item = get_pm_item(item);
++	kfree(pm_item->cfg);
++	kfree(pm_item);
++}
++
++static struct configfs_item_operations platform_mpam_item_ops = {
++	.release = platform_mpam_item_release,
++};
++
+ static const struct config_item_type platform_mpam_item_type = {
+ 	.ct_attrs	= platform_mpam_attrs,
++	.ct_item_ops = &platform_mpam_item_ops,
++	.ct_owner = THIS_MODULE,
+ };
+ 
+ static struct platform_mpam_item *platform_mpam_make_group(
+@@ -194,15 +251,17 @@
+ {
+ 	struct platform_mpam_item *item;
+ 
+-	item = devm_kzalloc(dev,
++	item = kzalloc(
+ 		sizeof(struct platform_mpam_item), GFP_KERNEL);
+ 	if (!item)
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	item->cfg = devm_kzalloc(dev,
++	item->cfg = kzalloc(
+ 		sizeof(struct platform_mpam_bw_ctrl_config), GFP_KERNEL);
+-	if (!item->cfg)
++	if (!item->cfg) {
++		kfree(item);
+ 		return ERR_PTR(-ENOMEM);
++	}
+ 
+ 	config_group_init_type_name(&item->group, name,
+ 				   &platform_mpam_item_type);
+@@ -210,7 +269,15 @@
+ 	return item;
+ }
+ 
++static void platform_mpam_base_release(struct config_item *item)
++{
++	kfree(to_config_group(item));
++}
++static struct configfs_item_operations platform_mpam_base_ops = {
++	.release = platform_mpam_base_release,
++};
+ static const struct config_item_type platform_mpam_base_type = {
++	.ct_item_ops = &platform_mpam_base_ops,
+ 	.ct_owner	= THIS_MODULE,
+ };
+ 
+@@ -223,123 +290,121 @@
+ 	},
+ };
+ 
++static void platform_mpam_free_groups(void)
++{
++	if (msc_group) {
++		configfs_remove_default_groups(msc_group);
++		config_item_put(&msc_group->cg_item);
++		msc_group = NULL;
++	}
++	INIT_LIST_HEAD(&platform_mpam_subsys.su_group.default_groups);
++}
++
+ static int platform_mpam_probe(struct platform_device *pdev)
+ {
+-	int i, ret, mscid, clientid;
+-	int client_cnt;
+-	const char *msc_name_dt;
++	int i, ret, client_cnt;
++	u32 mscid, clientid;
++	const char *name;
+ 	struct resource *res;
+-	struct device_node *node;
+-	struct config_group *p_group;
++	struct device_node *node, *np = pdev->dev.of_node;
+ 	struct platform_mpam_item *new_item;
+-	struct platform_mpam_read_bw_ctrl bw_ctrl_param;
+-	struct device_node *np = pdev->dev.of_node;
++	struct platform_mpam_read_bw_ctrl bw_ctrl_param = {};
++	size_t stride;
+ 
+ 	ret = qcom_mpam_get_version(&mpam_version);
+-	if (ret || mpam_version.version < 0x10000) {
+-		dev_err(&pdev->dev, "Platform MPAM is not available\n");
++	if (ret)
++		return ret == -ENODEV ? -EPROBE_DEFER : ret;
++	if (mpam_version.version < 0x10000)
+ 		return -ENODEV;
+-	}
+-
++	client_cnt = of_get_available_child_count(np);
++	support_gear_cnt = of_property_count_strings(np, "qcom,gears");
++	if (!client_cnt || support_gear_cnt <= 0 ||
++	    of_property_count_u32_elems(np, "qcom,gear-id") != support_gear_cnt)
++		return -EINVAL;
++	support_gears = devm_kcalloc(&pdev->dev, support_gear_cnt,
++				     sizeof(*support_gears), GFP_KERNEL);
++	if (!support_gears)
++		return -ENOMEM;
++	for (i = 0; i < support_gear_cnt; i++) {
++		ret = of_property_read_string_index(np, "qcom,gears", i,
++						   &support_gears[i].gear_name);
++		if (ret)
++			return ret;
++		ret = of_property_read_u32_index(np, "qcom,gear-id", i,
++						&support_gears[i].gear_id);
++		if (ret)
++			return ret;
++	}
++	ret = of_property_read_u32(np, "qcom,msc-id", &mscid);
++	if (ret || mscid >= MSC_MAX)
++		return -EINVAL;
++	ret = of_property_read_string(np, "qcom,msc-name", &name);
++	if (ret)
++		return ret;
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mon-base");
++	if (!res)
++		return -EINVAL;
++	stride = mpam_version.version >= 0x10002 ?
++		sizeof(((union platform_monitor_value *)0)->V2) :
++		sizeof(((union platform_monitor_value *)0)->V1);
++	if (client_cnt > resource_size(res) / stride)
++		return -EINVAL;
++	mpam_mon_base = devm_ioremap_resource(&pdev->dev, res);
++	if (IS_ERR(mpam_mon_base))
++		return PTR_ERR(mpam_mon_base);
+ 	config_group_init(&platform_mpam_subsys.su_group);
+ 	mutex_init(&platform_mpam_subsys.su_mutex);
+-
+-	ret = configfs_register_subsystem(&platform_mpam_subsys);
+-	if (ret) {
+-		mutex_destroy(&platform_mpam_subsys.su_mutex);
+-		pr_err("Error while registering subsystem %d\n", ret);
+-		return ret;
+-	}
+-
+-	client_cnt = of_get_child_count(np);
+-	if (!client_cnt) {
+-		dev_err(&pdev->dev, "No client found\n");
+-		return -ENODEV;
+-	}
+-
+-	support_gear_cnt = of_property_count_strings(np, "qcom,gears");
+-	if (!support_gear_cnt) {
+-		dev_err(&pdev->dev, "No available gears found\n");
+-		return -ENODEV;
+-	}
+-
+-	support_gears = devm_kcalloc(&pdev->dev, support_gear_cnt,
+-		sizeof(struct platform_mpam_gear), GFP_KERNEL);
+-	if (!support_gears)
++	msc_group = kzalloc(sizeof(*msc_group), GFP_KERNEL);
++	if (!msc_group)
+ 		return -ENOMEM;
+-
+-	for (i = 0; i < support_gear_cnt; i++) {
+-		of_property_read_string_index(np, "qcom,gears", i,
+-				&support_gears[i].gear_name);
+-		of_property_read_u32_index(np, "qcom,gear-id", i,
+-				&support_gears[i].gear_id);
+-	}
+-
+-	ret = of_property_read_u32(np, "qcom,msc-id", &mscid);
+-	of_property_read_string(np, "qcom,msc-name", &msc_name_dt);
+-	if (ret || mscid >= MSC_MAX || IS_ERR_OR_NULL(msc_name_dt))
+-		return -ENODEV;
+-
+-	root_group = &platform_mpam_subsys.su_group;
+-	p_group = configfs_register_default_group(root_group,
+-		msc_name_dt, &platform_mpam_base_type);
+-	if (IS_ERR(p_group)) {
+-		dev_err(&pdev->dev, "Error register group %s\n", msc_name_dt);
+-		return PTR_ERR(p_group);
+-	}
+-
+-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mon-base");
+-	mpam_mon_base = devm_ioremap_resource(&pdev->dev, res);
+-	if (IS_ERR_OR_NULL(mpam_mon_base)) {
+-		dev_err(&pdev->dev, "Error ioremap mpam_mon_base\n");
+-		return -ENODEV;
+-	}
+-
++	config_group_init_type_name(msc_group, name, &platform_mpam_base_type);
++	configfs_add_default_group(msc_group, &platform_mpam_subsys.su_group);
+ 	i = 0;
+-	for_each_child_of_node(np, node) {
++	for_each_available_child_of_node(np, node) {
+ 		ret = of_property_read_u32(node, "qcom,client-id", &clientid);
+-		of_property_read_string(node, "qcom,client-name", &msc_name_dt);
+-		if (ret || IS_ERR_OR_NULL(msc_name_dt))
+-			continue;
+-
+-		new_item = platform_mpam_make_group(&pdev->dev, msc_name_dt);
++		if (!ret)
++			ret = of_property_read_string(node, "qcom,client-name", &name);
++		if (ret)
++			goto put_node;
++		new_item = platform_mpam_make_group(&pdev->dev, name);
+ 		if (IS_ERR(new_item)) {
+-			pr_err("Error create group %s\n", msc_name_dt);
+-			continue;
++			ret = PTR_ERR(new_item);
++			goto put_node;
+ 		}
+-		new_item->monitor_index = i;
++		new_item->monitor_index = i++;
+ 		new_item->msc_id = mscid;
+ 		new_item->client_id = clientid;
+-
+ 		bw_ctrl_param.msc_id = mscid;
+ 		bw_ctrl_param.client_id = clientid;
+ 		ret = qcom_mpam_get_platform_bw_ctrl(&bw_ctrl_param, new_item->cfg);
+ 		if (ret) {
+-			pr_err("Error get bw_ctrl\n");
+-			continue;
++			config_item_put(&new_item->group.cg_item);
++			goto put_node;
+ 		}
+-
+-		ret = configfs_register_group(p_group, &new_item->group);
+-		if (ret) {
+-			pr_err("Error register group %s\n", msc_name_dt);
+-			continue;
+-		}
+-
+-		i++;
+-	}
+-
++		configfs_add_default_group(&new_item->group, msc_group);
++	}
++	ret = configfs_register_subsystem(&platform_mpam_subsys);
++	if (ret)
++		goto free_groups;
++	WRITE_ONCE(root_group, &platform_mpam_subsys.su_group);
+ 	return 0;
+-}
+-
+-static int platform_mpam_remove(struct platform_device *pdev)
+-{
++put_node:
++	of_node_put(node);
++free_groups:
++	platform_mpam_free_groups();
++	return ret;
++}
++
++static void platform_mpam_remove(struct platform_device *pdev)
++{
++	WRITE_ONCE(root_group, NULL);
+ 	configfs_unregister_subsystem(&platform_mpam_subsys);
+-	return 0;
++	platform_mpam_free_groups();
+ }
+ 
+ struct config_group *platform_mpam_get_root_group(void)
+ {
+-	return root_group;
++	return READ_ONCE(root_group);
+ }
+ EXPORT_SYMBOL_GPL(platform_mpam_get_root_group);
+ 
+--- a/drivers/soc/qcom/mpam/mpam_msc.c
++++ b/drivers/soc/qcom/mpam/mpam_msc.c
+@@ -10,274 +10,260 @@
+ #include <linux/io.h>
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
++#include <linux/platform_device.h>
+ #include <linux/string.h>
+ #include <linux/qcom_scmi_vendor.h>
+ #include <linux/scmi_protocol.h>
+ #include <soc/qcom/mpam_msc.h>
+ #include <soc/qcom/mpam_slc.h>
+ 
++#include <linux/mutex.h>
++
+ static LIST_HEAD(qcom_mpam_list);
+-
+-struct qcom_mpam_msc *qcom_msc_lookup(uint32_t msc_id)
+-{
+-	struct qcom_mpam_msc *mpam_msc;
+-
+-	list_for_each_entry(mpam_msc, &qcom_mpam_list, node) {
+-		if (mpam_msc->msc_id == msc_id)
+-			return mpam_msc;
+-	}
+-
++static DEFINE_MUTEX(qcom_mpam_lock);
++
++/* The registry lock remains held until the provider operation completes. */
++static struct qcom_mpam_msc *qcom_msc_lookup(u32 msc_id)
++{
++	struct qcom_mpam_msc *msc;
++	list_for_each_entry(msc, &qcom_mpam_list, node)
++		if (msc->msc_id == msc_id)
++			return msc;
+ 	return NULL;
+ }
+-EXPORT_SYMBOL_GPL(qcom_msc_lookup);
+-
+-static struct qcom_mpam_msc *msc_param_verification(uint32_t msc_id, struct msc_query *query)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	qcom_msc = qcom_msc_lookup(msc_id);
+-	if (qcom_msc == NULL) {
+-		pr_err("msc_id is not correct %d\n", msc_id);
+-		return NULL;
+-	}
+-
+-	if ((qcom_msc->mpam_available & MPAM_AVAILABLE) != MPAM_AVAILABLE) {
+-		pr_err("qcom MSC %d is not available!\n", msc_id);
+-		return NULL;
+-	}
+-
+-	if (qcom_msc->qcom_msc_id.qcom_msc_type != query->qcom_msc_id.qcom_msc_type) {
+-		pr_err("Request data not matching!\n");
+-		return NULL;
+-	}
+-
+-	return qcom_msc;
+-}
+-
+-int msc_system_get_partition(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->get_cache_partition)
+-			return qcom_msc->ops->get_cache_partition(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++
++int qcom_msc_get_query(u32 msc_id, struct msc_query *query)
++{
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++	if (!query)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (msc && (msc->mpam_available & MPAM_AVAILABLE)) {
++		query->qcom_msc_id = msc->qcom_msc_id;
++		ret = 0;
++	}
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(qcom_msc_get_query);
++
++int msc_system_get_partition(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->get_cache_partition) {
++		ret = msc->ops->get_cache_partition(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_get_partition);
+ 
+-int msc_system_get_device_capability(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->get_cache_partition_capability)
+-			return qcom_msc->ops->get_cache_partition_capability(qcom_msc->dev,
+-					arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_get_device_capability(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->get_cache_partition_capability) {
++		ret = msc->ops->get_cache_partition_capability(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_get_device_capability);
+ 
+-int msc_system_set_partition(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->set_cache_partition)
+-			return qcom_msc->ops->set_cache_partition(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_set_partition(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->set_cache_partition) {
++		ret = msc->ops->set_cache_partition(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_set_partition);
+ 
+-int msc_system_mon_config(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->mon_config)
+-			return qcom_msc->ops->mon_config(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_mon_config(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->mon_config) {
++		ret = msc->ops->mon_config(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_mon_config);
+ 
+-int msc_system_reset_partition(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->reset_cache_partition)
+-			return qcom_msc->ops->reset_cache_partition(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_reset_partition(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->reset_cache_partition) {
++		ret = msc->ops->reset_cache_partition(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_reset_partition);
+ 
+-int msc_system_mon_alloc_info(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-	union mon_values *mon_data;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	mon_data = (union mon_values *)arg2;
+-	mon_data->ref.slc_mon_function = CACHE_CAPACITY_CONFIG;
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->mon_stats_read)
+-			return qcom_msc->ops->mon_stats_read(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_mon_alloc_info(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->mon_stats_read) {
++		((union mon_values *)arg2)->ref.slc_mon_function = CACHE_CAPACITY_CONFIG;
++		ret = msc->ops->mon_stats_read(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_mon_alloc_info);
+ 
+-int msc_system_mon_read_miss_info(uint32_t msc_id, void *arg1, void *arg2)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-	union mon_values *mon_data;
+-
+-	if ((arg1 == NULL) || (arg2 == NULL))
+-		return -EINVAL;
+-
+-	qcom_msc = msc_param_verification(msc_id, (struct msc_query *)arg1);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	mon_data = (union mon_values *)arg2;
+-	mon_data->ref.slc_mon_function = CACHE_READ_MISS_CONFIG;
+-	switch (qcom_msc->qcom_msc_id.qcom_msc_type) {
+-	case SLC:
+-		if (qcom_msc->ops->mon_stats_read)
+-			return qcom_msc->ops->mon_stats_read(qcom_msc->dev, arg1, arg2);
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	return 0;
++int msc_system_mon_read_miss_info(u32 msc_id, void *arg1, void *arg2)
++{
++	struct msc_query *query = arg1;
++	struct qcom_mpam_msc *msc;
++	int ret = -ENODEV;
++
++	if (!arg1 || !arg2)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	msc = qcom_msc_lookup(msc_id);
++	if (!msc || !(msc->mpam_available & MPAM_AVAILABLE))
++		goto out;
++	if (memcmp(&msc->qcom_msc_id, &query->qcom_msc_id, sizeof(query->qcom_msc_id))) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = -EOPNOTSUPP;
++	if (msc->qcom_msc_id.qcom_msc_type == SLC && msc->ops && msc->ops->mon_stats_read) {
++		((union mon_values *)arg2)->ref.slc_mon_function = CACHE_READ_MISS_CONFIG;
++		ret = msc->ops->mon_stats_read(msc->dev, arg1, arg2);
++	}
++out:
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(msc_system_mon_read_miss_info);
+ 
+-int attach_mpam_msc(struct device *dev, struct qcom_mpam_msc *qcom_msc,
+-		uint32_t msc_type)
+-{
+-	int ret = -EINVAL;
+-
+-	if (qcom_msc == NULL)
+-		return ret;
+-
+-	switch (msc_type) {
+-	case SLC:
+-		break;
+-	default:
+-		return ret;
+-	}
+-
+-
+-	list_add_tail(&qcom_msc->node, &qcom_mpam_list);
+-	return 0;
++int attach_mpam_msc(struct device *dev, struct qcom_mpam_msc *msc, u32 type)
++{
++	int ret = 0;
++	if (!msc || type != SLC || !msc->ops)
++		return -EINVAL;
++	mutex_lock(&qcom_mpam_lock);
++	if (qcom_msc_lookup(msc->msc_id))
++		ret = -EEXIST;
++	else
++		list_add_tail(&msc->node, &qcom_mpam_list);
++	mutex_unlock(&qcom_mpam_lock);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(attach_mpam_msc);
+ 
+-void detach_mpam_msc(struct device *dev, struct qcom_mpam_msc *qcom_msc, uint32_t msc_type)
+-{
+-	if (qcom_msc == NULL)
++void detach_mpam_msc(struct device *dev, struct qcom_mpam_msc *msc, u32 type)
++{
++	if (!msc || type != SLC)
+ 		return;
+-
+-	switch (msc_type) {
+-	case SLC:
+-		break;
+-	default:
+-		return;
+-	}
+-
+-	list_del(&qcom_msc->node);
++	mutex_lock(&qcom_mpam_lock);
++	list_del_init(&msc->node);
++	mutex_unlock(&qcom_mpam_lock);
+ }
+ EXPORT_SYMBOL_GPL(detach_mpam_msc);
+ 
+ static int mpam_msc_probe(struct platform_device *pdev)
+ {
+-	if (of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev) < 0)
+-		dev_err(&pdev->dev, "Mpam driver probe failed.!\n");
+-
+-	return 0;
+-}
+-
+-int mpam_msc_remove(struct platform_device *pdev)
+-{
+-	return 0;
+-}
++	return devm_of_platform_populate(&pdev->dev);
++}
++
++
+ static const struct of_device_id mpam_msc_table[] = {
+ 	{ .compatible = "qcom,mpam-msc" },
+ 	{}
+@@ -292,7 +278,6 @@
+ 		.suppress_bind_attrs = true,
+ 	},
+ 	.probe = mpam_msc_probe,
+-	.remove = mpam_msc_remove,
+ };
+ 
+ module_platform_driver(mpam_msc_driver);
+--- a/drivers/soc/qcom/mpam/mpam_msc_slc.c
++++ b/drivers/soc/qcom/mpam/mpam_msc_slc.c
+@@ -10,6 +10,7 @@
+ #include <linux/of.h>
+ #include <linux/io.h>
+ #include <linux/of_platform.h>
++#include <linux/platform_device.h>
+ #include <linux/string.h>
+ #include <linux/delay.h>
+ #include <linux/qcom_scmi_vendor.h>
+@@ -57,7 +58,12 @@
+ 		void *param_out, int param_out_len, uint32_t param_id)
+ {
+ 	int ret = -EPERM;
+-	uint8_t buf[SCMI_GET_PARAM_LEN];
++	uint8_t buf[SCMI_GET_PARAM_LEN] = {};
++
++	if (param_in_len <= 0 || param_in_len > sizeof(buf) ||
++	    param_out_len <= 0 || param_out_len > sizeof(buf) ||
++	    !param_in || !param_out)
++		return -EINVAL;
+ 	struct qcom_mpam_msc *qcom_msc;
+ 
+ 	qcom_msc = (struct qcom_mpam_msc *)dev_get_drvdata(dev);
+@@ -96,6 +102,8 @@
+ 		return NULL;
+ 
+ 	slc_capability = (struct qcom_slc_capability *)qcom_msc->msc_capability;
++	if (!slc_capability || client_idx >= slc_capability->num_clients)
++		return NULL;
+ 	slc_client_cap = &(slc_capability->slc_client_cap[client_idx]);
+ 
+ 	if (slc_client_cap->enabled == false) {
+@@ -229,219 +237,93 @@
+ 
+ static int mon_idx_lookup(void __iomem *mem, int client_id, int part_id)
+ {
+-	int mon_idx;
+-	struct qcom_slc_mon_mem *mon_mem = (struct qcom_slc_mon_mem *)mem;
+-	struct slc_partid_info *part_info;
+-
+-	for (mon_idx = 0; mon_idx < SLC_NUM_PARTIDS; mon_idx++) {
+-		part_info = &mon_mem->data[mon_idx].part_info;
+-		if ((client_id == part_info->client_id) &&
+-				(part_id == part_info->part_id))
+-			break;
+-	}
+-
+-	if (mon_idx == SLC_NUM_PARTIDS)
+-		return -EINVAL;
+-
+-	return mon_idx;
+-}
+-
+-static struct qcom_mpam_msc *slc_config_request_check(struct device *dev, struct msc_query *query,
+-		struct slc_mon_config_val *mon_cfg)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-	struct qcom_slc_capability *slc_capability;
+-	int mon_idx;
+-
+-	qcom_msc = slc_capability_check(dev, query);
+-	if (qcom_msc == NULL)
+-		return NULL;
+-
+-	slc_capability =  (struct qcom_slc_capability *)qcom_msc->msc_capability;
+-	mon_idx = mon_idx_lookup(qcom_msc->mon_base, query->client_id, query->part_id);
+-	if (mon_idx < 0)
+-		return NULL;
+-
+-	switch (mon_cfg->slc_mon_function) {
+-	default:
+-		break;
+-
+-	case CACHE_CAPACITY_CONFIG:
+-		switch (mon_cfg->enable) {
+-		default:
+-			break;
+-
+-		case 0:
+-			if (slc_capability->slc_mon_configured.capacity_configured <= 0)
+-				return NULL;
+-			break;
+-
+-		case 1:
+-			if (slc_capability->slc_mon_configured.capacity_configured >=
+-					slc_capability->slc_mon_list.capacity_config_available)
+-				return NULL;
+-			break;
+-		}
+-		break;
+-
+-	case CACHE_READ_MISS_CONFIG:
+-		switch (mon_cfg->enable) {
+-		default:
+-			break;
+-
+-		case 0:
+-			if (slc_capability->slc_mon_configured.read_miss_configured <= 0)
+-				return NULL;
+-			break;
+-
+-		case 1:
+-			if (slc_capability->slc_mon_configured.read_miss_configured >=
+-					slc_capability->slc_mon_list.read_miss_config_available)
+-				return NULL;
+-			break;
+-		}
+-		break;
+-	}
+-
+-	return qcom_msc;
+-
+-}
+-
+-static int update_mon_stats(struct device *dev, struct msc_query *query,
+-		struct slc_mon_config_val *mon_cfg)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-	struct qcom_slc_capability *slc_capability;
+-	int mon_idx;
+-
+-	qcom_msc = slc_capability_check(dev, query);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	slc_capability =  (struct qcom_slc_capability *)qcom_msc->msc_capability;
+-	mon_idx = mon_idx_lookup(qcom_msc->mon_base, query->client_id, query->part_id);
+-	if (mon_idx < 0)
+-		return -EINVAL;
+-
+-	switch (mon_cfg->slc_mon_function) {
+-	default:
+-		break;
+-
+-	case CACHE_CAPACITY_CONFIG:
+-		switch (mon_cfg->enable) {
+-		default:
+-			break;
+-
+-		case 0:
+-			slc_capability->slc_mon_configured.capacity_configured--;
+-			break;
+-
+-		case 1:
+-			slc_capability->slc_mon_configured.capacity_configured++;
+-			break;
+-
+-		}
+-		break;
+-
+-	case CACHE_READ_MISS_CONFIG:
+-		switch (mon_cfg->enable) {
+-		default:
+-			break;
+-
+-		case 0:
+-			slc_capability->slc_mon_configured.read_miss_configured--;
+-			break;
+-
+-		case 1:
+-			slc_capability->slc_mon_configured.read_miss_configured++;
+-			break;
+-
+-		}
+-		break;
+-	}
+-
+-	return 0;
++	int index;
++	for (index = 0; index < SLC_NUM_PARTIDS; index++) {
++		void __iomem *record = mem + offsetof(struct qcom_slc_mon_mem, data) +
++			index * sizeof(struct qcom_slc_mon_data);
++		if (readl_relaxed(record) == client_id && readl_relaxed(record + 4) == part_id)
++			return index;
++	}
++	return -EINVAL;
+ }
+ 
+ static int slc_mon_config(struct device *dev, void *msc_partid, void *msc_partconfig)
+ {
+-	struct qcom_mpam_msc *qcom_msc;
+-	struct msc_query *query;
+-	struct slc_mon_config_val *mon_cfg_val;
+-	struct slc_mon_config mon_cfg = {0};
+-	int ret = -EINVAL;
+-
+-	query = (struct msc_query *)msc_partid;
+-	mon_cfg_val = (struct slc_mon_config_val *)msc_partconfig;
+-
+-	qcom_msc = slc_config_request_check(dev, query, mon_cfg_val);
+-	if (qcom_msc == NULL)
+-		return ret;
+-
+-	memcpy(&mon_cfg.query, msc_partid, sizeof(struct msc_query));
+-	memcpy(&mon_cfg.config, msc_partconfig, sizeof(struct slc_mon_config_val));
+-	ret = mpam_msc_slc_set_params(dev, &mon_cfg, sizeof(struct  slc_mon_config),
+-			PARAM_SET_CONFIG_MON_MSC);
+-	if (ret)
+-		pr_err("Failed to Config SLC Mon\n");
+-	else
+-		update_mon_stats(dev, query, mon_cfg_val);
+-
++	struct msc_query *query = msc_partid;
++	struct slc_mon_config_val *config = msc_partconfig;
++	struct qcom_mpam_msc *msc = slc_capability_check(dev, query);
++	struct qcom_slc_capability *caps;
++	struct slc_mon_config request = {};
++	unsigned long *enabled;
++	u32 available;
++	int index, ret;
++
++	if (!msc || config->enable > 1 || config->slc_mon_function > CACHE_READ_MISS_CONFIG)
++		return -EINVAL;
++	index = mon_idx_lookup(msc->mon_base, query->client_id, query->part_id);
++	if (index < 0)
++		return index;
++	caps = msc->msc_capability;
++	if (config->slc_mon_function == CACHE_CAPACITY_CONFIG) {
++		enabled = &caps->capacity_enabled;
++		available = caps->slc_mon_list.capacity_config_available;
++	} else {
++		enabled = &caps->miss_enabled;
++		available = caps->slc_mon_list.read_miss_config_available;
++	}
++	if (!!(*enabled & BIT(index)) == config->enable)
++		return 0;
++	if (config->enable && hweight_long(*enabled) >= available)
++		return -ENOSPC;
++	request.query = *query;
++	request.config = *config;
++	ret = mpam_msc_slc_set_params(dev, &request, sizeof(request), PARAM_SET_CONFIG_MON_MSC);
++	if (!ret) {
++		if (config->enable)
++			*enabled |= BIT(index);
++		else
++			*enabled &= ~BIT(index);
++	}
+ 	return ret;
+-};
+-
+-#define MAX_SHARED_MEM_RETRY_CNT	5000
+-#define MAX_SHARED_MATCH_SEQ_CNT	10
++}
++
++#define MAX_SHARED_MEM_RETRY_CNT 5000
+ 
+ static int slc_mon_stats_read(struct device *dev, void *msc_partid, void *data)
+ {
+-	struct qcom_mpam_msc *qcom_msc;
+-	struct msc_query *query;
+-	struct qcom_slc_mon_mem *mon_mem;
+-	union mon_values *mon_data;
+-	struct qcom_slc_mon_data *data_mem;
+-	int mon_idx;
+-	uint32_t match_seq, retry_cnt, match_seq_cnt = 0;
+-
+-	qcom_msc = (struct qcom_mpam_msc *)dev_get_drvdata(dev);
+-	if (qcom_msc == NULL)
+-		return -EINVAL;
+-
+-	query = (struct msc_query *)msc_partid;
+-	mon_data = (union mon_values *)data;
+-	mon_idx = mon_idx_lookup(qcom_msc->mon_base, query->client_id, query->part_id);
+-	if (mon_idx < 0)
+-		return -EINVAL;
+-
+-	mon_mem = (struct qcom_slc_mon_mem *)qcom_msc->mon_base;
+-	data_mem = &(mon_mem->data[mon_idx]);
+-	do {
+-		retry_cnt = 0;
+-		while (unlikely((match_seq = mon_mem->match_seq) % 2) &&
+-				(retry_cnt++ < MAX_SHARED_MEM_RETRY_CNT))
+-			;
+-
+-		if (retry_cnt == MAX_SHARED_MEM_RETRY_CNT)
+-			return -EINVAL;
+-
+-		/* Read as zero if monitor not enabled */
+-		mon_data->ref.mon_data = 0;
+-		if ((mon_data->ref.slc_mon_function == CACHE_CAPACITY_CONFIG) &&
+-				(data_mem->cap_stats.cap_enabled))
+-			mon_data->capacity.num_cache_lines = data_mem->cap_stats.num_cache_lines;
+-
+-		if ((mon_data->ref.slc_mon_function == CACHE_READ_MISS_CONFIG) &&
+-				(data_mem->rd_miss_stats.miss_enabled))
+-			mon_data->misses.num_rd_misses = data_mem->rd_miss_stats.rd_misses;
+-
+-		mon_data->ref.last_capture_time = mon_mem->last_capture_time;
+-	} while ((match_seq != mon_mem->match_seq) &&
+-			(match_seq_cnt++ < MAX_SHARED_MATCH_SEQ_CNT));
+-
+-	if (match_seq_cnt == MAX_SHARED_MATCH_SEQ_CNT)
+-		return -EINVAL;
+-
+-	return 0;
++	struct msc_query *query = msc_partid;
++	struct qcom_mpam_msc *msc = slc_capability_check(dev, query);
++	union mon_values *value = data;
++	void __iomem *record;
++	u32 seq;
++	int index, retry;
++
++	if (!msc)
++		return -EINVAL;
++	index = mon_idx_lookup(msc->mon_base, query->client_id, query->part_id);
++	if (index < 0)
++		return index;
++	record = msc->mon_base + offsetof(struct qcom_slc_mon_mem, data) +
++		 index * sizeof(struct qcom_slc_mon_data);
++	for (retry = 0; retry < MAX_SHARED_MEM_RETRY_CNT; retry++) {
++		seq = readl_relaxed(msc->mon_base);
++		if (seq & 1)
++			continue;
++		value->ref.mon_data = 0;
++		if (value->ref.slc_mon_function == CACHE_CAPACITY_CONFIG &&
++		    readl_relaxed(record + offsetof(struct qcom_slc_mon_data, cap_stats.cap_enabled)))
++			value->capacity.num_cache_lines = readl_relaxed(record +
++				offsetof(struct qcom_slc_mon_data, cap_stats.num_cache_lines));
++		if (value->ref.slc_mon_function == CACHE_READ_MISS_CONFIG &&
++		    readl_relaxed(record + offsetof(struct qcom_slc_mon_data, rd_miss_stats.miss_enabled)))
++			value->misses.num_rd_misses = readq_relaxed(record +
++				offsetof(struct qcom_slc_mon_data, rd_miss_stats.rd_misses));
++		value->ref.last_capture_time = readq_relaxed(msc->mon_base +
++			 offsetof(struct qcom_slc_mon_mem, last_capture_time));
++		if (seq == readl_relaxed(msc->mon_base))
++			return 0;
++	}
++	return -EAGAIN;
+ }
+ 
+ static struct mpam_msc_ops slc_msc_ops = {
+@@ -456,7 +338,7 @@
+ static int slc_client_info_read(struct device *dev, struct device_node *node)
+ {
+ 	int client_idx, partid_idx, ret = -EINVAL;
+-	struct msc_query query;
++	struct msc_query query = {};
+ 	struct qcom_mpam_msc *qcom_msc;
+ 	struct slc_client_capability *slc_client_cap;
+ 	struct qcom_slc_capability *qcom_slc_capability;
+@@ -475,6 +357,8 @@
+ 		slc_client_cap->client_info.client_id = slc_client_id[client_idx];
+ 		ret = of_property_read_string_index(node, "qcom,slc-clients", client_idx,
+ 							&slc_client_cap->client_name);
++		if (ret)
++			return ret;
+ 		slc_client_cap->enabled = false;
+ 		if (slc_client_query(dev, &query, &(slc_client_cap->client_info)))
+ 			continue;
+@@ -483,6 +367,9 @@
+ 				(slc_client_cap->client_info.num_part_id == SLC_INVALID_PARTID))
+ 			continue;
+ 
++		if (slc_client_cap->client_info.client_id != query.client_id ||
++		    slc_client_cap->client_info.num_part_id > MAX_PART_ID)
++			return -EPROTO;
+ 		slc_client_cap->enabled = true;
+ 		slc_client_cap->slc_partid_cap = devm_kcalloc(dev,
+ 				slc_client_cap->client_info.num_part_id,
+@@ -495,14 +382,19 @@
+ 		for (partid_idx = 0; partid_idx < slc_client_cap->client_info.num_part_id;
+ 				partid_idx++) {
+ 			query.part_id = partid_idx;
+-			ret = msc_system_get_device_capability(qcom_msc->msc_id, &query,
++			ret = slc_get_cache_partition_capability(dev, &query,
+ 					&(slc_client_cap->slc_partid_cap[partid_idx]));
+ 			if (ret)
+-				continue;
++				return ret;
++			if (slc_client_cap->slc_partid_cap[partid_idx].num_gears > MAX_NUM_GEARS)
++				return -EPROTO;
++			for (int gear = 0; gear < slc_client_cap->slc_partid_cap[partid_idx].num_gears; gear++)
++				if (slc_client_cap->slc_partid_cap[partid_idx].part_id_gears[gear] >= GEAR_MAX)
++					return -EPROTO;
+ 		}
+ 	}
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ static int slc_mpam_enable_disable(struct device *dev, void *msc_partid, void *msc_partconfig)
+@@ -535,14 +427,20 @@
+ 	return slc_mpam_enable_disable(dev, &query, &enable);
+ }
+ 
++static void mpam_msc_slc_stop(void *data)
++{
++	struct device *dev = data;
++	if (slc_mpam_start_stop(dev, false))
++		dev_err(dev, "Failed to stop SLC monitor firmware thread\n");
++}
++
+ static int mpam_msc_slc_probe(struct platform_device *pdev)
+ {
+-	int ret = -EINVAL;
++	int ret = -EINVAL, count;
+ 	uint32_t val;
+ 	struct device_node *node;
+ 	struct qcom_mpam_msc *qcom_msc;
+ 	struct qcom_slc_capability *qcom_slc_capability;
+-	struct qcom_slc_mon_mem *mon_mem;
+ 	struct resource *res;
+ 
+ 	qcom_msc = devm_kzalloc(&pdev->dev, sizeof(struct qcom_mpam_msc), GFP_KERNEL);
+@@ -583,86 +481,83 @@
+ 		return dev_err_probe(&pdev->dev, ret, "qcom,msc-id Node failed!\n");
+ 
+ 	platform_set_drvdata(pdev, qcom_msc);
+-	if (slc_mpam_start_stop(&pdev->dev, true))
+-		return dev_err_probe(&pdev->dev, -EINVAL, "MAPM SCMI failure!\n");
++	ret = slc_mpam_start_stop(&pdev->dev, true);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "MPAM SCMI failure!\n");
++	ret = devm_add_action_or_reset(&pdev->dev, mpam_msc_slc_stop, &pdev->dev);
++	if (ret)
++		return ret;
+ 
+ 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mon-base");
++	if (!res || resource_size(res) < sizeof(struct qcom_slc_mon_mem))
++		return -EINVAL;
+ 	qcom_msc->mon_base = devm_ioremap_resource(&pdev->dev, res);
+ 
+ 	if (IS_ERR_OR_NULL(qcom_msc->mon_base))
+ 		return dev_err_probe(&pdev->dev, PTR_ERR(qcom_msc->mon_base),
+ 				"ioremap slc mpam_mon_base failed!\n");
+ 
+-	mon_mem = (struct qcom_slc_mon_mem *) qcom_msc->mon_base;
+-	if (mon_mem->msc_id != qcom_msc->msc_id)
++	if (readw_relaxed(qcom_msc->mon_base + offsetof(struct qcom_slc_mon_mem, msc_id)) != qcom_msc->msc_id)
+ 		return dev_err_probe(&pdev->dev, -EINVAL, "IMEM Init failure!\n");
+-
+-	ret = attach_mpam_msc(&pdev->dev, qcom_msc, SLC);
+-	if (ret)
+-		return dev_err_probe(&pdev->dev, ret, "MPAM MSC attach failed!\n");
+ 
+ 	qcom_msc->msc_capability = devm_kzalloc(&pdev->dev, sizeof(struct qcom_slc_capability),
+ 			GFP_KERNEL);
+ 	if (qcom_msc->msc_capability == NULL) {
+ 		ret = -ENOMEM;
+-		goto err_detach;
++		goto err_probe;
+ 	}
+ 
+ 	qcom_slc_capability = (struct qcom_slc_capability *)qcom_msc->msc_capability;
+-	qcom_slc_capability->num_clients = of_property_count_strings(node, "qcom,slc-clients");
++	count = of_property_count_strings(node, "qcom,slc-clients");
++	if (count <= 0 || count > SLC_CLIENT_MAX)
++		return -EINVAL;
++	qcom_slc_capability->num_clients = count;
+ 	qcom_slc_capability->slc_client_cap = devm_kcalloc(&pdev->dev,
+ 			qcom_slc_capability->num_clients, sizeof(struct  slc_client_capability),
+ 			GFP_KERNEL);
+ 	if (qcom_slc_capability->slc_client_cap == NULL) {
+ 		ret = -ENOMEM;
+-		goto err_detach;
++		goto err_probe;
+ 	}
+ 
+ 	ret = of_property_read_u32(node, "qcom,num-read-miss-cfg", &val);
+ 	if (ret)
+-		goto err_detach;
+-
++		goto err_probe;
++
++	if (val > SLC_NUM_PARTIDS)
++		return -EINVAL;
+ 	qcom_slc_capability->slc_mon_list.read_miss_config_available = val;
+ 	ret = of_property_read_u32(node, "qcom,num-cap-cfg", &val);
+ 	if (ret)
+-		goto err_detach;
+-
++		goto err_probe;
++
++	if (val > SLC_NUM_PARTIDS)
++		return -EINVAL;
+ 	qcom_slc_capability->slc_mon_list.capacity_config_available = val;
+ 
+ 	qcom_slc_capability->slc_mon_configured.read_miss_configured = 0;
+ 	qcom_slc_capability->slc_mon_configured.capacity_configured = 0;
+ 
+ 	qcom_msc->mpam_available = MPAM_AVAILABLE;
+-	if (slc_client_info_read(&pdev->dev, node)) {
++	ret = slc_client_info_read(&pdev->dev, node);
++	if (ret) {
+ 		dev_err(&pdev->dev, "Failed to detect SLC device\n");
+-		goto err_detach;
++		goto err_probe;
+ 	}
+ 
+ 	qcom_msc->mpam_available = MPAM_MONITRS_AVAILABLE;
+-	return 0;
+-
+-err_detach:
+-	detach_mpam_msc(&pdev->dev, qcom_msc, SLC);
+-	return dev_err_probe(&pdev->dev, PTR_ERR(qcom_msc->mon_base),
+-			"MPAM SLC driver probe failed!\n");
+-}
+-
+-static int mpam_msc_slc_remove(struct platform_device *pdev)
+-{
+-	struct qcom_mpam_msc *qcom_msc;
+-
+-	qcom_msc = (struct qcom_mpam_msc *)platform_get_drvdata(pdev);
+-	qcom_msc->mpam_available = MPAM_AVAILABLE;
+-	if (qcom_msc != NULL) {
+-		if (slc_mpam_start_stop(&pdev->dev, false))
+-			dev_err(&pdev->dev, "Failed to stop SLC Monitor thread\n");
+-
+-		detach_mpam_msc(&pdev->dev, qcom_msc, SLC);
+-	}
+-
+-	qcom_msc->mpam_available = MPAM_UNINITIALIZAED;
+-	platform_set_drvdata(pdev, NULL);
+-	return 0;
++	ret = attach_mpam_msc(&pdev->dev, qcom_msc, SLC);
++	if (!ret)
++		return 0;
++err_probe:
++	return dev_err_probe(&pdev->dev, ret, "MPAM SLC driver probe failed!\n");
++}
++
++static void mpam_msc_slc_remove(struct platform_device *pdev)
++{
++	struct qcom_mpam_msc *msc = platform_get_drvdata(pdev);
++	/* Withdraw before managed teardown stops firmware and frees capabilities. */
++	detach_mpam_msc(&pdev->dev, msc, SLC);
+ }
+ static const struct of_device_id mpam_msc_slc_table[] = {
+ 	{ .compatible = "qcom,slc-mpam" },
+--- a/drivers/soc/qcom/mpam/slc_mpam.c
++++ b/drivers/soc/qcom/mpam/slc_mpam.c
+@@ -32,22 +32,11 @@
+ static inline int set_msc_query(struct msc_query *query,
+ 					   struct slc_mpam_item *pm_item)
+ {
+-	struct qcom_mpam_msc *qcom_mpam_msc;
+-
+-	qcom_mpam_msc = qcom_msc_lookup(SLC);
+-	if (!qcom_mpam_msc)
+-		return -ENODEV;
+-
+-	query->qcom_msc_id.qcom_msc_type =
+-		qcom_mpam_msc->qcom_msc_id.qcom_msc_type;
+-	query->qcom_msc_id.qcom_msc_class =
+-		qcom_mpam_msc->qcom_msc_id.qcom_msc_class;
+-	query->qcom_msc_id.idx =
+-		qcom_mpam_msc->qcom_msc_id.idx;
+-
++	int ret = qcom_msc_get_query(SLC, query);
++	if (ret)
++		return ret;
+ 	query->client_id = pm_item->client_id;
+ 	query->part_id = pm_item->part_id;
+-
+ 	return 0;
+ }
+ 
+@@ -55,10 +44,12 @@
+ 		char *page)
+ {
+ 	int ret;
+-	struct msc_query query;
++	struct msc_query query = {};
+ 	struct qcom_slc_gear_val gear_config;
+ 
+-	set_msc_query(&query, get_pm_item(item));
++	ret = set_msc_query(&query, get_pm_item(item));
++	if (ret)
++		return ret;
+ 
+ 	ret = msc_system_get_partition(SLC, &query, &gear_config);
+ 	if (ret)
+@@ -72,33 +63,18 @@
+ static ssize_t slc_mpam_schemata_store(struct config_item *item,
+ 		const char *page, size_t count)
+ {
+-	int ret, input;
+-	char *token, *param_name;
+-	struct msc_query query;
+-	struct qcom_slc_gear_val gear_config;
+-
+-	set_msc_query(&query, get_pm_item(item));
+-
+-	while ((token = strsep((char **)&page, ",")) != NULL) {
+-		param_name = strsep(&token, "=");
+-		if (param_name == NULL || token == NULL)
+-			continue;
+-		if (kstrtouint(token, 0, &input) < 0) {
+-			pr_err("invalid argument for %s\n", param_name);
+-			return -EINVAL;
+-		}
+-
+-		if (!strcmp("gear", param_name))
+-			gear_config.gear_val = input;
+-	}
+-
++	int ret;
++	struct msc_query query = {};
++	struct qcom_slc_gear_val gear_config = {};
++
++	ret = set_msc_query(&query, get_pm_item(item));
++	if (ret)
++		return ret;
++	ret = qcom_mpam_parse_gear(page, count, &gear_config.gear_val);
++	if (ret)
++		return ret;
+ 	ret = msc_system_set_partition(SLC, &query, &gear_config);
+-	if (ret) {
+-		pr_err("set slc cache partition failed, ret=%d\n", ret);
+-		return -EBUSY;
+-	}
+-
+-	return count;
++	return ret ? ret : count;
+ }
+ CONFIGFS_ATTR(slc_mpam_, schemata);
+ 
+@@ -114,11 +90,13 @@
+ {
+ 	int ret;
+ 	bool input;
+-	struct msc_query query;
++	struct msc_query query = {};
+ 	struct slc_mon_config_val mon_cfg_val;
+ 	struct slc_mpam_item *pm_item = get_pm_item(item);
+ 
+-	set_msc_query(&query, pm_item);
++	ret = set_msc_query(&query, pm_item);
++	if (ret)
++		return ret;
+ 
+ 	ret = kstrtobool(page, &input);
+ 	if (ret) {
+@@ -150,15 +128,20 @@
+ static ssize_t slc_mpam_cap_monitor_data_show(struct config_item *item,
+ 		char *page)
+ {
+-	struct msc_query query;
+-	union mon_values mon_data;
++	struct msc_query query = {};
++	union mon_values mon_data = {};
++	int ret;
+ 
+ 	if (!get_pm_item(item)->cap_mon_enabled)
+ 		return scnprintf(page, PAGE_SIZE, "monitor not enabled\n");
+ 
+-	set_msc_query(&query, get_pm_item(item));
+-
+-	msc_system_mon_alloc_info(SLC, &query, &mon_data);
++	ret = set_msc_query(&query, get_pm_item(item));
++	if (ret)
++		return ret;
++
++	ret = msc_system_mon_alloc_info(SLC, &query, &mon_data);
++	if (ret)
++		return ret;
+ 
+ 	return scnprintf(page, PAGE_SIZE, "timestamp=%llu,cap_cnt=%u\n",
+ 			mon_data.capacity.last_capture_time,
+@@ -178,11 +161,13 @@
+ {
+ 	int ret;
+ 	bool input;
+-	struct msc_query query;
++	struct msc_query query = {};
+ 	struct slc_mon_config_val mon_cfg_val;
+ 	struct slc_mpam_item *pm_item = get_pm_item(item);
+ 
+-	set_msc_query(&query, pm_item);
++	ret = set_msc_query(&query, pm_item);
++	if (ret)
++		return ret;
+ 
+ 	ret = kstrtobool(page, &input);
+ 	if (ret) {
+@@ -214,15 +199,20 @@
+ static ssize_t slc_mpam_miss_monitor_data_show(struct config_item *item,
+ 		char *page)
+ {
+-	struct msc_query query;
+-	union mon_values mon_data;
++	struct msc_query query = {};
++	union mon_values mon_data = {};
++	int ret;
+ 
+ 	if (!get_pm_item(item)->miss_mon_enabled)
+ 		return scnprintf(page, PAGE_SIZE, "monitor not enabled\n");
+ 
+-	set_msc_query(&query, get_pm_item(item));
+-
+-	msc_system_mon_read_miss_info(SLC, &query, &mon_data);
++	ret = set_msc_query(&query, get_pm_item(item));
++	if (ret)
++		return ret;
++
++	ret = msc_system_mon_read_miss_info(SLC, &query, &mon_data);
++	if (ret)
++		return ret;
+ 
+ 	return scnprintf(page, PAGE_SIZE, "timestamp=%llu,miss_cnt=%llu\n",
+ 			mon_data.misses.last_capture_time, mon_data.misses.num_rd_misses);
+@@ -234,18 +224,24 @@
+ {
+ 	int i, ret, gear_num;
+ 	ssize_t len = 0;
+-	struct msc_query query;
++	struct msc_query query = {};
+ 	struct slc_partid_capability slc_partid_cap;
+ 
+-	set_msc_query(&query, get_pm_item(item));
++	ret = set_msc_query(&query, get_pm_item(item));
++	if (ret)
++		return ret;
+ 
+ 	ret = msc_system_get_device_capability(SLC, &query, &slc_partid_cap);
+ 	if (ret)
+ 		return scnprintf(page, PAGE_SIZE,
+ 			"failed to get available gear %d\n", ret);
+ 
++	if (slc_partid_cap.num_gears > MAX_NUM_GEARS)
++		return -EPROTO;
+ 	for (i = 0; i < slc_partid_cap.num_gears; i++) {
+ 		gear_num = slc_partid_cap.part_id_gears[i];
++		if (gear_num >= GEAR_MAX)
++			return -EPROTO;
+ 		len += scnprintf(page + len, PAGE_SIZE - len,
+ 			"%d - %s\n", gear_num, gear_index[gear_num]);
+ 	}
+@@ -264,8 +260,17 @@
+ 	NULL,
+ };
+ 
++static void slc_mpam_item_release(struct config_item *item)
++{
++	kfree(get_pm_item(item));
++}
++static struct configfs_item_operations slc_mpam_item_ops = {
++	.release = slc_mpam_item_release,
++};
+ static const struct config_item_type slc_mpam_item_type = {
+ 	.ct_attrs	= slc_mpam_attrs,
++	.ct_item_ops = &slc_mpam_item_ops,
++	.ct_owner = THIS_MODULE,
+ };
+ 
+ static struct slc_mpam_item *slc_mpam_make_group(
+@@ -273,7 +278,7 @@
+ {
+ 	struct slc_mpam_item *item;
+ 
+-	item = devm_kzalloc(dev, sizeof(struct slc_mpam_item), GFP_KERNEL);
++	item = kzalloc(sizeof(struct slc_mpam_item), GFP_KERNEL);
+ 	if (!item)
+ 		return ERR_PTR(-ENOMEM);
+ 
+@@ -283,99 +288,128 @@
+ 	return item;
+ }
+ 
++static void slc_mpam_base_release(struct config_item *item)
++{
++	struct config_group *group = to_config_group(item);
++	configfs_remove_default_groups(group);
++	kfree(group);
++}
++static struct configfs_item_operations slc_mpam_base_ops = {
++	.release = slc_mpam_base_release,
++};
+ static const struct config_item_type slc_mpam_base_type = {
+-	.ct_owner	= THIS_MODULE,
+-};
+-
+-static int create_config_node(const char *name,
+-		struct device *dev,
+-		int client_id, int part_id,
+-		struct config_group *parent_group)
+-{
+-	int ret;
++	.ct_item_ops = &slc_mpam_base_ops,
++	.ct_owner = THIS_MODULE,
++};
++
++static struct config_group *slc_mpam_base_group(const char *name)
++{
++	struct config_group *group = kzalloc(sizeof(*group), GFP_KERNEL);
++	if (!group)
++		return ERR_PTR(-ENOMEM);
++	config_group_init_type_name(group, name, &slc_mpam_base_type);
++	return group;
++}
++
++static int create_config_node(const char *name, struct device *dev,
++			      u32 client_id, u32 part_id, struct config_group *parent)
++{
+ 	struct slc_mpam_item *new_item;
+-
++	struct msc_query query = {};
++	struct slc_partid_capability caps;
++	int ret;
++	if (client_id >= SLC_CLIENT_MAX || part_id >= MAX_PART_ID)
++		return -EINVAL;
+ 	new_item = slc_mpam_make_group(dev, name);
+-	if (IS_ERR(new_item)) {
+-		pr_err("Error create group %s\n", name);
++	if (IS_ERR(new_item))
+ 		return PTR_ERR(new_item);
+-	}
+ 	new_item->client_id = client_id;
+ 	new_item->part_id = part_id;
+-
+-	ret = configfs_register_group(parent_group, &new_item->group);
++	ret = set_msc_query(&query, new_item);
++	if (!ret)
++		ret = msc_system_get_device_capability(SLC, &query, &caps);
+ 	if (ret) {
+-		pr_err("Error register group %s\n", name);
+-		return ret;
+-	}
+-
++		config_item_put(&new_item->group.cg_item);
++		return ret;
++	}
++	configfs_add_default_group(&new_item->group, parent);
+ 	return 0;
+ }
+ 
+ static int slc_mpam_probe(struct platform_device *pdev)
+ {
+-	int ret, clientid, partid;
++	int ret;
++	u32 clientid, partid;
+ 	char buf[CONFIGFS_ITEM_NAME_LEN];
+-	int client_cnt;
+-	const char *msc_name_dt;
+-	struct qcom_mpam_msc *qcom_mpam_msc;
+-	struct device_node *node, *sub_node;
+-	struct config_group *p_group, *sub_group;
+-	struct device_node *np = pdev->dev.of_node;
+-
+-	qcom_mpam_msc = qcom_msc_lookup(SLC);
+-	if (!qcom_mpam_msc ||
+-		qcom_mpam_msc->mpam_available != MPAM_MONITRS_AVAILABLE)
++	const char *name;
++	struct msc_query query = {};
++	struct device_node *node, *sub_node, *np = pdev->dev.of_node;
++	struct config_group *parent, *sub_group;
++
++	ret = qcom_msc_get_query(SLC, &query);
++	if (ret)
+ 		return -EPROBE_DEFER;
+-
+-	p_group = platform_mpam_get_root_group();
+-	if (!p_group)
++	parent = platform_mpam_get_root_group();
++	if (!parent)
+ 		return -EPROBE_DEFER;
+-
+-	client_cnt = of_get_child_count(np);
+-	if (!client_cnt) {
+-		dev_err(&pdev->dev, "No client found\n");
++	if (!of_get_available_child_count(np))
+ 		return -ENODEV;
+-	}
+-
+-	of_property_read_string(np, "qcom,msc-name", &msc_name_dt);
+-	root_group = configfs_register_default_group(p_group,
+-		msc_name_dt, &slc_mpam_base_type);
++	ret = of_property_read_string(np, "qcom,msc-name", &name);
++	if (ret)
++		return ret;
++	root_group = slc_mpam_base_group(name);
+ 	if (IS_ERR(root_group)) {
+-		dev_err(&pdev->dev, "Error register group %s\n", msc_name_dt);
+-		return PTR_ERR(root_group);
+-	}
+-
+-	for_each_child_of_node(np, node) {
++		ret = PTR_ERR(root_group);
++		root_group = NULL;
++		return ret;
++	}
++	for_each_available_child_of_node(np, node) {
+ 		ret = of_property_read_u32(node, "qcom,client-id", &clientid);
+-		of_property_read_string(node, "qcom,client-name", &msc_name_dt);
+-		if (ret || IS_ERR_OR_NULL(msc_name_dt))
+-			continue;
+-
+-		if (of_get_child_count(node) > 0) {
+-			sub_group = configfs_register_default_group(root_group,
+-				msc_name_dt, &slc_mpam_base_type);
+-			for_each_child_of_node(node, sub_node) {
++		if (!ret)
++			ret = of_property_read_string(node, "qcom,client-name", &name);
++		if (ret)
++			goto put_node;
++		if (of_get_available_child_count(node)) {
++			sub_group = slc_mpam_base_group(name);
++			if (IS_ERR(sub_group)) {
++				ret = PTR_ERR(sub_group);
++				goto put_node;
++			}
++			configfs_add_default_group(sub_group, root_group);
++			for_each_available_child_of_node(node, sub_node) {
+ 				ret = of_property_read_u32(sub_node, "qcom,part-id", &partid);
+-				snprintf(buf, sizeof(buf), "partid%d", partid);
+-				if (create_config_node(buf, &pdev->dev, clientid,
+-						partid, sub_group))
+-					continue;
++				if (!ret) {
++					snprintf(buf, sizeof(buf), "partid%u", partid);
++					ret = create_config_node(buf, &pdev->dev, clientid, partid, sub_group);
++				}
++				if (ret) {
++					of_node_put(sub_node);
++					goto put_node;
++				}
+ 			}
+-		} else
+-			if (create_config_node(msc_name_dt, &pdev->dev,
+-					clientid, 0, root_group))
+-				continue;
+-	}
+-
+-	return 0;
+-}
+-
+-int slc_mpam_remove(struct platform_device *pdev)
++		} else {
++			ret = create_config_node(name, &pdev->dev, clientid, 0, root_group);
++			if (ret)
++				goto put_node;
++		}
++	}
++	ret = configfs_register_group(parent, root_group);
++	if (!ret)
++		return 0;
++	goto free_root;
++put_node:
++	of_node_put(node);
++free_root:
++	config_item_put(&root_group->cg_item);
++	root_group = NULL;
++	return ret;
++}
++
++static void slc_mpam_remove(struct platform_device *pdev)
+ {
+ 	configfs_unregister_group(root_group);
+-	kfree(root_group);
+-	return 0;
++	config_item_put(&root_group->cg_item);
++	root_group = NULL;
+ }
+ 
+ static const struct of_device_id slc_mpam_table[] = {
+--- a/include/soc/qcom/mpam.h
++++ b/include/soc/qcom/mpam.h
+@@ -7,10 +7,11 @@
+ #define _QCOM_MPAM_H
+ 
+ #include <linux/types.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/mm.h>
+ #include <linux/platform_device.h>
+ 
+-#define SYS_MPAM0_EL1		sys_reg(3, 0, 10, 5, 1)
+-#define SYS_MPAM1_EL1		sys_reg(3, 0, 10, 5, 0)
+ 
+ #define PARTID_BITS		16
+ #define PARTID_I_SHIFT		0
+@@ -190,41 +191,69 @@
+ #else
+ static inline int qcom_mpam_set_cache_partition(struct mpam_set_cache_partition *param)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_get_version(struct mpam_ver_ret *ver)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_get_cache_partition(struct mpam_read_cache_portion *param,
+ 						struct mpam_config_val *val)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_config_monitor(struct mpam_monitor_configuration *param)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_set_platform_bw_ctrl(struct platform_mpam_bw_ctrl_cfg *param)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_get_platform_bw_ctrl(struct platform_mpam_read_bw_ctrl *param,
+ 						struct platform_mpam_bw_ctrl_config *val)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ 
+ static inline int qcom_mpam_set_platform_bw_monitor(struct platform_mpam_bw_monitor_cfg *param)
+ {
+-	return 0;
++	return -EOPNOTSUPP;
+ }
+ #endif
++/* Parse one complete gear assignment without modifying configfs input. */
++static inline int qcom_mpam_parse_gear(const char *buf, size_t count, u32 *gear)
++{
++	char *copy, *cursor, *token, *name;
++	bool found = false;
++	int ret = -EINVAL;
++
++	if (!count || count >= PAGE_SIZE || memchr(buf, '\0', count))
++		return -EINVAL;
++	copy = kmemdup_nul(buf, count, GFP_KERNEL);
++	if (!copy)
++		return -ENOMEM;
++	cursor = copy;
++	while ((token = strsep(&cursor, ","))) {
++		name = strsep(&token, "=");
++		if (!token || strcmp(name, "gear") || found)
++			goto out;
++		if (kstrtou32(token, 0, gear))
++			goto out;
++		found = true;
++	}
++	if (found)
++		ret = 0;
++out:
++	kfree(copy);
++	return ret;
++}
++
+ struct config_group *platform_mpam_get_root_group(void);
+ 
+ #endif /* _QCOM_MPAM_H */
+--- a/include/soc/qcom/mpam_msc.h
++++ b/include/soc/qcom/mpam_msc.h
+@@ -52,7 +52,7 @@
+ 	void __iomem *mon_base;
+ 	struct list_head node;
+ 	uint32_t mpam_available;
+-} __packed;
++};
+ 
+ struct mpam_msc_ops {
+ 	int (*set_cache_partition)(struct device *dev, void *msc_partid, void *msc_partconfig);
+@@ -65,7 +65,7 @@
+ };
+ 
+ #if IS_ENABLED(CONFIG_QTI_MPAM_MSC)
+-struct qcom_mpam_msc *qcom_msc_lookup(uint32_t msc_id);
++int qcom_msc_get_query(u32 msc_id, struct msc_query *query);
+ int msc_system_get_device_capability(uint32_t msc_id, void *arg1, void *arg2);
+ int msc_system_get_partition(uint32_t msc_id, void *arg1, void *arg2);
+ int msc_system_set_partition(uint32_t msc_id, void *arg1, void *arg2);
+@@ -77,9 +77,9 @@
+ void detach_mpam_msc(struct device *dev, struct qcom_mpam_msc *qcom_msc, uint32_t msc_type);
+ #else
+ 
+-static inline struct qcom_mpam_msc *qcom_msc_lookup(uint32_t msc_id)
++static inline int qcom_msc_get_query(u32 msc_id, struct msc_query *query)
+ {
+-	return NULL;
++	return -ENODEV;
+ }
+ 
+ static inline int msc_system_get_device_capability(uint32_t msc_id, void *arg1, void *arg2)
+@@ -87,44 +87,44 @@
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_get_partition(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_get_partition(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_set_partition(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_set_partition(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_reset_partition(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_reset_partition(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_mon_read_miss_info(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_mon_read_miss_info(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_mon_alloc_info(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_mon_alloc_info(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+-static inline int msc_system_mon_config(uint32_t msc_id, void *arg1, void *arg2);
++static inline int msc_system_mon_config(uint32_t msc_id, void *arg1, void *arg2)
+ {
+ 	return -EINVAL;
+ }
+ 
+ static inline int attach_mpam_msc(struct device *dev, struct qcom_mpam_msc *qcom_msc,
+-		uint32_t msc_type);
++		uint32_t msc_type)
+ {
+ 	return -EINVAL;
+ }
+ 
+ static inline void detach_mpam_msc(struct device *dev, struct qcom_mpam_msc *qcom_msc,
+-		uint32_t msc_type);
++		uint32_t msc_type)
+ {
+ }
+ 
+--- a/include/soc/qcom/mpam_slc.h
++++ b/include/soc/qcom/mpam_slc.h
+@@ -40,14 +40,16 @@
+ 	struct slc_partid_capability *slc_partid_cap;
+ 	uint8_t enabled;
+ 	const char *client_name;
+-} __packed;
++};
+ 
+ struct qcom_slc_capability {
+ 	uint32_t num_clients;
+ 	struct slc_client_capability *slc_client_cap;
+ 	struct slc_mon_capability slc_mon_list;
+ 	struct slc_mon_configured slc_mon_configured;
+-} __packed;
++	unsigned long capacity_enabled;
++	unsigned long miss_enabled;
++};
+ 
+ /* slc slice configuration */
+ 
+--- a/include/soc/qcom/qcom_stats.h
++++ b/include/soc/qcom/qcom_stats.h
+@@ -77,18 +77,18 @@
+ { return -ENODEV; }
+ static inline int ddr_stats_get_freq_count(void)
+ { return -ENODEV; }
+-int ddr_stats_get_residency(int freq_count, struct ddr_freq_residency *data)
++static inline int ddr_stats_get_residency(int freq_count, struct ddr_freq_residency *data)
+ { return -ENODEV; }
+-int ddr_stats_get_change_his(struct ddr_stats_change_his_info *ddr_his_info)
++static inline int ddr_stats_get_change_his(struct ddr_stats_change_his_info *ddr_his_info)
+ { return -ENODEV; }
+-int llc_stats_get_active_scids(struct llc_island_stats_active_scids *llc_active_scids)
++static inline int llc_stats_get_active_scids(struct llc_island_stats_active_scids *llc_active_scids)
+ { return -ENODEV; }
+ 
+-bool has_system_slept(void)
++static inline bool has_system_slept(bool *aoss_debug)
+ { return false; }
+-bool has_subsystem_slept(void)
++static inline bool has_subsystem_slept(void)
+ { return false; }
+-void subsystem_sleep_debug_enable(bool enable)
++static inline void subsystem_sleep_debug_enable(bool enable)
+ { return; }
+ 
+ static inline int cx_stats_get_ss_vote_info(int ss_count,
+--- a/drivers/soc/qcom/llcc_heuristics.c
++++ b/drivers/soc/qcom/llcc_heuristics.c
+@@ -14,189 +14,91 @@
+ #include <soc/qcom/llcc_heuristics.h>
+ #include <linux/of.h>
+ 
+-static struct scmi_protocol_handle *ph;
+-static const struct qcom_scmi_vendor_ops *ops;
+-static int number_of_domains, heur_scid;
++struct heuristics_context {
++	struct scmi_protocol_handle *ph;
++	const struct qcom_scmi_vendor_ops *ops;
++	bool v2;
++	bool enabled;
++	union {
++		struct scid_heuristics_params v1;
++		struct scid_heuristics_params_v2 v2;
++	} params;
++};
+ 
+-static int qcom_llcc_set_params(struct scid_heuristics_params *param, u32 param_id)
++static int heuristics_send(struct heuristics_context *ctx, u32 command)
+ {
+-	return ops->set_param(ph, param, SCID_HEURISTICS_SCMI_STR, param_id,
+-				sizeof(struct scid_heuristics_params));
+-}
+-
+-static int qcom_llcc_set_params_v2(struct scid_heuristics_params_v2 *param, u32 param_id)
+-{
+-	return ops->set_param(ph, param, SCID_HEURISTICS_SCMI_STR, param_id,
+-				sizeof(struct scid_heuristics_params_v2));
+-}
+-
+-static int heuristics_set_param(struct platform_device *pdev, bool flag)
+-{
+-	int ret;
+-	struct device_node *node;
+-	struct scid_heuristics_data *heuristics_data;
+-	struct scid_heuristics_params *heuristics_param;
+-
+-	heuristics_data = devm_kzalloc(&pdev->dev,
+-					sizeof(struct scid_heuristics_data), GFP_KERNEL);
+-	if (heuristics_data == NULL) {
+-		return dev_err_probe(&pdev->dev, -ENOMEM,
+-				"Failed to alloc memory for heuristics_data\n");
+-	}
+-
+-	heuristics_param = &heuristics_data->params;
+-	if (number_of_domains > ARRAY_SIZE(heuristics_param->freq_idx))
+-		return dev_err_probe(&pdev->dev, -EINVAL,
+-				"Missing Nodes for qcom,freq-threshold-idx!\n");
+-
+-	heuristics_param->scid_heuristics_enabled = flag ? 1 : 0;
+-
+-	if (!(heuristics_param->scid_heuristics_enabled)) {
+-		ret =  qcom_llcc_set_params(heuristics_param, SCID_ACTIVATION_CONTROL);
+-		if (ret < 0)
+-			return dev_err_probe(&pdev->dev, ret,
+-						"llcc_heuristics scmi set_param failed!\n");
+-		return 0;
+-	}
+-	heuristics_param->heuristics_scid = heur_scid;
+-
+-	node = pdev->dev.of_node;
+-	for (int dom_idx = 0; dom_idx < number_of_domains; dom_idx++) {
+-		ret = of_property_read_u32_index(node, "qcom,freq-threshold-idx", dom_idx,
+-							&(heuristics_param->freq_idx[dom_idx]));
+-		if (ret)
+-			return dev_err_probe(&pdev->dev, ret,
+-					"Missing index %d qcom,freq-threshold-idx\n",
+-					dom_idx);
+-
+-		ret = of_property_read_u32_index(node, "qcom,frequency-threshold-residency",
+-				dom_idx, &(heuristics_param->freq_idx_residency[dom_idx]));
+-		if (ret)
+-			return dev_err_probe(&pdev->dev, ret,
+-					"Missing index %d qcom,frequency-threshold-residency\n",
+-					dom_idx);
+-	}
+-
+-	if (heuristics_param->scid_heuristics_enabled) {
+-		ret = qcom_llcc_set_params(heuristics_param, HEURISTICS_INIT);
+-		if (ret < 0)
+-			return dev_err_probe(&pdev->dev, ret,
+-						"llcc_heuristics scmi set_param failed!\n");
+-	}
+-
+-	platform_set_drvdata(pdev, heuristics_data);
+-
+-	return 0;
+-}
+-
+-static int heuristics_set_param_v2(struct platform_device *pdev, bool flag)
+-{
+-	int ret;
+-	struct device_node *node;
+-	struct scid_heuristics_data_v2 *heuristics_data;
+-	struct scid_heuristics_params_v2 *heuristics_param;
+-
+-	heuristics_data = devm_kzalloc(&pdev->dev,
+-					sizeof(struct scid_heuristics_data_v2), GFP_KERNEL);
+-	if (heuristics_data == NULL) {
+-		return dev_err_probe(&pdev->dev, -ENOMEM,
+-				"Failed to alloc memory for heuristics_data\n");
+-	}
+-
+-	heuristics_param = &heuristics_data->params;
+-	if (number_of_domains > ARRAY_SIZE(heuristics_param->freq_idx))
+-		return dev_err_probe(&pdev->dev, -EINVAL,
+-				"Missing Nodes for qcom,freq-threshold-idx!\n");
+-
+-	heuristics_param->scid_heuristics_enabled = flag ? 1 : 0;
+-
+-	if (!(heuristics_param->scid_heuristics_enabled)) {
+-		ret =  qcom_llcc_set_params_v2(heuristics_param, SCID_ACTIVATION_CONTROL);
+-		if (ret < 0)
+-			return dev_err_probe(&pdev->dev, ret,
+-						"llcc_heuristics scmi set_param failed!\n");
+-		return 0;
+-	}
+-	heuristics_param->heuristics_scid = heur_scid;
+-
+-	node = pdev->dev.of_node;
+-	for (int dom_idx = 0; dom_idx < number_of_domains; dom_idx++) {
+-		ret = of_property_read_u32_index(node, "qcom,freq-threshold-idx", dom_idx,
+-							&(heuristics_param->freq_idx[dom_idx]));
+-		if (ret)
+-			return dev_err_probe(&pdev->dev, ret,
+-					"Missing index %d qcom,freq-threshold-idx\n",
+-					dom_idx);
+-
+-		ret = of_property_read_u32_index(node, "qcom,frequency-threshold-residency",
+-				dom_idx, &(heuristics_param->freq_idx_residency[dom_idx]));
+-		if (ret)
+-			return dev_err_probe(&pdev->dev, ret,
+-					"Missing index %d qcom,frequency-threshold-residency\n",
+-					dom_idx);
+-	}
+-
+-	if (heuristics_param->scid_heuristics_enabled) {
+-		ret = qcom_llcc_set_params_v2(heuristics_param, HEURISTICS_INIT);
+-		if (ret < 0)
+-			return dev_err_probe(&pdev->dev, ret,
+-						"llcc_heuristics scmi set_param failed!\n");
+-	}
+-
+-	platform_set_drvdata(pdev, heuristics_data);
+-
+-	return 0;
++	return ctx->ops->set_param(ctx->ph, &ctx->params, SCID_HEURISTICS_SCMI_STR,
++		command, ctx->v2 ? sizeof(ctx->params.v2) : sizeof(ctx->params.v1));
+ }
+ 
+ static int heuristics_scid_probe(struct platform_device *pdev)
+ {
+-	int ret;
+-	struct device_node *node;
+-	struct scmi_device *scmi_dev;
+-	bool flag;
++	struct heuristics_context *ctx;
++	struct scmi_device *scmi;
++	struct device_node *node = pdev->dev.of_node;
++	u32 *freq, *residency, scid;
++	int count, max, ret;
++	bool enabled;
+ 
+-	scmi_dev = get_qcom_scmi_device();
+-	if (IS_ERR(scmi_dev))
+-		return PTR_ERR(scmi_dev);
+-
+-	ops = scmi_dev->handle->devm_protocol_get(scmi_dev, QCOM_SCMI_VENDOR_PROTOCOL, &ph);
+-	if (IS_ERR(ops))
+-		return dev_err_probe(&pdev->dev, PTR_ERR(ops),
+-				"Error getting vendor protocol ops\n");
+-
+-	node = pdev->dev.of_node;
+-	ret = of_property_read_u32(node, "qcom,heuristics-scid", &heur_scid);
++	ctx = devm_kzalloc(&pdev->dev, sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++	scmi = get_qcom_scmi_device();
++	if (IS_ERR(scmi))
++		return PTR_ERR(scmi);
++	ctx->ops = scmi->handle->devm_protocol_get(scmi, QCOM_SCMI_VENDOR_PROTOCOL, &ctx->ph);
++	if (IS_ERR(ctx->ops))
++		return PTR_ERR(ctx->ops);
++	ctx->v2 = !pdev->dev.parent ||
++		of_property_match_string(pdev->dev.parent->of_node, "compatible", "qcom,sun-llcc") < 0;
++	ret = of_property_read_u32(node, "qcom,heuristics-scid", &scid);
+ 	if (ret)
+-		return dev_err_probe(&pdev->dev, ret,
+-					"Missing Node value qcom,heuristics_scid!\n");
+-
+-	number_of_domains = of_property_count_u32_elems(node, "qcom,freq-threshold-idx");
+-	flag = of_property_read_bool(node, "qcom,scid-heuristics-enabled");
+-
+-	if (of_property_match_string(pdev->dev.parent->of_node,
+-				"compatible", "qcom,sun-llcc") >= 0) {
+-		heuristics_set_param(pdev, flag);
++		return ret;
++	count = of_property_count_u32_elems(node, "qcom,freq-threshold-idx");
++	enabled = of_property_read_bool(node, "qcom,scid-heuristics-enabled");
++	if (ctx->v2) {
++		max = ARRAY_SIZE(ctx->params.v2.freq_idx);
++		freq = ctx->params.v2.freq_idx;
++		residency = ctx->params.v2.freq_idx_residency;
++		ctx->params.v2.heuristics_scid = scid;
++		ctx->params.v2.scid_heuristics_enabled = enabled;
+ 	} else {
+-		heuristics_set_param_v2(pdev, flag);
++		max = ARRAY_SIZE(ctx->params.v1.freq_idx);
++		freq = ctx->params.v1.freq_idx;
++		residency = ctx->params.v1.freq_idx_residency;
++		ctx->params.v1.heuristics_scid = scid;
++		ctx->params.v1.scid_heuristics_enabled = enabled;
+ 	}
+-
+-	return ret;
++	if (enabled) {
++		if (count <= 0 || count > max ||
++		    of_property_count_u32_elems(node, "qcom,frequency-threshold-residency") != count)
++			return -EINVAL;
++		ret = of_property_read_u32_array(node, "qcom,freq-threshold-idx", freq, count);
++		if (ret)
++			return ret;
++		ret = of_property_read_u32_array(node, "qcom,frequency-threshold-residency", residency, count);
++		if (ret)
++			return ret;
++	}
++	ret = heuristics_send(ctx, enabled ? HEURISTICS_INIT : SCID_ACTIVATION_CONTROL);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "LLCC heuristics firmware request failed\n");
++	ctx->enabled = enabled;
++	platform_set_drvdata(pdev, ctx);
++	return 0;
+ }
+ 
+-static int heuristics_scid_remove(struct platform_device *pdev)
++static void heuristics_scid_remove(struct platform_device *pdev)
+ {
+-	bool flag = false;
+-
+-	/* Disable Heuristics Thread on module exit */
+-	if (of_property_match_string(pdev->dev.parent->of_node,
+-				"compatible", "qcom,sun-llcc") >= 0) {
+-		heuristics_set_param(pdev, flag);
+-	} else {
+-		heuristics_set_param_v2(pdev, flag);
+-	}
+-
+-	platform_set_drvdata(pdev, NULL);
+-	return 0;
++	struct heuristics_context *ctx = platform_get_drvdata(pdev);
++	if (!ctx->enabled)
++		return;
++	if (ctx->v2)
++		ctx->params.v2.scid_heuristics_enabled = 0;
++	else
++		ctx->params.v1.scid_heuristics_enabled = 0;
++	if (heuristics_send(ctx, SCID_ACTIVATION_CONTROL))
++		dev_err(&pdev->dev, "Failed to stop LLCC heuristics firmware thread\n");
+ }
+ 
+ static const struct of_device_id heuristics_scid_table[] = {
+--- a/drivers/gpio/gpio-mi-t1.c
++++ b/drivers/gpio/gpio-mi-t1.c
+@@ -33,13 +33,14 @@
+ #include <linux/remoteproc/qcom_rproc.h>
+ 
+ #define MI_T1_GPIO_COUN_MAX 20
+-static int MI_T1_GPIO_COUNT = 12; //default for N1
++static int MI_T1_GPIO_COUNT = 4; //default for N1
+ static int FIRST_GPIO_ID = 0;
+ static bool b_legacy_drv = true;
+ #define MI_T1_MODE_MSK (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH) /*664*/
+ #define MI_T1_GPIO_PROC_NAME "modem_t1_gpio_ctrl"
+-extern bool __clk_is_enabled(struct clk *clk);
++
+ static bool clk_reg = false;
++static bool mi_t1_bound;
+ //T2 modem crah recover add
+ static bool T2_reg = false;
+ static bool T2_lock_reg = false;
+@@ -85,7 +86,12 @@
+ 	char *driver_name;
+ 	dev_t mi_t1_major;
+ 	struct class *mi_t1_class;
+-	struct device *chardev;
++	struct device chardev;
++	bool removed;
++	bool clk_enabled;
++	bool char_registered;
++	bool sysfs_registered;
++	struct proc_dir_entry *proc;
+ 	struct cdev cdev;
+ 
+ 	struct clk *clk;
+@@ -131,11 +137,11 @@
+ 		break;
+ 	case QCOM_SSR_BEFORE_SHUTDOWN:
+ 		dev_info(dev, "received modem %s event\n",
+-			 notify_data->crashed ? "crashed" : "stopping");
++			 notify_data && notify_data->crashed ? "crashed" : "stopping");
+ 		if (T2_reg) {
+ 			dev_info(dev, "Enter T2 Modem recover mode\n");
+-			char t2_default_value[12] = "000000000000";
+-			for (int i = 0; i < 12; i++) {
++			char t2_default_value[13] = "000000000000";
++			for (int i = 0; i < MI_T1_GPIO_COUNT; i++) {
+ 				gpio_mi_t1_set_general(mi_t1_data->dev, i,
+ 						       t2_default_value + i, 1);
+ 			}
+@@ -154,7 +160,7 @@
+ 	return NOTIFY_OK;
+ }
+ 
+-int mi_t1_modem_config(struct mi_t1_gpio_data *mi_t1_data)
++static int mi_t1_modem_config(struct mi_t1_gpio_data *mi_t1_data)
+ {
+ 	void *notifier;
+ 
+@@ -171,7 +177,7 @@
+ 	return 0;
+ }
+ 
+-void mi_t1_modem_deconfig(struct mi_t1_gpio_data *mi_t1_data)
++static void mi_t1_modem_deconfig(struct mi_t1_gpio_data *mi_t1_data)
+ {
+ 	struct device *dev = mi_t1_data->dev;
+ 	int ret;
+@@ -190,86 +196,41 @@
+ static ssize_t gpio_mi_t1_set_general(struct device *device, int gpio_type,
+ 				      const char *buf, size_t count)
+ {
+-	int rc = -1;
+-	int gpio = 0;
+-	int dt_gpio_num = 0;
+-	struct mi_t1_gpio_data *mi_t1_data;
+-
+-	mi_t1_data = dev_get_drvdata(device);
+-	gpio = mi_t1_data->data[gpio_type].gpio_num;
+-	dt_gpio_num = mi_t1_data->data[gpio_type].gpio_offset_num;
+-	if (dt_gpio_num == 76) {
+-		dev_info(device, "%s, enter delay gpio\n", __func__);
+-		s64 time;
+-		time = ktime_to_us(ktime_get());
++	struct mi_t1_gpio_data *data = dev_get_drvdata(device);
++	int ret;
++
++	if (!data || gpio_type < 0 || gpio_type >= MI_T1_GPIO_COUNT || !count)
++		return -EINVAL;
++	if (buf[0] != '0' && buf[0] != '1')
++		return -EINVAL;
++	mutex_lock(&data->lock);
++	if (data->removed) {
++		ret = -ENODEV;
++		goto out;
++	}
++	if (data->data[gpio_type].gpio_offset_num == 76)
+ 		udelay(10);
+-		time = ktime_to_us(ktime_get()) - time;
+-		dev_info(device, "%s,  delay time:%lldus\n", __func__, time);
+-	}
+-
+-	mutex_lock(&mi_t1_data->lock);
+-	if (!strncmp(buf, "1", strlen("1"))) {
+-		if (gpio_is_valid(gpio)) {
+-			rc = gpio_direction_output(gpio, 1);
+-			if (rc) {
+-				dev_err(device,
+-					"mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio);
+-				goto unlock_ret;
+-			}
+-		} else {
+-			dev_err(device, "mi_t1 %s: unable to get gpio %d!\n",
+-				__func__, gpio);
+-		}
+-	} else if (!strncmp(buf, "0", strlen("0"))) {
+-		if (gpio_is_valid(gpio)) {
+-			rc = gpio_direction_output(gpio, 0);
+-			if (rc) {
+-				dev_err(device,
+-					"mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio);
+-				goto unlock_ret;
+-			}
+-		} else {
+-			dev_err(device, "mi_t1 %s: unable to get gpio %d!\n",
+-				__func__, gpio);
+-		}
+-	} else {
+-		rc = -EINVAL;
+-		dev_err(device,
+-			"mi_t1 %s: invalid input %s!only 0 or 1 is valid.\n",
+-			__func__, buf);
+-	}
+-
+-unlock_ret:
+-	mutex_unlock(&mi_t1_data->lock);
+-	dev_info(device, "%s, gpio_type [%d] set, rc [%d], buf = %s\n",
+-		 __func__, gpio_type, rc, buf);
+-	return count;
+-}
+-
+-static ssize_t gpio_mi_t1_get_general(struct device *device, int gpio_type,
+-				      char *buf)
+-{
+-	int value = -1;
+-	int gpio = 0;
+-	struct mi_t1_gpio_data *mi_t1_data;
+-	mi_t1_data = dev_get_drvdata(device);
+-
+-	mutex_lock(&mi_t1_data->lock);
+-	gpio = mi_t1_data->data[gpio_type].gpio_num;
+-
+-	if (gpio_is_valid(gpio)) {
+-		value = gpio_get_value(gpio);
+-	} else {
+-		dev_err(device, "mi_t1 %s: unable to get gpio %d!\n", __func__,
+-			gpio);
+-	}
+-	mutex_unlock(&mi_t1_data->lock);
+-
+-	dev_info(device, "%s, gpio_type [%d] get, value [%d]\n", __func__,
+-		 gpio_type, value);
+-	return sysfs_emit(buf, "%d\n", value);
++	ret = gpio_direction_output(data->data[gpio_type].gpio_num, buf[0] - '0');
++out:
++	mutex_unlock(&data->lock);
++	return ret ? ret : count;
++}
++
++static ssize_t gpio_mi_t1_get_general(struct device *device, int gpio_type, char *buf)
++{
++	struct mi_t1_gpio_data *data = dev_get_drvdata(device);
++	int value;
++	if (!data || gpio_type < 0 || gpio_type >= MI_T1_GPIO_COUNT)
++		return -EINVAL;
++	mutex_lock(&data->lock);
++	value = data->removed ? -ENODEV : gpio_get_value_cansleep(data->data[gpio_type].gpio_num);
++	mutex_unlock(&data->lock);
++	return value < 0 ? value : sysfs_emit(buf, "%d\n", value);
++}
++
++static void gpio_mi_t1_free_gpio(void *gpio)
++{
++	gpio_free((unsigned long)gpio);
+ }
+ 
+ static int gpio_mi_t1_reuqest_gpio(struct platform_device *pdev,
+@@ -284,7 +245,7 @@
+ 
+ 	if (idx == -1) {
+ 		dev_err(dev, "Invalid gpio config name: %s", gpio_name);
+-		return -1;
++		return -EINVAL;
+ 	}
+ 
+ 	gpio_num = of_get_named_gpio(np, gpio_name, 0);
+@@ -293,23 +254,19 @@
+ 			gpio_num);
+ 	}
+ 
+-	ret = gpio_direction_output(gpio_num, gpio_defalut_value[idx]);
+-	dev_info(dev, "mi_t1_gpio %s, idx =%d\n", gpio_name, idx);
+-	if (ret) {
+-		dev_err(dev, "fail to set gpio %s !\n", gpio_name);
+-	}
+-
+-	if (idx == 0) {
++	if (gpio_num < 0)
++		return gpio_num;
++	ret = gpio_request_one(gpio_num,
++				    gpio_defalut_value[idx] ? GPIOF_OUT_INIT_HIGH : GPIOF_OUT_INIT_LOW,
++				    gpio_name);
++	if (ret)
++		return ret;
++	ret = devm_add_action_or_reset(dev, gpio_mi_t1_free_gpio, (void *)(unsigned long)gpio_num);
++	if (ret)
++		return ret;
++	if (!idx)
+ 		gpio_offset = gpio_num - FIRST_GPIO_ID;
+-	}
+ 	mi_t1_data->data[idx].gpio_offset_num = gpio_num - gpio_offset;
+-
+-	ret = devm_gpio_request(dev, gpio_num, gpio_name);
+-	if (ret) {
+-		dev_err(dev, "Request gpio failed %s, error: %d.\n", gpio_name,
+-			gpio_num);
+-		return ret;
+-	}
+ 
+ 	dev_info(dev, "mi_t1_gpio %s, #%u. offset=%u\n", gpio_name, gpio_num,
+ 		 mi_t1_data->data[idx].gpio_offset_num);
+@@ -320,24 +277,23 @@
+ 
+ static int mi_t1_gpio_open(struct inode *inode, struct file *file)
+ {
++	struct mi_t1_gpio_data *data = container_of(inode->i_cdev, struct mi_t1_gpio_data, cdev);
+ 	int ret = 0;
+-	struct mi_t1_gpio_data *mi_t1_data =
+-		container_of(inode->i_cdev, struct mi_t1_gpio_data, cdev);
+-	struct device *dev = mi_t1_data->chardev;
+-
+-	pr_info("Inside %s\n", __func__);
+-	get_device(dev);
++	mutex_lock(&data->lock);
++	if (data->removed)
++		ret = -ENODEV;
++	else {
++		get_device(&data->chardev);
++		file->private_data = data;
++	}
++	mutex_unlock(&data->lock);
+ 	return ret;
+ }
+ 
+ static int mi_t1_gpio_release(struct inode *inode, struct file *file)
+ {
+-	struct mi_t1_gpio_data *mi_t1_data =
+-		container_of(inode->i_cdev, struct mi_t1_gpio_data, cdev);
+-	struct device *dev = mi_t1_data->chardev;
+-
+-	pr_info("Inside %s\n", __func__);
+-	put_device(dev);
++	struct mi_t1_gpio_data *data = file->private_data;
++	put_device(&data->chardev);
+ 	return 0;
+ }
+ 
+@@ -420,155 +376,42 @@
+ 	.attrs = attributes,
+ };
+ 
+-static long mi_t1_gpio_ioctl(struct file *file, unsigned int ioctl_num,
+-			     unsigned long __user ioctl_param)
+-{
+-	int ret = 0;
+-
+-	void __user *argp = (void __user *)ioctl_param;
+-	int __user *p = argp;
+-	int gpio_num;
+-	int gpio_value = 0;
+-
+-	struct mi_t1_gpio_data *mi_t1_data = container_of(
+-		file->f_inode->i_cdev, struct mi_t1_gpio_data, cdev);
+-
+-	pr_info("%s ioctl num %u\n", __func__, ioctl_num);
+-	switch (ioctl_num) {
+-	case MI_T1_IOCTL_GPIO_SATELLITE_CTL_SET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_SATELLITE_CTL_SET !\n");
+-		get_user(gpio_value, p);
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_SATELLITE_CTL].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			ret = gpio_direction_output(gpio_num, gpio_value);
+-			if (ret) {
+-				pr_info("mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio_num);
+-			}
+-		} else {
+-			pr_info("mi_t1 %s: unable to get gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_WWAN_WLAN_1_SET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_WWAN_WLAN_1_SET !\n");
+-		get_user(gpio_value, p);
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_WWAN_WLAN_1].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			ret = gpio_direction_output(gpio_num, gpio_value);
+-			if (ret) {
+-				pr_info("mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio_num);
+-			}
+-		} else {
+-			pr_info("mi_t1 %s: unable to get gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_WWAN_WLAN_2_SET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_WWAN_WLAN_2_SET !\n");
+-		get_user(gpio_value, p);
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_WWAN_WLAN_2].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			ret = gpio_direction_output(gpio_num, gpio_value);
+-			if (ret) {
+-				pr_info("mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio_num);
+-			}
+-		} else {
+-			pr_info("mi_t1 %s: unable to get gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_SATELLITE_CTL_GET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_SATELLITE_CTL_GET !\n");
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_SATELLITE_CTL].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			gpio_value = gpio_get_value(gpio_num);
+-			put_user(gpio_value, p);
+-		} else {
+-			pr_info("mi_t1 %s: unable to read gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_WWAN_WLAN_1_GET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_WWAN_WLAN_1_GET !\n");
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_WWAN_WLAN_1].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			gpio_value = gpio_get_value(gpio_num);
+-			put_user(gpio_value, p);
+-		} else {
+-			pr_info("mi_t1 %s: unable to read gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_WWAN_WLAN_2_GET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_WWAN_WLAN_1_GET !\n");
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_T1_GPIO_WWAN_WLAN_2].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			gpio_value = gpio_get_value(gpio_num);
+-			put_user(gpio_value, p);
+-		} else {
+-			pr_info("mi_t1 %s: unable to read gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_QM13111_SET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_QM13111_SET !\n");
+-		get_user(gpio_value, p);
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_ANT_GPIO_QM13111].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			ret = gpio_direction_output(gpio_num, gpio_value);
+-			if (ret) {
+-				pr_info("mi_t1 %s: fail to set gpio %d !\n",
+-					__func__, gpio_num);
+-			}
+-		} else {
+-			pr_info("mi_t1 %s: unable to get gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	case MI_T1_IOCTL_GPIO_QM13111_GET:
+-		pr_info("mi_t1 MI_T1_IOCTL_GPIO_QM13111_GET !\n");
+-		if (!(mi_t1_data->data))
+-			break;
+-		gpio_num = mi_t1_data->data[MI_ANT_GPIO_QM13111].gpio_num;
+-		if (gpio_is_valid(gpio_num)) {
+-			gpio_value = gpio_get_value(gpio_num);
+-			put_user(gpio_value, p);
+-		} else {
+-			pr_info("mi_t1 %s: unable to read gpio %d!\n", __func__,
+-				gpio_num);
+-		}
+-		break;
+-
+-	default:
+-		pr_err("%s Entered default. Invalid ioctl num %u", __func__,
+-		       ioctl_num);
+-		ret = -EINVAL;
+-		break;
+-	}
++static long mi_t1_gpio_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct mi_t1_gpio_data *data = file->private_data;
++	int value, index, ret = 0;
++	bool write;
++	void __user *user = (void __user *)arg;
++
++	switch (cmd) {
++	case MI_T1_IOCTL_GPIO_SATELLITE_CTL_SET: index = 0; write = true; break;
++	case MI_T1_IOCTL_GPIO_WWAN_WLAN_1_SET: index = 1; write = true; break;
++	case MI_T1_IOCTL_GPIO_WWAN_WLAN_2_SET: index = 2; write = true; break;
++	case MI_T1_IOCTL_GPIO_QM13111_SET: index = 3; write = true; break;
++	case MI_T1_IOCTL_GPIO_SATELLITE_CTL_GET: index = 0; write = false; break;
++	case MI_T1_IOCTL_GPIO_WWAN_WLAN_1_GET: index = 1; write = false; break;
++	case MI_T1_IOCTL_GPIO_WWAN_WLAN_2_GET: index = 2; write = false; break;
++	case MI_T1_IOCTL_GPIO_QM13111_GET: index = 3; write = false; break;
++	default: return -ENOTTY;
++	}
++	if (index >= MI_T1_GPIO_COUNT)
++		return -EINVAL;
++	if (write) {
++		if (get_user(value, (int __user *)user))
++			return -EFAULT;
++		if (value != 0 && value != 1)
++			return -EINVAL;
++	}
++	mutex_lock(&data->lock);
++	if (data->removed)
++		ret = -ENODEV;
++	else if (write)
++		ret = gpio_direction_output(data->data[index].gpio_num, value);
++	else {
++		value = gpio_get_value_cansleep(data->data[index].gpio_num);
++		ret = value < 0 ? value : put_user(value, (int __user *)user);
++	}
++	mutex_unlock(&data->lock);
+ 	return ret;
+ }
+ 
+@@ -578,47 +421,33 @@
+ 	.release = mi_t1_gpio_release,
+ };
+ 
+-static int set_clk(struct device *dev, int clk_value)
+-{
++static int set_clk(struct device *dev, int enable)
++{
++	struct mi_t1_gpio_data *data = dev_get_drvdata(dev);
+ 	int ret = 0;
+-	int clk_state = clk_value;
+-	struct mi_t1_gpio_data *mi_t1_data;
+-	pr_info("%s  enter\n", __func__);
+-
+-	if (!dev) {
+-		pr_err("%s: Invalid parameter\n", __func__);
+-		return -EINVAL;
+-	}
+-	mi_t1_data = dev_get_drvdata(dev);
+-	if (!mi_t1_data) {
+-		pr_err("%s: Failed to get device data\n", __func__);
+-		return -ENODEV;
+-	}
+-	if (clk_state && !__clk_is_enabled(mi_t1_data->clk)) {
+-		ret = clk_prepare_enable(mi_t1_data->clk);
+-		if (ret) {
+-			pr_err("%s: Failed to enable clk: %d\n", __func__, ret);
+-			return ret;
+-		}
+-		pr_info("%s: Successfully enabled clk\n", __func__);
+-	} else if (!clk_state && __clk_is_enabled(mi_t1_data->clk)) {
+-		clk_disable_unprepare(mi_t1_data->clk);
+-		pr_info("%s: Successfully disabled clk\n", __func__);
+-	} else {
+-		pr_info("%s: Clk is already in the undesired state\n",
+-			__func__);
+-	}
++	mutex_lock(&data->lock);
++	if (data->removed)
++		ret = -ENODEV;
++	else if (enable && !data->clk_enabled) {
++		ret = clk_prepare_enable(data->clk);
++		if (!ret)
++			data->clk_enabled = true;
++	} else if (!enable && data->clk_enabled) {
++		clk_disable_unprepare(data->clk);
++		data->clk_enabled = false;
++	}
++	mutex_unlock(&data->lock);
+ 	return ret;
+ }
+ 
+-ssize_t t1_gpio_write(struct file *file, const char __user *buffer,
++static ssize_t t1_gpio_write(struct file *file, const char __user *buffer,
+ 		      size_t count, loff_t *ops)
+ {
+ 	char config[MI_T1_GPIO_COUN_MAX + 1];
+ 	char clk_config[256] = { 0 };
+ 	int i = 0;
+ 	struct mi_t1_gpio_data *mi_t1_data = NULL;
+-	mi_t1_data = (struct mi_t1_gpio_data *)file_inode(file)->i_private;
++	mi_t1_data = (struct mi_t1_gpio_data *)pde_data(file_inode(file));
+ 	if (T2_lock_reg) {
+ 		pr_info("%s  T2_lock_reg is true do not receive config \n",
+ 			__func__);
+@@ -631,10 +460,10 @@
+ 	if (count <= 0) {
+ 		pr_err("%s  failed. support count: %d : write count:%zu",
+ 		       __func__, MI_T1_GPIO_COUNT, count);
+-		return -1;
++		return -EINVAL;
+ 	}
+ 	if (clk_reg) {
+-		if (count > sizeof(clk_config)) {
++		if (count >= sizeof(clk_config)) {
+ 			return -EINVAL;
+ 		}
+ 		if (copy_from_user(clk_config, buffer, count)) {
+@@ -643,12 +472,12 @@
+ 		pr_info("%s  clk_config= %s\n", __func__, clk_config);
+ 		if (strncmp(clk_config, "ON", 2) == 0) {
+ 			pr_info("%s  enter clk enable\n", __func__);
+-			set_clk(mi_t1_data->dev, 1);
+-			return count;
++			int ret = set_clk(mi_t1_data->dev, 1);
++			return ret ? ret : count;
+ 		} else if (strncmp(clk_config, "OFF", 3) == 0) {
+ 			pr_info("%s enter clk disable\n", __func__);
+-			set_clk(mi_t1_data->dev, 0);
+-			return count;
++			int ret = set_clk(mi_t1_data->dev, 0);
++			return ret ? ret : count;
+ 		} else {
+ 			printk(KERN_INFO "Invalid input clk set\n");
+ 		}
+@@ -708,7 +537,7 @@
+ }
+ static int t1_gpio_open(struct inode *inode, struct file *file)
+ {
+-	return single_open(file, t1_gpio_show, file_inode(file)->i_private);
++	return single_open(file, t1_gpio_show, pde_data(inode));
+ }
+ 
+ static struct proc_ops t1_gpio_fops = {
+@@ -719,170 +548,137 @@
+ 	.proc_write = t1_gpio_write,
+ };
+ 
+-static int gpio_mi_t1_reg_chrdev(struct mi_t1_gpio_data *mi_t1_data)
+-{
+-	int ret = 0;
+-
+-	mi_t1_data->driver_name = "mi_t1_chip";
+-	ret = alloc_chrdev_region(&mi_t1_data->mi_t1_major, 0,
+-				  MINOR_NUMBER_COUNT, mi_t1_data->driver_name);
+-	if (ret < 0) {
+-		pr_err("%s alloc_chr_dev_region failed ret : %d\n", __func__,
+-		       ret);
+-		return ret;
+-	}
+-	pr_info("%s major number %d", __func__, MAJOR(mi_t1_data->mi_t1_major));
+-
+-	mi_t1_data->mi_t1_class = class_create(mi_t1_data->driver_name);
+-	if (IS_ERR(mi_t1_data->mi_t1_class)) {
+-		ret = PTR_ERR(mi_t1_data->mi_t1_class);
+-		pr_err("%s class create failed. ret : %d", __func__, ret);
+-		goto err_class;
+-	}
+-
+-	mi_t1_data->chardev = device_create(mi_t1_data->mi_t1_class, NULL,
+-					    mi_t1_data->mi_t1_major, NULL,
+-					    mi_t1_data->driver_name);
+-	if (IS_ERR(mi_t1_data->chardev)) {
+-		ret = PTR_ERR(mi_t1_data->chardev);
+-		pr_err("%s device create failed ret : %d\n", __func__, ret);
+-		goto err_device;
+-	}
+-
+-	cdev_init(&mi_t1_data->cdev, &mi_t1_gpio_fops);
+-	ret = cdev_add(&mi_t1_data->cdev, mi_t1_data->mi_t1_major, 1);
+-	if (ret) {
+-		pr_err("%s cdev add failed, ret : %d\n", __func__, ret);
+-		goto err_cdev;
+-	}
+-	return ret;
+-
+-err_cdev:
+-	device_destroy(mi_t1_data->mi_t1_class, mi_t1_data->mi_t1_major);
+-err_device:
+-	class_destroy(mi_t1_data->mi_t1_class);
+-err_class:
+-	unregister_chrdev_region(0, MINOR_NUMBER_COUNT);
+-	return ret;
++static void gpio_mi_t1_release_device(struct device *dev)
++{
++	kfree(container_of(dev, struct mi_t1_gpio_data, chardev));
++}
++
++static void gpio_mi_t1_cleanup(struct mi_t1_gpio_data *data)
++{
++	if (data->notifier)
++		mi_t1_modem_deconfig(data);
++	proc_remove(data->proc);
++	if (data->sysfs_registered)
++		sysfs_remove_group(&data->dev->kobj, &attribute_group);
++	mutex_lock(&data->lock);
++	data->removed = true;
++	if (data->clk_enabled) {
++		clk_disable_unprepare(data->clk);
++		data->clk_enabled = false;
++	}
++	mutex_unlock(&data->lock);
++	if (data->char_registered)
++		cdev_device_del(&data->cdev, &data->chardev);
++	if (data->mi_t1_class)
++		class_destroy(data->mi_t1_class);
++	if (data->mi_t1_major)
++		unregister_chrdev_region(data->mi_t1_major, MINOR_NUMBER_COUNT);
++	device_init_wakeup(data->dev, false);
++	put_device(&data->chardev);
+ }
+ 
+ static int gpio_mi_t1_probe(struct platform_device *pdev)
+ {
+-	int i;
+-	int ret = 0;
+ 	struct device *dev = &pdev->dev;
+-	struct mi_t1_gpio_data *mi_t1_data;
+-	u32 config_gpio_count = 0;
+-	const char *clk_names = NULL;
+-	pr_info("%s.\n", __func__);
+-
+-	mi_t1_data =
+-		devm_kzalloc(dev, sizeof(struct mi_t1_gpio_data), GFP_KERNEL);
+-	if (!mi_t1_data) {
+-		dev_err(dev, "Memor allocation error!.\n");
++	struct mi_t1_gpio_data *data;
++	u32 count, first = 0;
++	const char *clk_name;
++	int ret, i;
++
++	/* The native ABI publishes one global class and proc entry. */
++	if (mi_t1_bound)
++		return -EBUSY;
++	b_legacy_drv = !of_find_property(dev->of_node, "gpio-count", NULL);
++	count = ARRAY_SIZE(mi_t1_gpio_names_legacy);
++	if (!b_legacy_drv) {
++		ret = of_property_read_u32(dev->of_node, "gpio-count", &count);
++		if (ret || !count || count > ARRAY_SIZE(mi_t1_gpio_names))
++			return -EINVAL;
++	}
++	MI_T1_GPIO_COUNT = count;
++	of_property_read_u32(dev->of_node, "first-gpio", &first);
++	if (first > INT_MAX)
++		return -EINVAL;
++	FIRST_GPIO_ID = first;
++	clk_reg = false;
++	T2_reg = false;
++	T2_lock_reg = false;
++	data = kzalloc(sizeof(*data), GFP_KERNEL);
++	if (!data)
+ 		return -ENOMEM;
+-	}
+-	ret = of_property_read_u32(dev->of_node, "gpio-count",
+-				   &config_gpio_count);
+-	if (ret == 0) {
+-		if (MI_T1_GPIO_COUN_MAX <= config_gpio_count) {
+-			dev_err(dev,
+-				"Too many gpio controlled,  please enlarge MI_T1_GPIO_COUN_MAX if it is right !\n");
+-			return -ENOMEM;
++	data->dev = dev;
++	mutex_init(&data->lock);
++	device_initialize(&data->chardev);
++	data->chardev.release = gpio_mi_t1_release_device;
++	platform_set_drvdata(pdev, data);
++	data->data = devm_kcalloc(dev, count, sizeof(*data->data), GFP_KERNEL);
++	if (!data->data) {
++		ret = -ENOMEM;
++		goto cleanup;
++	}
++	for (i = 0; i < count; i++) {
++		ret = gpio_mi_t1_reuqest_gpio(pdev, data,
++			b_legacy_drv ? mi_t1_gpio_names_legacy[i] : mi_t1_gpio_names[i], i);
++		if (ret)
++			goto cleanup;
++	}
++	if (!of_property_read_string(dev->of_node, "clock-names", &clk_name)) {
++		data->clk = devm_clk_get(dev, clk_name);
++		if (IS_ERR(data->clk)) {
++			ret = PTR_ERR(data->clk);
++			goto cleanup;
+ 		}
+-		MI_T1_GPIO_COUNT = config_gpio_count;
+-		b_legacy_drv = false;
+-		pr_info("t1_gpio_count = %d.\n", config_gpio_count);
+-	} else {
+-		dev_err(dev,
+-			" Get t1_gpio_count failed %d use default value 4 !\n",
+-			ret);
+-		ret = 0;
+-	}
+-
+-	config_gpio_count = 0;
+-	ret = of_property_read_u32(dev->of_node, "first-gpio",
+-				   &config_gpio_count);
+-	pr_info("first gpio = %d.\n", config_gpio_count);
+-	FIRST_GPIO_ID = config_gpio_count;
+-	mi_t1_data->data = devm_kcalloc(dev, MI_T1_GPIO_COUNT,
+-					sizeof(struct gpio_data), GFP_KERNEL);
+-	if (!mi_t1_data->data) {
+-		dev_err(dev, "Memor allocation error!.\n");
+-		return -ENOMEM;
+-	}
+-
+-	ret = of_property_read_string(dev->of_node, "clock-names", &clk_names);
+-	if (ret == 0) {
+-		pr_info("clock-names = %s.\n", clk_names);
+-		mi_t1_data->clk = devm_clk_get(dev, clk_names);
+-		if (!IS_ERR(mi_t1_data->clk)) {
+-			clk_reg = true;
+-			T2_reg = true;
+-			pr_info("clk_get success\n");
+-			if (__clk_is_enabled(mi_t1_data->clk)) {
+-				clk_disable_unprepare(mi_t1_data->clk);
+-				pr_info("clk default is set disable \n");
+-			}
+-		} else {
+-			pr_err("clk_get failed\n");
+-		}
+-	} else {
+-		dev_err(dev,
+-			" This project does not support clocks %d use default value !\n",
+-			ret);
+-		ret = 0;
+-	}
+-
+-	mutex_init(&mi_t1_data->lock);
+-	mi_t1_data->dev = dev;
+-	platform_set_drvdata(pdev, mi_t1_data);
+-
+-	for (i = 0; i < MI_T1_GPIO_COUNT; i++) {
+-		gpio_mi_t1_reuqest_gpio(pdev, mi_t1_data,
+-					b_legacy_drv ?
+-						mi_t1_gpio_names_legacy[i] :
+-						mi_t1_gpio_names[i],
+-					i);
+-	}
+-
++		clk_reg = true;
++		T2_reg = true;
++	}
+ 	if (b_legacy_drv) {
+ 		ret = sysfs_create_group(&dev->kobj, &attribute_group);
+-		if (ret < 0) {
+-			dev_err(dev, "Failed to create sysfs node.\n");
+-			return -EINVAL;
+-		}
+-		mi_t1_gpio_fops.unlocked_ioctl = mi_t1_gpio_ioctl;
+-	}
+-
+-	device_init_wakeup(dev, true);
+-	ret = gpio_mi_t1_reg_chrdev(mi_t1_data);
+-	if (ret) {
+-		pr_err("%s register char dev failed, rc : %d", __func__, ret);
+-		return ret;
+-	}
+-
+-	ret = mi_t1_modem_config(mi_t1_data);
+-	if (ret) {
+-		mi_t1_modem_deconfig(mi_t1_data);
+-	}
+-
+-	proc_create_data(MI_T1_GPIO_PROC_NAME, 0777, NULL, &t1_gpio_fops,
+-			 (void *)mi_t1_data);
++		if (ret)
++			goto cleanup;
++		data->sysfs_registered = true;
++	}
++	ret = alloc_chrdev_region(&data->mi_t1_major, 0, 1, "mi_t1_chip");
++	if (ret)
++		goto cleanup;
++	data->mi_t1_class = class_create("mi_t1_chip");
++	if (IS_ERR(data->mi_t1_class)) {
++		ret = PTR_ERR(data->mi_t1_class);
++		data->mi_t1_class = NULL;
++		goto cleanup;
++	}
++	data->chardev.class = data->mi_t1_class;
++	data->chardev.parent = dev;
++	data->chardev.devt = data->mi_t1_major;
++	ret = dev_set_name(&data->chardev, "mi_t1_chip");
++	if (ret)
++		goto cleanup;
++	mi_t1_gpio_fops.unlocked_ioctl = b_legacy_drv ? mi_t1_gpio_ioctl : NULL;
++	cdev_init(&data->cdev, &mi_t1_gpio_fops);
++	data->cdev.owner = THIS_MODULE;
++	ret = cdev_device_add(&data->cdev, &data->chardev);
++	if (ret)
++		goto cleanup;
++	data->char_registered = true;
++	ret = mi_t1_modem_config(data);
++	if (ret)
++		goto cleanup;
++	data->proc = proc_create_data(MI_T1_GPIO_PROC_NAME, 0664, NULL, &t1_gpio_fops, data);
++	if (!data->proc) {
++		ret = -ENOMEM;
++		goto cleanup;
++	}
++	mi_t1_bound = true;
++	return 0;
++cleanup:
++	gpio_mi_t1_cleanup(data);
++	platform_set_drvdata(pdev, NULL);
+ 	return ret;
+ }
+ 
+-static int gpio_mi_t1_remove(struct platform_device *pdev)
+-{
+-	struct mi_t1_gpio_data *mi_t1_data = platform_get_drvdata(pdev);
+-	mi_t1_modem_deconfig(mi_t1_data);
+-	remove_proc_entry(MI_T1_GPIO_PROC_NAME, NULL);
+-	sysfs_remove_group(&pdev->dev.kobj, &attribute_group);
+-	dev_pm_clear_wake_irq(mi_t1_data->dev);
+-
+-	mutex_destroy(&mi_t1_data->lock);
+-
+-	return 0;
++static void gpio_mi_t1_remove(struct platform_device *pdev)
++{
++	gpio_mi_t1_cleanup(platform_get_drvdata(pdev));
++	mi_t1_bound = false;
+ }
+ 
+ #if defined(CONFIG_OF)
+--- a/drivers/soc/qcom/gh_tlmm_vm_mem_access.c
++++ b/drivers/soc/qcom/gh_tlmm_vm_mem_access.c
+@@ -25,8 +25,8 @@
+ 	gh_vmid_t vmid;
+ 	int label;
+ 	gh_memparcel_handle_t vm_mem_handle;
+-	u32 *iomem_bases;
+-	u32 *iomem_sizes;
++	phys_addr_t *iomem_bases;
++	resource_size_t *iomem_sizes;
+ 	u32 iomem_list_size;
+ };
+ 
+@@ -34,6 +34,7 @@
+ 	struct device *dev;
+ 	struct notifier_block guest_memshare_nb;
+ 	void *mem_cookie;
++	bool rm_registered;
+ 	gh_memparcel_handle_t client_vm_mem_handle;
+ 	struct gh_tlmm_vm_info client_vm_info;
+ 	struct list_head vm_info;
+@@ -45,14 +46,20 @@
+ 	gh_vmid_t vmid;
+ 	gh_vmid_t primary_vmid;
+ 
+-	ghd_rm_get_vmid(vm_name, &vmid);
+-	ghd_rm_get_vmid(GH_PRIMARY_VM, &primary_vmid);
++	int ret;
++
++	ret = ghd_rm_get_vmid(vm_name, &vmid);
++	if (ret)
++		return ERR_PTR(ret);
++	ret = ghd_rm_get_vmid(GH_PRIMARY_VM, &primary_vmid);
++	if (ret)
++		return ERR_PTR(ret);
+ 
+ 	acl_desc = kzalloc(offsetof(struct gh_acl_desc, acl_entries[2]),
+ 			GFP_KERNEL);
+ 
+ 	if (!acl_desc)
+-		return ERR_PTR(ENOMEM);
++		return ERR_PTR(-ENOMEM);
+ 
+ 	acl_desc->n_acl_entries = 2;
+ 	acl_desc->acl_entries[0].vmid = vmid;
+@@ -72,7 +79,7 @@
+ 	sgl_desc = kzalloc(offsetof(struct gh_sgl_desc,
+ 			sgl_entries[vm_info->iomem_list_size]), GFP_KERNEL);
+ 	if (!sgl_desc)
+-		return ERR_PTR(ENOMEM);
++		return ERR_PTR(-ENOMEM);
+ 
+ 	sgl_desc->n_sgl_entries = vm_info->iomem_list_size;
+ 
+@@ -91,6 +98,8 @@
+ 	gh_memparcel_handle_t mem_handle;
+ 	int rc = 0;
+ 
++	if (vm_info->vm_mem_handle)
++		return -EBUSY;
+ 	acl_desc = gh_tlmm_vm_get_acl(vm_info->vm_name);
+ 	if (IS_ERR(acl_desc)) {
+ 		dev_err(vm_info->tlmm_data->dev,
+@@ -136,7 +145,7 @@
+ 
+ 	tlmm_data = container_of(this, struct gh_tlmm_data, guest_memshare_nb);
+ 
+-	if (cmd != GH_RM_NOTIF_VM_STATUS)
++	if (cmd != GH_RM_NOTIF_VM_STATUS || !data)
+ 		return NOTIFY_DONE;
+ 
+ 	/*
+@@ -175,6 +184,8 @@
+ 	if (rc)
+ 		dev_err(tlmm_data->dev, "VM mem release failed rc:%d\n", rc);
+ 
++	if (rc)
++		return rc;
+ 	rc = gh_rm_mem_notify(tlmm_data->client_vm_mem_handle,
+ 			      GH_RM_MEM_NOTIFY_OWNER_RELEASED,
+ 			      GH_MEM_NOTIFIER_TAG_TLMM, 0);
+@@ -182,7 +193,8 @@
+ 		dev_err(tlmm_data->dev,
+ 			"Failed to notify mem release to PVM rc:%d\n", rc);
+ 
+-	tlmm_data->client_vm_mem_handle = 0;
++	if (!rc)
++		tlmm_data->client_vm_mem_handle = 0;
+ 	return rc;
+ }
+ 
+@@ -200,7 +212,8 @@
+ 		dev_err(vm_info->tlmm_data->dev,
+ 			"VM mem reclaim failed rc:%d\n", rc);
+ 
+-	vm_info->vm_mem_handle = 0;
++	if (!rc)
++		vm_info->vm_mem_handle = 0;
+ 
+ 	return rc;
+ }
+@@ -215,7 +228,7 @@
+ 	bool ret;
+ 
+ 	num_regs = of_count_phandle_with_args(cn, "tlmm-vm-gpio-list", "#gpio-cells");
+-	if (num_regs < 0) {
++	if (num_regs <= 0 || num_regs > U16_MAX) {
+ 		dev_err(&dev->dev, "Invalid number of gpios specified\n");
+ 		rc = -EINVAL;
+ 		goto vm_error;
+@@ -237,7 +250,7 @@
+ 
+ 	vm_info->iomem_list_size = num_regs;
+ 
+-	vm_info->iomem_bases = kcalloc(num_regs, sizeof(*vm_info->iomem_bases),
++	vm_info->iomem_bases = devm_kcalloc(&dev->dev, num_regs, sizeof(*vm_info->iomem_bases),
+ 								GFP_KERNEL);
+ 	if (!vm_info->iomem_bases) {
+ 		rc = -ENOMEM;
+@@ -274,9 +287,9 @@
+ res_error:
+ 	kfree(res);
+ io_sizes_error:
+-	kfree(vm_info->iomem_sizes);
++
+ io_bases_error:
+-	kfree(vm_info->iomem_bases);
++
+ gpios_error:
+ 	kfree(gpios);
+ vm_error:
+@@ -285,7 +298,8 @@
+ 
+ static int gh_tlmm_vm_populate_vm_info(struct platform_device *dev, struct gh_tlmm_data *tlmm_data)
+ {
+-	int rc = 0, vmid, label;
++	int rc = 0;
++	u32 vmid, label;
+ 	struct device_node *np = dev->dev.of_node;
+ 	struct device_node *cn = NULL;
+ 	gh_memparcel_handle_t __maybe_unused vm_mem_handle;
+@@ -324,6 +338,10 @@
+ 					"Failed to find dest vmid:%d\n", rc);
+ 				goto free_child;
+ 			}
++			if (vmid > U16_MAX) {
++				rc = -EINVAL;
++				goto free_child;
++			}
+ 			vm_info->vmid = vmid;
+ 			rc = of_property_read_u32(cn, "qcom,label", &label);
+ 			if (rc) {
+@@ -395,7 +413,8 @@
+ static int gh_tlmm_vm_mem_access_probe(struct platform_device *pdev)
+ {
+ 	void __maybe_unused *mem_cookie;
+-	int owner_vmid, ret;
++	u32 owner_vmid;
++	int ret;
+ 	struct device_node *node;
+ 	gh_vmid_t vmid;
+ 	struct gh_tlmm_data *tlmm_data;
+@@ -406,10 +425,12 @@
+ 		return -ENOMEM;
+ 	platform_set_drvdata(pdev, tlmm_data);
+ 	tlmm_data->dev = dev;
+-
+-	if (gh_tlmm_vm_populate_vm_info(pdev, tlmm_data)) {
++	INIT_LIST_HEAD(&tlmm_data->vm_info);
++
++	ret = gh_tlmm_vm_populate_vm_info(pdev, tlmm_data);
++	if (ret) {
+ 		dev_err(dev, "Failed to populate TLMM VM info\n");
+-		return -EINVAL;
++		return ret;
+ 	}
+ 
+ 	node = of_find_compatible_node(NULL, NULL, "qcom,gunyah-vm-id-1.0");
+@@ -422,6 +443,7 @@
+ 	}
+ 
+ 	ret = of_property_read_u32(node, "qcom,owner-vmid", &owner_vmid);
++	of_node_put(node);
+ 	if (ret) {
+ 		/* GH_PRIMARY_VM */
+ 		mem_cookie = gh_mem_notifier_register(
+@@ -440,35 +462,38 @@
+ 
+ 		tlmm_data->guest_memshare_nb.priority = INT_MAX;
+ 		ret = gh_rm_register_notifier(&tlmm_data->guest_memshare_nb);
+-		if (ret)
++		if (ret) {
++			gh_mem_notifier_unregister(tlmm_data->mem_cookie);
+ 			return ret;
++		}
++		tlmm_data->rm_registered = true;
+ 	} else {
+ 		ret = ghd_rm_get_vmid(GH_SELF_VM, &vmid);
+ 		if (ret)
+ 			return ret;
+ 
+ 
+-		gh_tlmm_vm_mem_release(tlmm_data);
++		ret = gh_tlmm_vm_mem_release(tlmm_data);
++		if (ret)
++			return ret;
+ 	}
+ 
+ 	return 0;
+ 
+ }
+ 
+-static int gh_tlmm_vm_mem_access_remove(struct platform_device *pdev)
+-{
+-	struct device_node *np = pdev->dev.of_node;
+-	bool master;
+-	struct gh_tlmm_data *tlmm_data;
+-
+-	tlmm_data = platform_get_drvdata(pdev);
+-
+-	master = of_property_read_bool(np, "qcom,master");
+-	if (master)
+-		gh_mem_notifier_unregister(tlmm_data->mem_cookie);
+-	gh_rm_unregister_notifier(&tlmm_data->guest_memshare_nb);
+-
+-	return 0;
++static void gh_tlmm_vm_mem_access_remove(struct platform_device *pdev)
++{
++	struct gh_tlmm_data *data = platform_get_drvdata(pdev);
++	struct gh_tlmm_vm_info *vm;
++	if (data->rm_registered)
++		gh_rm_unregister_notifier(&data->guest_memshare_nb);
++	if (data->mem_cookie)
++		gh_mem_notifier_unregister(data->mem_cookie);
++	list_for_each_entry(vm, &data->vm_info, list)
++		if (vm->vm_mem_handle && gh_tlmm_vm_mem_reclaim(vm))
++			dev_err(data->dev, "TLMM IO parcel %u remains owned by VM %u\n",
++				vm->vm_mem_handle, vm->vmid);
+ }
+ 
+ static const struct of_device_id gh_tlmm_vm_mem_access_of_match[] = {
+--- a/drivers/soc/qcom/qcom_stats.c
++++ b/drivers/soc/qcom/qcom_stats.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/cdev.h>
++#include <linux/srcu.h>
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
+ #include <linux/device.h>
+@@ -145,7 +146,9 @@
+ 	struct dentry *root;
+ 	dev_t		dev_no;
+ 	struct class	*stats_class;
+-	struct device	*stats_device;
++	struct device stats_device;
++	resource_size_t resource_size;
++	bool char_registered;
+ 	struct cdev	stats_cdev;
+ 	struct mutex lock;
+ 	struct qmp *qmp;
+@@ -153,6 +156,8 @@
+ };
+ 
+ static struct stats_drvdata *drv;
++DEFINE_SRCU(stats_srcu);
++static bool stats_online;
+ 
+ struct sleep_stats {
+ 	u32 stat_type;
+@@ -198,7 +203,22 @@
+ 	strim(stat_type);
+ }
+ 
+-bool has_system_slept(bool *debug_aoss)
++static void *qcom_stats_smem_get(u32 host, u32 item, size_t minimum)
++{
++	size_t size;
++	void *data = qcom_smem_get(host, item, &size);
++	if (IS_ERR(data))
++		return data;
++	return size >= minimum ? data : ERR_PTR(-EINVAL);
++}
++
++static bool qcom_stats_range_valid(void __iomem *reg, size_t bytes)
++{
++	size_t offset = (unsigned long)reg - (unsigned long)drv->base;
++	return offset <= drv->resource_size && bytes <= drv->resource_size - offset;
++}
++
++static bool has_system_slept_active(bool *debug_aoss)
+ {
+ 	int i;
+ 	bool sleep_flag = true;
+@@ -226,9 +246,19 @@
+ 
+ 	return sleep_flag;
+ }
++bool has_system_slept(bool *debug_aoss)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	bool ret = false;
++	if (READ_ONCE(stats_online))
++		ret = has_system_slept_active(debug_aoss);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(has_system_slept);
+ 
+-bool has_subsystem_slept(void)
++static bool has_subsystem_slept_active(void)
+ {
+ 	int i;
+ 	bool sleep_flag = true;
+@@ -247,19 +277,37 @@
+ 
+ 	return sleep_flag;
+ }
++bool has_subsystem_slept(void)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	bool ret = false;
++	if (READ_ONCE(stats_online))
++		ret = has_subsystem_slept_active();
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(has_subsystem_slept);
+ 
++static void subsystem_sleep_debug_enable_active(bool enable)
++{
++	subsystem_stats_debug_on = enable;
++}
+ void subsystem_sleep_debug_enable(bool enable)
+ {
+-	subsystem_stats_debug_on = enable;
+-}
++	int index = srcu_read_lock(&stats_srcu);
++	if (READ_ONCE(stats_online))
++		subsystem_sleep_debug_enable_active(enable);
++	srcu_read_unlock(&stats_srcu, index);
++}
++
+ EXPORT_SYMBOL_GPL(subsystem_sleep_debug_enable);
+ 
+ static inline int qcom_stats_copy_to_user(unsigned long arg, struct sleep_stats *stats,
+ 					  unsigned long size)
+ {
+ 
+-	return copy_to_user((void __user *)arg, stats, size);
++	return copy_to_user((void __user *)arg, stats, size) ? -EFAULT : 0;
+ }
+ 
+ static inline void qcom_stats_update_accumulated_duration(struct sleep_stats *stats)
+@@ -297,8 +345,10 @@
+ 	int i;
+ 
+ 	*entry_count = readl_relaxed(reg + DDR_STATS_NUM_MODES_ADDR);
+-	if (*entry_count > DDR_STATS_MAX_NUM_MODES) {
++	if (*entry_count > DDR_STATS_MAX_NUM_MODES ||
++	    !qcom_stats_range_valid(reg, DDR_STATS_ENTRY_ADDR + *entry_count * 16)) {
+ 		pr_err("Invalid entry count\n");
++		*entry_count = 0;
+ 		return 0;
+ 	}
+ 
+@@ -308,6 +358,7 @@
+ 		data[i].count = readl_relaxed(reg + DDR_STATS_COUNT_ADDR);
+ 		if ((i >= 0x4) && (ddr_stats_is_freq_overtime(&data[i]))) {
+ 			pr_err("ddr_stats: Freq update failed\n");
++			*entry_count = 0;
+ 			return 0;
+ 		}
+ 
+@@ -325,18 +376,22 @@
+ 
+ static int qcom_stats_device_open(struct inode *inode, struct file *file)
+ {
+-	struct stats_drvdata *drv = NULL;
+-
+-	if (!inode || !inode->i_cdev || !file)
+-		return -EINVAL;
+-
+-	drv = container_of(inode->i_cdev, struct stats_drvdata, stats_cdev);
+-	file->private_data = drv;
+-
++	struct stats_drvdata *data = container_of(inode->i_cdev, struct stats_drvdata, stats_cdev);
++	if (!READ_ONCE(stats_online))
++		return -ENODEV;
++	get_device(&data->stats_device);
++	file->private_data = data;
+ 	return 0;
+ }
+ 
+-int qcom_stats_ddr_freqsync_msg(void)
++static int qcom_stats_device_release(struct inode *inode, struct file *file)
++{
++	struct stats_drvdata *data = file->private_data;
++	put_device(&data->stats_device);
++	return 0;
++}
++
++static int qcom_stats_ddr_freqsync_msg_active(void)
+ {
+ 	static const char buf[MAX_MSG_LEN] = "{class: ddr, action: freqsync}";
+ 	int ret = 0;
+@@ -345,7 +400,7 @@
+ 		return -ENODEV;
+ 
+ 	mutex_lock(&drv->lock);
+-	ret = qmp_send(drv->qmp, buf, sizeof(buf));
++	ret = qmp_send(drv->qmp, "%s", buf);
+ 	if (ret) {
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 		mutex_unlock(&drv->lock);
+@@ -358,6 +413,16 @@
+ 
+ 	return ret;
+ }
++int qcom_stats_ddr_freqsync_msg(void)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = qcom_stats_ddr_freqsync_msg_active();
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(qcom_stats_ddr_freqsync_msg);
+ 
+ static int qcom_stats_ddr_freq_sync(int *modes, struct sleep_stats *stat)
+@@ -396,7 +461,7 @@
+ 	return 0;
+ }
+ 
+-static long qcom_stats_device_ioctl(struct file *file, unsigned int cmd,
++static long qcom_stats_device_ioctl_active(struct file *file, unsigned int cmd,
+ 			     unsigned long arg)
+ {
+ 	struct stats_drvdata *drv = file->private_data;
+@@ -432,22 +497,22 @@
+ 		subsystem = &subsystems[3];
+ 		break;
+ 	case SLPI_IOCTL:
+-		subsystem = &subsystems[4];
++		subsystem = &subsystems[7];
+ 		break;
+ 	case GPU_IOCTL:
+-		subsystem = &subsystems[5];
++		subsystem = &subsystems[8];
+ 		break;
+ 	case DISPLAY_IOCTL:
+-		subsystem = &subsystems[6];
++		subsystem = &subsystems[9];
+ 		break;
+ 	case ADSP_ISLAND_IOCTL:
+-		subsystem = &subsystems[7];
++		subsystem = &subsystems[10];
+ 		break;
+ 	case SLPI_ISLAND_IOCTL:
+-		subsystem = &subsystems[8];
++		subsystem = &subsystems[11];
+ 		break;
+ 	case APSS_IOCTL:
+-		subsystem = &subsystems[9];
++		subsystem = &subsystems[12];
+ 		break;
+ 	case AOSD_IOCTL:
+ 		stats_id = 0;
+@@ -474,7 +539,7 @@
+ 
+ 	if (subsystem) {
+ 		/* Items are allocated lazily, so lookup pointer each time */
+-		temp = qcom_smem_get(subsystem->pid, subsystem->smem_item, NULL);
++		temp = qcom_stats_smem_get(subsystem->pid, subsystem->smem_item, sizeof(struct sleep_stats));
+ 		if (IS_ERR(temp)) {
+ 			ret = -EIO;
+ 			goto exit;
+@@ -491,7 +556,7 @@
+ 		qcom_stats_update_accumulated_duration(stat);
+ 
+ 		ret = qcom_stats_copy_to_user(arg, stat, size);
+-	} else {
++	} else if (cmd == DDR_STATS_IOCTL) {
+ 		int modes = DDR_STATS_MAX_NUM_MODES;
+ 
+ 		ret = qcom_stats_ddr_freq_sync(&modes, stat);
+@@ -499,6 +564,8 @@
+ 			goto exit;
+ 
+ 		ret = qcom_stats_copy_to_user(arg, stat, modes * size);
++	} else {
++		ret = -EOPNOTSUPP;
+ 	}
+ 
+ exit:
+@@ -506,14 +573,26 @@
+ 	mutex_unlock(&sleep_stats_mutex);
+ 	return ret;
+ }
++static long qcom_stats_device_ioctl(struct file *file, unsigned int cmd,
++			     unsigned long arg)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	long ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = qcom_stats_device_ioctl_active(file, cmd, arg);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ 
+ static const struct file_operations qcom_stats_device_fops = {
+ 	.owner		=	THIS_MODULE,
+ 	.open		=	qcom_stats_device_open,
++	.release = qcom_stats_device_release,
+ 	.unlocked_ioctl =	qcom_stats_device_ioctl,
+ };
+ 
+-int ddr_stats_get_freq_count(void)
++static int ddr_stats_get_freq_count_active(void)
+ {
+ 	u32 entry_count, name;
+ 	u32 freq_count = 0;
+@@ -543,9 +622,19 @@
+ 
+ 	return freq_count;
+ }
++int ddr_stats_get_freq_count(void)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_get_freq_count_active();
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(ddr_stats_get_freq_count);
+ 
+-int ddr_stats_get_residency(int freq_count, struct ddr_freq_residency *data)
++static int ddr_stats_get_residency_active(int freq_count, struct ddr_freq_residency *data)
+ {
+ 	struct sleep_stats stat[DDR_STATS_MAX_NUM_MODES];
+ 	void __iomem *reg;
+@@ -553,7 +642,7 @@
+ 	ktime_t now;
+ 	int i, j;
+ 
+-	if (freq_count < 0 || !data)
++	if (freq_count <= 0 || !data)
+ 		return -EINVAL;
+ 
+ 	if (!drv || !drv->qmp || !drv->config->read_ddr_votes)
+@@ -575,7 +664,7 @@
+ 		if (((name >> 8) & 0xFF) == 0x1 && stat[i].count) {
+ 			data[j].freq = name >> 16;
+ 			data[j].residency = stat[i].accumulated;
+-			if (++j > freq_count)
++			if (++j >= freq_count)
+ 				break;
+ 		}
+ 	}
+@@ -584,12 +673,32 @@
+ 
+ 	return j;
+ }
++int ddr_stats_get_residency(int freq_count, struct ddr_freq_residency *data)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_get_residency_active(freq_count, data);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(ddr_stats_get_residency);
+ 
++static int ddr_stats_get_ss_count_active(void)
++{
++	return drv->config->read_ddr_votes ? MAX_DRV : -EOPNOTSUPP;
++}
+ int ddr_stats_get_ss_count(void)
+ {
+-	return drv->config->read_ddr_votes ? MAX_DRV : -EOPNOTSUPP;
+-}
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_get_ss_count_active();
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(ddr_stats_get_ss_count);
+ 
+ static void __iomem *qcom_stats_get_ddr_stats_data_addr(void)
+@@ -612,7 +721,7 @@
+ 	return reg;
+ }
+ 
+-int ddr_stats_get_ss_vote_info(int ss_count,
++static int ddr_stats_get_ss_vote_info_active(int ss_count,
+ 			       struct ddr_stats_ss_vote_info *vote_info)
+ {
+ 	static const char buf[MAX_MSG_LEN] = "{class: ddr, res: drvs_ddr_votes}";
+@@ -627,7 +736,7 @@
+ 		return -EOPNOTSUPP;
+ 
+ 	mutex_lock(&drv->lock);
+-	ret = qmp_send(drv->qmp, buf, sizeof(buf));
++	ret = qmp_send(drv->qmp, "%s", buf);
+ 	if (ret) {
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 		mutex_unlock(&drv->lock);
+@@ -641,6 +750,10 @@
+ 		return -EINVAL;
+ 	}
+ 
++	if (!qcom_stats_range_valid(reg, ss_count * sizeof(u32))) {
++		mutex_unlock(&drv->lock);
++		return -EINVAL;
++	}
+ 	for (i = 0; i < ss_count; i++, reg += sizeof(u32)) {
+ 		val[i] = readl_relaxed(reg);
+ 		if (val[i] == DRV_ABSENT) {
+@@ -660,6 +773,17 @@
+ 	mutex_unlock(&drv->lock);
+ 	return 0;
+ }
++int ddr_stats_get_ss_vote_info(int ss_count,
++			       struct ddr_stats_ss_vote_info *vote_info)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_get_ss_vote_info_active(ss_count, vote_info);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(ddr_stats_get_ss_vote_info);
+ 
+ static void cxvt_info_fill_data(void __iomem *reg, u32 entry_count,
+@@ -673,7 +797,7 @@
+ 	}
+ }
+ 
+-int cx_stats_get_ss_vote_info(int ss_count,
++static int cx_stats_get_ss_vote_info_active(int ss_count,
+ 			       struct qcom_stats_cx_vote_info *vote_info)
+ {
+ 	static const char buf[MAX_MSG_LEN] = "{class: misc_debug, res: cx_vote}";
+@@ -690,7 +814,7 @@
+ 		return -EOPNOTSUPP;
+ 
+ 	mutex_lock(&drv->lock);
+-	ret = qmp_send(drv->qmp, buf, sizeof(buf));
++	ret = qmp_send(drv->qmp, "%s", buf);
+ 	if (ret) {
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 		mutex_unlock(&drv->lock);
+@@ -708,6 +832,10 @@
+ 		entry_count = ((MAX_DRV + 0x3) & (~0x3))/4 + 1;
+ 	else
+ 		entry_count = ((MAX_DRV + 0x3) & (~0x3))/4;
++	if (!qcom_stats_range_valid(reg, entry_count * sizeof(u32))) {
++		mutex_unlock(&drv->lock);
++		return -EINVAL;
++	}
+ 	cxvt_info_fill_data(reg, entry_count, data);
+ 	for (i = 0, j = 0; i < ((MAX_DRV + 0x3) & (~0x3))/4; i++, j += 4) {
+ 		vote_info[j].level = (data[i] & 0xff);
+@@ -716,15 +844,25 @@
+ 		vote_info[j+3].level = ((data[i] & 0xff000000) >> 24);
+ 	}
+ 
+-	if (drv->config->read_cx_final_vote)
+-		vote_info[j].level = (u8)data[i];
++
+ 
+ 	mutex_unlock(&drv->lock);
+ 	return 0;
+ }
++int cx_stats_get_ss_vote_info(int ss_count,
++			       struct qcom_stats_cx_vote_info *vote_info)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = cx_stats_get_ss_vote_info_active(ss_count, vote_info);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(cx_stats_get_ss_vote_info);
+ 
+-int ddr_stats_get_change_his(struct ddr_stats_change_his_info *ddr_his_info)
++static int ddr_stats_get_change_his_active(struct ddr_stats_change_his_info *ddr_his_info)
+ {
+ 	static const char buf[MAX_MSG_LEN] = "{class: misc_debug, res: ddr_his}";
+ 	int ret;
+@@ -734,7 +872,7 @@
+ 		return -ENODEV;
+ 
+ 	mutex_lock(&drv->lock);
+-	ret = qmp_send(drv->qmp, buf, sizeof(buf));
++	ret = qmp_send(drv->qmp, "%s", buf);
+ 	if (ret) {
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 		mutex_unlock(&drv->lock);
+@@ -748,37 +886,49 @@
+ 		return -EINVAL;
+ 	}
+ 
++	if (!ddr_his_info || !qcom_stats_range_valid(reg, sizeof(*ddr_his_info))) {
++		mutex_unlock(&drv->lock);
++		return -EINVAL;
++	}
+ 	memcpy_fromio(ddr_his_info, reg, sizeof(struct ddr_stats_change_his_info));
+ 	mutex_unlock(&drv->lock);
+ 	return 0;
+ }
++int ddr_stats_get_change_his(struct ddr_stats_change_his_info *ddr_his_info)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_get_change_his_active(ddr_his_info);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(ddr_stats_get_change_his);
+ 
+-int llc_stats_get_active_scids(struct llc_island_stats_active_scids *llc_active_scids)
+-{
+-	static struct llc_island_stats_active_scids *local_scids;
+-
+-	if (!drv || !drv->config->llc_island_stats_avail)
+-		return -ENODEV;
+-
+-	mutex_lock(&drv->lock);
+-	if (IS_ERR_OR_NULL(local_scids)) {
+-		local_scids = qcom_smem_get(
+-						ISLAND_STATS_PID,
+-						LLC_ISLAND_STATS_SMEM_ID,
+-						NULL);
+-		if (IS_ERR_OR_NULL(local_scids)) {
+-			mutex_unlock(&drv->lock);
+-			return -ENOMEM;
+-		}
+-	} else {
+-		memcpy_fromio(llc_active_scids, local_scids, sizeof(*local_scids));
+-	}
+-
+-	mutex_unlock(&drv->lock);
+-
++static int llc_stats_get_active_scids_active(struct llc_island_stats_active_scids *out)
++{
++	void *data;
++	if (!out)
++		return -EINVAL;
++	if (!drv->config->llc_island_stats_avail)
++		return -EOPNOTSUPP;
++	data = qcom_stats_smem_get(ISLAND_STATS_PID, LLC_ISLAND_STATS_SMEM_ID, sizeof(*out));
++	if (IS_ERR(data))
++		return PTR_ERR(data);
++	memcpy(out, data, sizeof(*out));
+ 	return 0;
+ }
++int llc_stats_get_active_scids(struct llc_island_stats_active_scids *out)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = llc_stats_get_active_scids_active(out);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ EXPORT_SYMBOL_GPL(llc_stats_get_active_scids);
+ 
+ static void qcom_print_stats(struct seq_file *s, const struct sleep_stats *stat)
+@@ -797,13 +947,13 @@
+ 	seq_printf(s, "Accumulated Duration: %llu\n", accumulated);
+ }
+ 
+-static int qcom_subsystem_sleep_stats_show(struct seq_file *s, void *unused)
++static int qcom_subsystem_sleep_stats_show_active(struct seq_file *s, void *unused)
+ {
+ 	struct subsystem_data *subsystem = s->private;
+ 	struct sleep_stats *stat;
+ 
+ 	/* Items are allocated lazily, so lookup pointer each time */
+-	stat = qcom_smem_get(subsystem->pid, subsystem->smem_item, NULL);
++	stat = qcom_stats_smem_get(subsystem->pid, subsystem->smem_item, sizeof(struct sleep_stats));
+ 	if (IS_ERR(stat))
+ 		return 0;
+ 
+@@ -811,8 +961,18 @@
+ 
+ 	return 0;
+ }
+-
+-static int qcom_soc_sleep_stats_show(struct seq_file *s, void *unused)
++static int qcom_subsystem_sleep_stats_show(struct seq_file *s, void *unused)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = qcom_subsystem_sleep_stats_show_active(s, unused);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
++
++static int qcom_soc_sleep_stats_show_active(struct seq_file *s, void *unused)
+ {
+ 	struct stats_data *d = s->private;
+ 	void __iomem *reg = d->base;
+@@ -830,6 +990,16 @@
+ 
+ 	return 0;
+ }
++static int qcom_soc_sleep_stats_show(struct seq_file *s, void *unused)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = qcom_soc_sleep_stats_show_active(s, unused);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ 
+ static void print_ddr_stats(struct seq_file *s, int *count,
+ 			     struct sleep_stats *data, u64 accumulated_duration)
+@@ -860,7 +1030,7 @@
+ 	}
+ }
+ 
+-static int ddr_stats_show(struct seq_file *s, void *d)
++static int ddr_stats_show_active(struct seq_file *s, void *d)
+ {
+ 	struct sleep_stats data[DDR_STATS_MAX_NUM_MODES];
+ 	void __iomem *reg = s->private;
+@@ -887,22 +1057,32 @@
+ 
+ 	return 0;
+ }
+-
+-static int island_stats_show(struct seq_file *s, void *unused)
++static int ddr_stats_show(struct seq_file *s, void *d)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = ddr_stats_show_active(s, d);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
++
++static int island_stats_show_active(struct seq_file *s, void *unused)
+ {
+ 	struct island_stats *stat;
+ 	int i;
+ 
+ 	/* Items are allocated lazily, so lookup pointer each time */
+-	stat = qcom_smem_get(ISLAND_STATS_PID, ISLAND_STATS_SMEM_ID, NULL);
++	stat = qcom_stats_smem_get(ISLAND_STATS_PID, ISLAND_STATS_SMEM_ID, MAX_ISLAND_STATS * sizeof(struct island_stats));
+ 	if (IS_ERR(stat))
+ 		return 0;
+ 
+ 	for (i = 0; i < MAX_ISLAND_STATS; i++) {
+-		if (!strcmp(stat[i].name, "DEADDEAD"))
++		if (!strncmp(stat[i].name, "DEADDEAD", sizeof(stat[i].name)))
+ 			continue;
+ 
+-		seq_printf(s, "Name: %s\n", stat[i].name);
++		seq_printf(s, "Name: %.*s\n", (int)sizeof(stat[i].name), stat[i].name);
+ 		seq_printf(s, "Count: %u\n", stat[i].count);
+ 		seq_printf(s, "Last Entered At: %llu\n", stat[i].last_entered_at);
+ 		seq_printf(s, "Last Exited At: %llu\n", stat[i].last_exited_at);
+@@ -913,45 +1093,74 @@
+ 
+ 	return 0;
+ }
++static int island_stats_show(struct seq_file *s, void *unused)
++{
++	int index = srcu_read_lock(&stats_srcu);
++	int ret = -ENODEV;
++	if (READ_ONCE(stats_online))
++		ret = island_stats_show_active(s, unused);
++	srcu_read_unlock(&stats_srcu, index);
++	return ret;
++}
++
+ 
+ DEFINE_SHOW_ATTRIBUTE(qcom_soc_sleep_stats);
+ DEFINE_SHOW_ATTRIBUTE(qcom_subsystem_sleep_stats);
+ DEFINE_SHOW_ATTRIBUTE(ddr_stats);
+ DEFINE_SHOW_ATTRIBUTE(island_stats);
+ 
+-static int qcom_create_stats_device(struct stats_drvdata *drv)
++static void qcom_stats_release_device(struct device *dev)
++{
++	kfree(container_of(dev, struct stats_drvdata, stats_device));
++}
++
++static int qcom_create_stats_device(struct stats_drvdata *data)
+ {
+ 	int ret;
+-
+-	ret = alloc_chrdev_region(&drv->dev_no, STATS_BASEMINOR, STATS_MAX_MINOR,
+-				  STATS_DEVICE_NAME);
++	ret = alloc_chrdev_region(&data->dev_no, 0, 1, STATS_DEVICE_NAME);
+ 	if (ret)
+ 		return ret;
+-
+-	cdev_init(&drv->stats_cdev, &qcom_stats_device_fops);
+-	ret = cdev_add(&drv->stats_cdev, drv->dev_no, 1);
+-	if (ret) {
+-		unregister_chrdev_region(drv->dev_no, 1);
+-		return ret;
+-	}
+-
+-	drv->stats_class = class_create(STATS_DEVICE_NAME);
+-	if (IS_ERR_OR_NULL(drv->stats_class)) {
+-		cdev_del(&drv->stats_cdev);
+-		unregister_chrdev_region(drv->dev_no, 1);
+-		return PTR_ERR(drv->stats_class);
+-	}
+-
+-	drv->stats_device = device_create(drv->stats_class, NULL, drv->dev_no, NULL,
+-					  STATS_DEVICE_NAME);
+-	if (IS_ERR_OR_NULL(drv->stats_device)) {
+-		class_destroy(drv->stats_class);
+-		cdev_del(&drv->stats_cdev);
+-		unregister_chrdev_region(drv->dev_no, 1);
+-		return PTR_ERR(drv->stats_device);
+-	}
+-
+-	return ret;
++	data->stats_class = class_create(STATS_DEVICE_NAME);
++	if (IS_ERR(data->stats_class)) {
++		ret = PTR_ERR(data->stats_class);
++		data->stats_class = NULL;
++		goto fail_region;
++	}
++	data->stats_device.class = data->stats_class;
++	data->stats_device.devt = data->dev_no;
++	ret = dev_set_name(&data->stats_device, STATS_DEVICE_NAME);
++	if (ret)
++		goto fail_class;
++	cdev_init(&data->stats_cdev, &qcom_stats_device_fops);
++	data->stats_cdev.owner = THIS_MODULE;
++	ret = cdev_device_add(&data->stats_cdev, &data->stats_device);
++	if (!ret) {
++		data->char_registered = true;
++		return 0;
++	}
++fail_class:
++	class_destroy(data->stats_class);
++	data->stats_class = NULL;
++fail_region:
++	unregister_chrdev_region(data->dev_no, 1);
++	data->dev_no = 0;
++	return ret;
++}
++
++static void qcom_stats_cleanup(struct stats_drvdata *data)
++{
++	WRITE_ONCE(stats_online, false);
++	debugfs_remove_recursive(data->root);
++	if (data->char_registered)
++		cdev_device_del(&data->stats_cdev, &data->stats_device);
++	synchronize_srcu(&stats_srcu);
++	if (data->stats_class)
++		class_destroy(data->stats_class);
++	if (data->dev_no)
++		unregister_chrdev_region(data->dev_no, 1);
++	qmp_put(data->qmp);
++	drv = NULL;
++	put_device(&data->stats_device);
+ }
+ 
+ static void qcom_create_island_stat_files(struct dentry *root, void __iomem *reg,
+@@ -1059,27 +1268,49 @@
+ 	struct stats_data *d;
+ 	int i;
+ 	int ret;
+-
++	struct resource *res;
++	size_t offset, stride;
++
++	if (drv)
++		return -EBUSY;
+ 	config = device_get_match_data(&pdev->dev);
+ 	if (!config)
+ 		return -ENODEV;
+ 
+-	reg = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
++	reg = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+ 	if (IS_ERR(reg))
+-		return -ENOMEM;
+-
++		return PTR_ERR(reg);
++
++	offset = config->stats_offset;
++	if (config->dynamic_offset) {
++		if (resource_size(res) < RPM_DYNAMIC_ADDR + sizeof(u32))
++			return -EINVAL;
++		offset = readl_relaxed(reg + RPM_DYNAMIC_ADDR) & RPM_DYNAMIC_ADDR_MASK;
++	}
++	stride = sizeof(struct sleep_stats) + (config->appended_stats_avail ? sizeof(struct appended_stats) : 0);
++	if (offset > resource_size(res) || config->num_records > (resource_size(res) - offset) / stride ||
++	    (config->ddr_stats_offset && (config->ddr_stats_offset > resource_size(res) ||
++	     resource_size(res) - config->ddr_stats_offset < DDR_STATS_ENTRY_ADDR + DDR_STATS_MAX_NUM_MODES * 16)))
++		return -EINVAL;
+ 	d = devm_kcalloc(&pdev->dev, config->num_records,
+ 			 sizeof(*d), GFP_KERNEL);
+ 	if (!d)
+ 		return -ENOMEM;
+ 
+-	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
++	drv = kzalloc(sizeof(*drv), GFP_KERNEL);
+ 	if (!drv)
+ 		return -ENOMEM;
+ 
++	device_initialize(&drv->stats_device);
++	drv->stats_device.release = qcom_stats_release_device;
++	drv->stats_device.parent = &pdev->dev;
++	drv->resource_size = resource_size(res);
+ 	for (i = 0; i < config->num_records; i++)
+ 		d[i].appended_stats_avail = config->appended_stats_avail;
+ 
++	drv->d = d;
++	drv->config = config;
++	drv->base = reg;
+ 	root = debugfs_create_dir("qcom_stats", NULL);
+ 
+ 	qcom_create_subsystem_stat_files(root, config, pdev->dev.of_node);
+@@ -1087,9 +1318,6 @@
+ 	qcom_create_ddr_stat_files(root, reg, d, config);
+ 	qcom_create_island_stat_files(root, reg, d, config);
+ 
+-	drv->d = d;
+-	drv->config = config;
+-	drv->base = reg;
+ 	drv->root = root;
+ 	drv->ddr_freqsync_msg_time = 0;
+ 	mutex_init(&drv->lock);
+@@ -1136,31 +1364,18 @@
+ 	}
+ 
+ 	platform_set_drvdata(pdev, drv);
+-
++	WRITE_ONCE(stats_online, true);
+ 	return 0;
+ 
+ fail:
+-	device_destroy(drv->stats_class, drv->dev_no);
+-	class_destroy(drv->stats_class);
+-	cdev_del(&drv->stats_cdev);
+-	unregister_chrdev_region(drv->dev_no, 1);
+ fail_create_stats_device:
+-	debugfs_remove_recursive(drv->root);
+-	return ret;
+-}
+-
+-static int qcom_stats_remove(struct platform_device *pdev)
+-{
+-	struct stats_drvdata *drv = platform_get_drvdata(pdev);
+-
+-	device_destroy(drv->stats_class, drv->dev_no);
+-	class_destroy(drv->stats_class);
+-	cdev_del(&drv->stats_cdev);
+-	unregister_chrdev_region(drv->dev_no, 1);
+-
+-	debugfs_remove_recursive(drv->root);
+-
+-	return 0;
++	qcom_stats_cleanup(drv);
++	return ret;
++}
++
++static void qcom_stats_remove(struct platform_device *pdev)
++{
++	qcom_stats_cleanup(platform_get_drvdata(pdev));
+ }
+ 
+ static int qcom_stats_suspend(struct device *dev)
+@@ -1176,7 +1391,7 @@
+ 
+ 	mutex_lock(&sleep_stats_mutex);
+ 	for (i = 0; i < ARRAY_SIZE(subsystems); i++) {
+-		tmp = qcom_smem_get(subsystems[i].pid, subsystems[i].smem_item, NULL);
++		tmp = qcom_stats_smem_get(subsystems[i].pid, subsystems[i].smem_item, sizeof(struct sleep_stats));
+ 		if (IS_ERR(tmp)) {
+ 			subsystems[i].not_present = true;
+ 			continue;
+@@ -1211,7 +1426,7 @@
+ 	for (i = 0; i < ARRAY_SIZE(subsystems); i++) {
+ 		if (subsystems[i].not_present)
+ 			continue;
+-		tmp = qcom_smem_get(subsystems[i].pid, subsystems[i].smem_item, NULL);
++		tmp = qcom_stats_smem_get(subsystems[i].pid, subsystems[i].smem_item, sizeof(struct sleep_stats));
+ 		if (IS_ERR(tmp))
+ 			continue;
+ 		qcom_stats_copy(tmp, a_subsystem_stats + i);
+--- a/drivers/irqchip/msm_show_resume_irq.c
++++ b/drivers/irqchip/msm_show_resume_irq.c
+@@ -25,7 +25,8 @@
+ {
+ 	unsigned int i;
+ 	u32 enabled;
+-	u32 pending[32];
++	DECLARE_BITMAP(pending, 1024);
++	u32 bits;
+ 	u32 gic_line_nr;
+ 	u32 typer;
+ 
+@@ -35,15 +36,16 @@
+ 	typer = readl_relaxed(base + GICD_TYPER);
+ 	gic_line_nr = min(GICD_TYPER_SPIS(typer), 1023u);
+ 
++	bitmap_zero(pending, 1024);
+ 	for (i = 0; i * 32 < gic_line_nr; i++) {
+ 		enabled = readl_relaxed(base + GICD_ICENABLER + i * 4);
+-		pending[i] = readl_relaxed(base + GICD_ISPENDR + i * 4);
+-		pending[i] &= enabled;
++		bits = readl_relaxed(base + GICD_ISPENDR + i * 4) & enabled;
++		pending[(i * 32) / BITS_PER_LONG] |= (unsigned long)bits << ((i * 32) % BITS_PER_LONG);
+ 	}
+ 
+-	for (i = find_first_bit((unsigned long *)pending, gic_line_nr);
++	for (i = find_first_bit(pending, gic_line_nr);
+ 	     i < gic_line_nr;
+-	     i = find_next_bit((unsigned long *)pending, gic_line_nr, i + 1)) {
++	     i = find_next_bit(pending, gic_line_nr, i + 1)) {
+ 
+ 		if (i < 32)
+ 			continue;
+@@ -79,25 +81,36 @@
+ 
+ static int msm_show_resume_probe(struct platform_device *pdev)
+ {
+-	base = of_iomap(pdev->dev.of_node, 0);
+-	if (!base) {
+-		pr_err("%pOF: unable to map GICD registers\n", pdev->dev.of_node);
+-		return -ENXIO;
++	struct resource *res;
++	int ret;
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -EINVAL;
++	if (resource_size(res) < GICD_ISPENDR + 32 * sizeof(u32))
++		return -EINVAL;
++	/* The interrupt controller owns this region; the logger only reads it. */
++	base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
++	if (!base)
++		return -ENOMEM;
++	ret = register_trace_prio_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL, INT_MAX);
++	if (ret)
++		return ret;
++	ret = register_trace_prio_android_vh_cpuidle_psci_exit(gic_s2idle_exit, NULL, INT_MAX);
++	if (ret) {
++		unregister_trace_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL);
++		tracepoint_synchronize_unregister();
++		return ret;
+ 	}
+-
+-	register_trace_prio_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL, INT_MAX);
+-	register_trace_prio_android_vh_cpuidle_psci_exit(gic_s2idle_exit, NULL, INT_MAX);
+ 	register_syscore_ops(&gic_syscore_ops);
+ 	return 0;
+ }
+ 
+-static int msm_show_resume_remove(struct platform_device *pdev)
++static void msm_show_resume_remove(struct platform_device *pdev)
+ {
++	unregister_syscore_ops(&gic_syscore_ops);
+ 	unregister_trace_android_vh_cpuidle_psci_enter(gic_s2idle_enter, NULL);
+ 	unregister_trace_android_vh_cpuidle_psci_exit(gic_s2idle_exit, NULL);
+-	unregister_syscore_ops(&gic_syscore_ops);
+-	iounmap(base);
+-	return 0;
++	tracepoint_synchronize_unregister();
+ }
+ 
+ static const struct of_device_id msm_show_resume_match_table[] = {
+--- a/drivers/soc/qcom/pmic-glink-debug.c
++++ b/drivers/soc/qcom/pmic-glink-debug.c
+@@ -9,6 +9,7 @@
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
++#include <linux/spinlock.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/property.h>
+@@ -19,7 +20,7 @@
+ 
+ #include <linux/soc/qcom/qti_pmic_glink.h>
+ 
+-#include <asm-generic/unaligned.h>
++#include <linux/unaligned.h>
+ 
+ #define MSG_OWNER_REG_DUMP		32783
+ #define MSG_TYPE_REQ_RESP		1
+@@ -82,6 +83,12 @@
+ 	struct device			*dev;
+ 	struct mutex			lock;
+ 	struct completion		ack;
++	spinlock_t response_lock;
++	bool pending;
++	bool poisoned;
++	u32 opcode;
++	u32 bus_id, sid, address, bytes;
++	int response_error;
+ 	struct reg_dump_read_resp_msg	read_msg;
+ 	struct spmi_glink_ctrl		**spmi_gctrl;
+ 	struct i2c_glink_ctrl		**i2c_gctrl;
+@@ -89,85 +96,86 @@
+ 	u32				i2c_bus_count;
+ };
+ 
+-static int pmic_glink_debug_write(struct pmic_glink_debug_dev *gd, void *data,
+-				size_t len)
+-{
++static int pmic_glink_debug_write(struct pmic_glink_debug_dev *gd, void *data, size_t len)
++{
++	struct reg_dump_read_req_msg *request = data;
++	unsigned long flags;
+ 	int ret;
+ 
++	spin_lock_irqsave(&gd->response_lock, flags);
++	/* The wire protocol has no transaction sequence: after timeout, a late
++	 * untagged write ACK cannot safely be associated with another request. */
++	if (gd->poisoned) {
++		spin_unlock_irqrestore(&gd->response_lock, flags);
++		return -EIO;
++	}
+ 	reinit_completion(&gd->ack);
++	gd->opcode = request->hdr.opcode;
++	gd->bus_id = request->bus_id;
++	gd->sid = request->pmic_sid;
++	gd->address = request->address;
++	gd->bytes = request->hdr.opcode == REG_DUMP_REG_READ_REQ ? request->byte_count : 0;
++	gd->response_error = 0;
++	gd->pending = true;
++	spin_unlock_irqrestore(&gd->response_lock, flags);
+ 	ret = pmic_glink_write(gd->client, data, len);
+-	if (ret)
+-		return ret;
+-
+-	ret = wait_for_completion_timeout(&gd->ack,
+-				msecs_to_jiffies(REG_DUMP_WAIT_TIME_MS));
+-	if (!ret) {
+-		dev_err(gd->dev, "Error, timed out sending message\n");
+-		return -ETIMEDOUT;
+-	}
+-
+-	return 0;
+-}
+-
+-static void pmic_glink_debug_handle_read_resp(struct pmic_glink_debug_dev *gd,
+-			struct reg_dump_read_resp_msg *read_resp, size_t len)
+-{
+-	if (len != sizeof(*read_resp)) {
+-		dev_err(gd->dev, "Invalid read response, glink packet size=%zu\n",
+-			len);
+-		return;
+-	}
+-
+-	if ((int)read_resp->byte_count < 0) {
+-		dev_err(gd->dev, "glink read failed, ret=%d\n",
+-			(int)read_resp->byte_count);
+-		return;
+-	}
+-
+-	memcpy(&gd->read_msg, read_resp, sizeof(gd->read_msg));
+-
+-	complete(&gd->ack);
+-}
+-
+-static void pmic_glink_debug_handle_write_resp(struct pmic_glink_debug_dev *gd,
+-			struct reg_dump_write_resp_msg *write_resp, size_t len)
+-{
+-	if (len != sizeof(*write_resp)) {
+-		dev_err(gd->dev, "Invalid write response, glink packet size=%zu\n",
+-			len);
+-		return;
+-	}
+-
+-	if (write_resp->return_status) {
+-		dev_err(gd->dev, "glink write failed, ret=%d\n",
+-			(int)write_resp->return_status);
+-		return;
+-	}
+-
+-	complete(&gd->ack);
++	if (!ret && !wait_for_completion_timeout(&gd->ack, msecs_to_jiffies(REG_DUMP_WAIT_TIME_MS)))
++		ret = -ETIMEDOUT;
++	spin_lock_irqsave(&gd->response_lock, flags);
++	gd->pending = false;
++	if (ret == -ETIMEDOUT)
++		gd->poisoned = true;
++	if (!ret)
++		ret = gd->response_error;
++	spin_unlock_irqrestore(&gd->response_lock, flags);
++	return ret;
+ }
+ 
+ static int pmic_glink_debug_callback(void *priv, void *data, size_t len)
+ {
+ 	struct pmic_glink_debug_dev *gd = priv;
+ 	struct pmic_glink_hdr *hdr = data;
+-
+-	dev_dbg(gd->dev, "owner: %u type: %u opcode: %#x len: %zu\n",
+-		hdr->owner, hdr->type, hdr->opcode, len);
+-
+-	switch (hdr->opcode) {
+-	case REG_DUMP_REG_READ_REQ:
+-		pmic_glink_debug_handle_read_resp(gd, data, len);
+-		break;
+-	case REG_DUMP_REG_WRITE_REQ:
+-		pmic_glink_debug_handle_write_resp(gd, data, len);
+-		break;
+-	default:
+-		dev_err(gd->dev, "Unknown opcode %u\n", hdr->opcode);
+-		break;
+-	}
+-
+-	return 0;
++	unsigned long flags;
++	int ret = 0;
++	if (!data || len < sizeof(*hdr) || hdr->owner != MSG_OWNER_REG_DUMP ||
++	    hdr->type != MSG_TYPE_REQ_RESP)
++		return -EINVAL;
++	spin_lock_irqsave(&gd->response_lock, flags);
++	if (!gd->pending || hdr->opcode != gd->opcode)
++		goto out;
++	if (hdr->opcode == REG_DUMP_REG_READ_REQ) {
++		struct reg_dump_read_resp_msg *response = data;
++		if (len != sizeof(*response)) {
++			ret = -EPROTO;
++			goto complete;
++		}
++		if (response->bus_id != gd->bus_id || response->pmic_sid != gd->sid ||
++		    response->address != gd->address)
++			goto out;
++		if ((s32)response->byte_count < 0)
++			ret = (s32)response->byte_count;
++		else if (response->byte_count > sizeof(response->data) || response->byte_count != gd->bytes)
++			ret = -EPROTO;
++		else
++			memcpy(&gd->read_msg, response, sizeof(*response));
++	} else if (hdr->opcode == REG_DUMP_REG_WRITE_REQ) {
++		struct reg_dump_write_resp_msg *response = data;
++		if (len != sizeof(*response))
++			ret = -EPROTO;
++		else if (response->return_status)
++			ret = (s32)response->return_status < 0 ? (s32)response->return_status : -EIO;
++	} else {
++		goto out;
++	}
++complete:
++	gd->response_error = ret;
++	gd->pending = false;
++	if (ret == -EPROTO)
++		gd->poisoned = true;
++	complete(&gd->ack);
++out:
++	spin_unlock_irqrestore(&gd->response_lock, flags);
++	return ret;
+ }
+ 
+ static int pmic_glink_read_regs(struct pmic_glink_debug_dev *gd, u32 bus_id,
+@@ -176,7 +184,7 @@
+ 	struct reg_dump_read_req_msg msg = {{0}};
+ 	int ret;
+ 
+-	if (len > REG_DUMP_GLINK_MAX_READ_BYTES)
++	if (!len || !buf || len > REG_DUMP_GLINK_MAX_READ_BYTES)
+ 		return -EINVAL;
+ 
+ 	msg.hdr.owner = MSG_OWNER_REG_DUMP;
+@@ -222,6 +230,8 @@
+ {
+ 	int ret, count;
+ 
++	if (!len || !buf || sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
++		return -EINVAL;
+ 	mutex_lock(&gd->lock);
+ 	do {
+ 		count = min_t(size_t, len, REG_DUMP_GLINK_MAX_READ_BYTES);
+@@ -251,6 +261,8 @@
+ {
+ 	int ret, count;
+ 
++	if (!len || !buf || sid > 0xf || len > ((0x10 - sid) * 0x10000UL - addr))
++		return -EINVAL;
+ 	mutex_lock(&gd->lock);
+ 	do {
+ 		count = min_t(size_t, len, REG_DUMP_GLINK_MAX_WRITE_BYTES);
+@@ -331,7 +343,7 @@
+ 	bus_id = i2c_gctrl->bus_id;
+ 
+ 	for (i = 0; i < num; i++) {
+-		if (msgs[i].len < 2) {
++		if (msgs[i].len < 2 || !msgs[i].buf || msgs[i].addr > 0xf || msgs[i].flags) {
+ 			dev_dbg(gd->dev, "%s: unexpected msg: addr=%#x, flags=%#x, len=%u\n",
+ 				__func__, msgs[i].addr, msgs[i].flags,
+ 				msgs[i].len);
+@@ -353,7 +365,8 @@
+ 		reg = get_unaligned_be16(msgs[i].buf);
+ 
+ 		if (i + 1 < num && (msgs[i + 1].flags & I2C_M_RD) &&
+-		    msgs[i].addr == msgs[i + 1].addr && msgs[i + 1].len > 0) {
++		    msgs[i].addr == msgs[i + 1].addr && msgs[i + 1].len > 0 &&
++		    msgs[i].len == 2 && msgs[i + 1].flags == I2C_M_RD && msgs[i + 1].buf) {
+ 			/* Read operation */
+ 			read = true;
+ 			len = (size_t) msgs[i + 1].len;
+@@ -422,6 +435,7 @@
+ 
+ 	i2c_gctrl->gd = gd;
+ 	adap = &i2c_gctrl->i2c;
++	adap->owner = THIS_MODULE;
+ 	adap->algo = &glink_i2c_algo;
+ 	adap->dev.parent = gd->dev;
+ 	adap->dev.of_node = to_of_node(fwnode);
+@@ -435,7 +449,7 @@
+ 	}
+ 
+ 	gd->i2c_gctrl[gd->i2c_bus_count++] = i2c_gctrl;
+-	return devm_of_platform_populate(gd->dev);
++	return 0;
+ }
+ 
+ static int pmic_glink_debug_add_spmi_bus(struct pmic_glink_debug_dev *gd,
+@@ -478,7 +492,7 @@
+ 	return 0;
+ }
+ 
+-static int pmic_glink_debug_remove(struct platform_device *pdev)
++static void pmic_glink_debug_remove(struct platform_device *pdev)
+ {
+ 	struct pmic_glink_debug_dev *gd = platform_get_drvdata(pdev);
+ 	int i;
+@@ -496,8 +510,6 @@
+ 	}
+ 
+ 	pmic_glink_unregister_client(gd->client);
+-
+-	return 0;
+ }
+ 
+ static int pmic_glink_debug_probe(struct platform_device *pdev)
+@@ -515,6 +527,7 @@
+ 
+ 	gd->dev = &pdev->dev;
+ 	mutex_init(&gd->lock);
++	spin_lock_init(&gd->response_lock);
+ 	init_completion(&gd->ack);
+ 	platform_set_drvdata(pdev, gd);
+ 
+@@ -563,15 +576,19 @@
+ 	if (spmi_bus_count) {
+ 		gd->spmi_gctrl = devm_kcalloc(&pdev->dev, spmi_bus_count,
+ 				sizeof(*gd->spmi_gctrl), GFP_KERNEL);
+-		if (!gd->spmi_gctrl)
+-			return -ENOMEM;
++		if (!gd->spmi_gctrl) {
++			ret = -ENOMEM;
++			goto err_remove_ctrl;
++		}
+ 	}
+ 
+ 	if (i2c_bus_count) {
+ 		gd->i2c_gctrl = devm_kcalloc(&pdev->dev, i2c_bus_count,
+ 				sizeof(*gd->i2c_gctrl), GFP_KERNEL);
+-		if (!gd->i2c_gctrl)
+-			return -ENOMEM;
++		if (!gd->i2c_gctrl) {
++			ret = -ENOMEM;
++			goto err_remove_ctrl;
++		}
+ 	}
+ 
+ 	device_for_each_child_node(&pdev->dev, child) {
+--- a/drivers/spmi/spmi-pmic-arb-debug.c
++++ b/drivers/spmi/spmi-pmic-arb-debug.c
+@@ -125,7 +125,7 @@
+ 	u16 offset    = addr & 0xFF;
+ 	u8 byte_count = len - 1;
+ 
+-	if (byte_count >= PMIC_ARB_MAX_TRANS_BYTES) {
++	if (!len || len > PMIC_ARB_MAX_TRANS_BYTES) {
+ 		dev_err(&ctrl->dev, "pmic-arb supports 1 to %d bytes per transaction, but %zu requested\n",
+ 			PMIC_ARB_MAX_TRANS_BYTES, len);
+ 		return  -EINVAL;
+@@ -205,7 +205,7 @@
+ 	unsigned long flags;
+ 	int i, rc;
+ 
+-	if (len > PMIC_ARB_MAX_TRANS_BYTES) {
++	if (!len || len > PMIC_ARB_MAX_TRANS_BYTES) {
+ 		dev_err(&ctrl->dev, "pmic-arb supports 1 to %d bytes per transaction, but %zu requested\n",
+ 			PMIC_ARB_MAX_TRANS_BYTES, len);
+ 		return  -EINVAL;
+@@ -277,6 +277,8 @@
+ 			return -EINVAL;
+ 		}
+ 
++		if (resource_size(res) < sizeof(u32))
++			return -EINVAL;
+ 		fuse_addr = ioremap(res->start, resource_size(res));
+ 		if (!fuse_addr)
+ 			return -EINVAL;
+@@ -304,6 +306,10 @@
+ 		goto err_put_ctrl;
+ 	}
+ 
++	if (resource_size(res) < PMIC_ARB_DEBUG_RDATA(PMIC_ARB_MAX_TRANS_BYTES - 1) + sizeof(u32)) {
++		rc = -EINVAL;
++		goto err_put_ctrl;
++	}
+ 	pa->addr = devm_ioremap_resource(&ctrl->dev, res);
+ 	if (IS_ERR(pa->addr)) {
+ 		rc = PTR_ERR(pa->addr);
+@@ -341,14 +347,12 @@
+ 	return rc;
+ }
+ 
+-static int spmi_pmic_arb_debug_remove(struct platform_device *pdev)
++static void spmi_pmic_arb_debug_remove(struct platform_device *pdev)
+ {
+ 	struct spmi_controller *ctrl = platform_get_drvdata(pdev);
+ 
+ 	spmi_controller_remove(ctrl);
+ 	spmi_controller_put(ctrl);
+-
+-	return 0;
+ }
+ 
+ static const struct of_device_id spmi_pmic_arb_debug_match_table[] = {
+@@ -370,3 +374,5 @@
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_ALIAS("platform:spmi_pmic_arb_debug");
++
++MODULE_DESCRIPTION("Qualcomm SPMI PMIC arbiter diagnostic bus");
+--- a/drivers/leds/rgb/leds-qcom-lpg.c
++++ b/drivers/leds/rgb/leds-qcom-lpg.c
+@@ -110,7 +110,7 @@
+ 
+ 	struct mutex lock;
+ 
+-	struct pwm_chip pwm;
++	struct pwm_chip *pwm;
+ 
+ 	const struct lpg_data *data;
+ 
+@@ -1203,7 +1203,7 @@
+ 
+ static int lpg_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
+ {
+-	struct lpg *lpg = container_of(chip, struct lpg, pwm);
++	struct lpg *lpg = pwmchip_get_drvdata(chip);
+ 	struct lpg_channel *chan = &lpg->channels[pwm->hwpwm];
+ 
+ 	return chan->in_use ? -EBUSY : 0;
+@@ -1219,7 +1219,7 @@
+ static int lpg_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
+ 			 const struct pwm_state *state)
+ {
+-	struct lpg *lpg = container_of(chip, struct lpg, pwm);
++	struct lpg *lpg = pwmchip_get_drvdata(chip);
+ 	struct lpg_channel *chan = &lpg->channels[pwm->hwpwm];
+ 	int ret = 0;
+ 
+@@ -1250,7 +1250,7 @@
+ static int lpg_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+ 			     struct pwm_state *state)
+ {
+-	struct lpg *lpg = container_of(chip, struct lpg, pwm);
++	struct lpg *lpg = pwmchip_get_drvdata(chip);
+ 	struct lpg_channel *chan = &lpg->channels[pwm->hwpwm];
+ 	unsigned int resolution;
+ 	unsigned int pre_div;
+@@ -1314,18 +1314,18 @@
+ 	.request = lpg_pwm_request,
+ 	.apply = lpg_pwm_apply,
+ 	.get_state = lpg_pwm_get_state,
+-	.owner = THIS_MODULE,
+ };
+ 
+ static int lpg_add_pwm(struct lpg *lpg)
+ {
+ 	int ret;
+ 
+-	lpg->pwm.dev = lpg->dev;
+-	lpg->pwm.npwm = lpg->num_channels;
+-	lpg->pwm.ops = &lpg_pwm_ops;
+-
+-	ret = pwmchip_add(&lpg->pwm);
++	lpg->pwm = devm_pwmchip_alloc(lpg->dev, lpg->num_channels, 0);
++	if (IS_ERR(lpg->pwm))
++		return PTR_ERR(lpg->pwm);
++	lpg->pwm->ops = &lpg_pwm_ops;
++	pwmchip_set_drvdata(lpg->pwm, lpg);
++	ret = devm_pwmchip_add(lpg->dev, lpg->pwm);
+ 	if (ret)
+ 		dev_err(lpg->dev, "failed to add PWM chip: ret %d\n", ret);
+ 
+@@ -1654,15 +1654,6 @@
+ 		lpg_apply_dtest(&lpg->channels[i]);
+ 
+ 	return lpg_add_pwm(lpg);
+-}
+-
+-static int lpg_remove(struct platform_device *pdev)
+-{
+-	struct lpg *lpg = platform_get_drvdata(pdev);
+-
+-	pwmchip_remove(&lpg->pwm);
+-
+-	return 0;
+ }
+ 
+ static const struct lpg_data pm8916_pwm_data = {
+@@ -1828,7 +1819,6 @@
+ 
+ static struct platform_driver lpg_driver = {
+ 	.probe = lpg_probe,
+-	.remove = lpg_remove,
+ 	.driver = {
+ 		.name = "qcom-spmi-lpg",
+ 		.of_match_table = lpg_of_table,
+--- a/drivers/dma/qcom/bam_dma.c
++++ b/drivers/dma/qcom/bam_dma.c
+@@ -461,6 +461,8 @@
+ 	struct remote_mem r_mem;
+ 
+ 	void *ipc_log_dma;
++	resource_size_t regs_size;
++	bool irq_requested;
+ };
+ 
+ /**
+@@ -610,23 +612,16 @@
+ 		return 0;
+ 
+ 	if (bdev->r_mem.is_r_mem) {
+-		bchan->fifo_virt = bdev->r_mem.r_vbase;
+-		bchan->fifo_phys = bdev->r_mem.r_res->start;
++		size_t offset = bchan->id * MSM_SLIM_DESC_FIFO_SIZE;
++		if (offset > resource_size(bdev->r_mem.r_res) ||
++		    MSM_SLIM_DESC_FIFO_SIZE > resource_size(bdev->r_mem.r_res) - offset)
++			return -ENOSPC;
++		bchan->fifo_virt = bdev->r_mem.r_vsbase + offset;
++		bchan->fifo_phys = bdev->r_mem.r_pbase + offset;
++		memset_io(bchan->fifo_virt, 0, MSM_SLIM_DESC_FIFO_SIZE);
+ 	} else {
+-		/* allocate FIFO descriptor space, but only if necessary */
+ 		bchan->fifo_virt = dma_alloc_wc(bdev->dev, BAM_DESC_FIFO_SIZE,
+-					&bchan->fifo_phys, GFP_KERNEL);
+-	}
+-
+-	if (bdev->r_mem.is_r_mem) {
+-		memset_io(bchan->fifo_virt, 0x0, MSM_SLIM_DESC_NUM * 8);
+-		bdev->r_mem.r_vbase = bdev->r_mem.r_vbase + (MSM_SLIM_DESC_NUM * 8);
+-		bdev->r_mem.r_res->start = bdev->r_mem.r_res->start + (MSM_SLIM_DESC_NUM * 8);
+-
+-		DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+-			    "dma_bam:%s: r_mem_virt_base:%p r_mem_start:%llx\n",
+-			    __func__, bdev->r_mem.r_vbase,
+-			    bdev->r_mem.r_res->start);
++					   &bchan->fifo_phys, GFP_KERNEL);
+ 	}
+ 
+ 	if (!bchan->fifo_virt) {
+@@ -676,9 +671,6 @@
+ 	if (!bdev->r_mem.is_r_mem) {
+ 		dma_free_wc(bdev->dev, BAM_DESC_FIFO_SIZE, bchan->fifo_virt,
+ 		    bchan->fifo_phys);
+-	} else {
+-		bdev->r_mem.r_vbase = bdev->r_mem.r_vsbase;
+-		bdev->r_mem.r_res->start = bdev->r_mem.r_pbase;
+ 	}
+ 
+ 	bchan->fifo_virt = NULL;
+@@ -1297,9 +1289,24 @@
+  *
+  * Initialization helper for global bam registers
+  */
++static unsigned int bam_mapped_channel_count(struct bam_device *bdev)
++{
++	unsigned int channel, reg;
++	for (channel = 0; channel < bdev->num_channels; channel++) {
++		for (reg = 0; reg < ARRAY_SIZE(bam_v1_7_reg_info); reg++) {
++			size_t offset = (unsigned long)bam_addr(bdev, channel, reg) -
++				(unsigned long)bdev->regs;
++			if (offset > bdev->regs_size || sizeof(u32) > bdev->regs_size - offset)
++				return channel;
++		}
++	}
++	return bdev->num_channels;
++}
++
+ static int bam_init(struct bam_device *bdev)
+ {
+ 	u32 val;
++	unsigned int mapped;
+ 
+ 	/* read revision and configuration information */
+ 	if (!bdev->num_ees) {
+@@ -1316,6 +1323,17 @@
+ 		bdev->num_channels = val & BAM_NUM_PIPES_MASK;
+ 	}
+ 
++	if (!bdev->num_channels || bdev->num_channels > 31)
++		return -EINVAL;
++	/* Remote firmware may advertise pipes outside the HLOS register window. */
++	mapped = bam_mapped_channel_count(bdev);
++	if (!mapped)
++		return -EINVAL;
++	if (mapped < bdev->num_channels) {
++		dev_info(bdev->dev, "Register window exposes %u of %u BAM channels\n",
++			 mapped, bdev->num_channels);
++		bdev->num_channels = mapped;
++	}
+ 	/* Reset BAM now if fully controlled locally */
+ 	if (!bdev->controlled_remotely && !bdev->powered_remotely)
+ 		bam_reset(bdev);
+@@ -1345,11 +1363,16 @@
+ 
+ MODULE_DEVICE_TABLE(of, bam_of_match);
+ 
++static void bam_dma_destroy_log(void *log)
++{
++	ipc_log_context_destroy(log);
++}
++
+ static int bam_dma_probe(struct platform_device *pdev)
+ {
+ 	struct bam_device *bdev;
+ 	const struct of_device_id *match;
+-	struct resource *remote_res;
++	struct resource *remote_res, *core_res;
+ 	int ret, i;
+ 
+ 	bdev = devm_kzalloc(&pdev->dev, sizeof(*bdev), GFP_KERNEL);
+@@ -1366,14 +1389,20 @@
+ 
+ 	bdev->layout = match->data;
+ 
+-	bdev->regs = devm_platform_ioremap_resource(pdev, 0);
++	bdev->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &core_res);
+ 	if (IS_ERR(bdev->regs))
+ 		return PTR_ERR(bdev->regs);
+ 
++	bdev->regs_size = resource_size(core_res);
++	if (bdev->regs_size < 0x100)
++		return -EINVAL;
+ 	bdev->ipc_log_dma = ipc_log_context_create(DMA_IPC_LOGPAGES,
+ 							"dma_bam_log", 0);
+-	if (!bdev->ipc_log_dma)
+-		dev_err(bdev->dev, "Failed to create dma bam log\n");
++	if (bdev->ipc_log_dma) {
++		ret = devm_add_action_or_reset(&pdev->dev, bam_dma_destroy_log, bdev->ipc_log_dma);
++		if (ret)
++			return ret;
++	}
+ 
+ 	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+ 		    "%s start %d\n", __func__, true);
+@@ -1382,6 +1411,8 @@
+ 	remote_res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+ 						"bam_remote_mem");
+ 	if (remote_res) {
++		if (remote_res->end > U32_MAX || (remote_res->start & 7))
++			return -EINVAL;
+ 		bdev->r_mem.is_r_mem = true;
+ 		bdev->r_mem.r_pbase = (unsigned long long)remote_res->start;
+ 		bdev->r_mem.r_vbase = devm_ioremap(&pdev->dev,
+@@ -1412,6 +1443,8 @@
+ 		return ret;
+ 	}
+ 
++	if (bdev->ee > NUM_EES_MASK)
++		return -EINVAL;
+ 	bdev->controlled_remotely = of_property_read_bool(pdev->dev.of_node,
+ 						"qcom,controlled-remotely");
+ 	bdev->powered_remotely = of_property_read_bool(pdev->dev.of_node,
+@@ -1472,13 +1505,10 @@
+ 	if (ret)
+ 		goto err_bam_channel_exit;
+ 
++	bdev->irq_requested = true;
+ 	/* set max dma segment size */
+ 	bdev->common.dev = bdev->dev;
+-	ret = dma_set_max_seg_size(bdev->common.dev, BAM_FIFO_SIZE);
+-	if (ret) {
+-		dev_err(bdev->dev, "cannot set maximum segment size\n");
+-		goto err_bam_channel_exit;
+-	}
++	dma_set_max_seg_size(bdev->common.dev, BAM_FIFO_SIZE);
+ 
+ 	platform_set_drvdata(pdev, bdev);
+ 
+@@ -1527,6 +1557,8 @@
+ err_unregister_dma:
+ 	dma_async_device_unregister(&bdev->common);
+ err_bam_channel_exit:
++	if (bdev->irq_requested)
++		devm_free_irq(bdev->dev, bdev->irq, bdev);
+ 	for (i = 0; i < bdev->num_channels; i++)
+ 		tasklet_kill(&bdev->channels[i].vc.task);
+ err_tasklet_kill:
+@@ -1537,42 +1569,34 @@
+ 	return ret;
+ }
+ 
+-static int bam_dma_remove(struct platform_device *pdev)
++static void bam_dma_remove(struct platform_device *pdev)
+ {
+ 	struct bam_device *bdev = platform_get_drvdata(pdev);
++	int ret;
+ 	u32 i;
+-
+-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev, "%s ret:%d\n", __func__, 0);
+-	if (bdev->ipc_log_dma)
+-		ipc_log_context_destroy(bdev->ipc_log_dma);
+-
+-	pm_runtime_force_suspend(&pdev->dev);
+ 
+ 	of_dma_controller_free(pdev->dev.of_node);
+ 	dma_async_device_unregister(&bdev->common);
+-
+-	/* mask all interrupts for this execution environment */
+-	writel_relaxed(0, bam_addr(bdev, 0,  BAM_IRQ_SRCS_MSK_EE));
+-
++	ret = pm_runtime_resume_and_get(&pdev->dev);
++	if (ret >= 0)
++		writel_relaxed(0, bam_addr(bdev, 0, BAM_IRQ_SRCS_MSK_EE));
+ 	devm_free_irq(bdev->dev, bdev->irq, bdev);
+-
++	tasklet_kill(&bdev->task);
+ 	for (i = 0; i < bdev->num_channels; i++) {
+-		bam_dma_terminate_all(&bdev->channels[i].vc.chan);
++		if (ret >= 0)
++			bam_dma_terminate_all(&bdev->channels[i].vc.chan);
+ 		tasklet_kill(&bdev->channels[i].vc.task);
+-
+-		if (!bdev->channels[i].fifo_virt)
+-			continue;
+-
+-		dma_free_wc(bdev->dev, BAM_DESC_FIFO_SIZE,
+-			    bdev->channels[i].fifo_virt,
+-			    bdev->channels[i].fifo_phys);
+-	}
+-
+-	tasklet_kill(&bdev->task);
+-
+-	clk_disable_unprepare(bdev->bamclk);
+-
+-	return 0;
++		if (bdev->channels[i].fifo_virt && !bdev->r_mem.is_r_mem)
++			dma_free_wc(bdev->dev, BAM_DESC_FIFO_SIZE,
++				    bdev->channels[i].fifo_virt, bdev->channels[i].fifo_phys);
++	}
++	pm_runtime_disable(&pdev->dev);
++	if (ret >= 0) {
++		pm_runtime_put_noidle(&pdev->dev);
++		clk_disable_unprepare(bdev->bamclk);
++	} else {
++		clk_unprepare(bdev->bamclk);
++	}
+ }
+ 
+ static int __maybe_unused bam_dma_runtime_suspend(struct device *dev)
+--- a/drivers/dma/qcom/bam_dma_trace.h
++++ b/drivers/dma/qcom/bam_dma_trace.h
+@@ -22,7 +22,7 @@
+ 		__dynamic_array(char, msg, MAX_MSG_LEN)
+ 	    ),
+ 	    TP_fast_assign
+-		(__assign_str(name, name);
++		(__assign_str(name);
+ 		WARN_ON_ONCE(vsnprintf(__get_dynamic_array(msg),
+ 			     MAX_MSG_LEN, vaf->fmt, *vaf->va) >= MAX_MSG_LEN);
+ 	    ),
+--- a/drivers/hwtracing/coresight/coresight-tpdm.c
++++ b/drivers/hwtracing/coresight/coresight-tpdm.c
+@@ -1367,7 +1367,10 @@
+ 	if (IS_ERR(base))
+ 		return PTR_ERR(base);
+ 
++	if (resource_size(&adev->res) < 0x1000)
++		return -EINVAL;
+ 	drvdata->base = base;
++	spin_lock_init(&drvdata->spinlock);
+ 
+ 	ret = tpdm_datasets_setup(drvdata);
+ 	if (ret)
+@@ -1381,6 +1384,8 @@
+ 		of_property_read_u32(drvdata->dev->of_node,
+ 			   "qcom,cmb-msrs-num", &drvdata->cmb_msr_num);
+ 
++	if (drvdata->dsb_msr_num > TPDM_DSB_MAX_MSR || drvdata->cmb_msr_num > TPDM_CMB_MAX_MSR)
++		return -EINVAL;
+ 	/* Set up coresight component description */
+ 	desc.name = coresight_alloc_device_name(&tpdm_devs, dev);
+ 	if (!desc.name)
+@@ -1396,8 +1401,6 @@
+ 	if (IS_ERR(drvdata->csdev))
+ 		return PTR_ERR(drvdata->csdev);
+ 
+-	spin_lock_init(&drvdata->spinlock);
+-
+ 	/* Decrease pm refcount when probe is done.*/
+ 	pm_runtime_put(&adev->dev);
+ 
+--- a/drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/hl7603.c
++++ b/drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/hl7603.c
+@@ -49,7 +49,7 @@
+ 	struct mca_debugfs_attr_info *attr_info = attr_data->attr_info;
+ 	struct boost_bypass_dev *dev_data =
+ 		(struct boost_bypass_dev *)attr_data->private;
+-	u8 val = 0;
++	int val;
+ 	ssize_t count = 0;
+ 
+ 	if (!dev_data || !attr_info) {
+@@ -59,6 +59,8 @@
+ 	switch (attr_info->debugfs_attr_name) {
+ 	case BOOST_PROP_VOUT_THRESHOLD:
+ 		val = i2c_smbus_read_byte_data(dev_data->client, VOUT_REG);
++		if (val < 0)
++			return val;
+ 		count = scnprintf(buf, PAGE_SIZE, "%x\n", val);
+ 		break;
+ 	default:
+@@ -96,7 +98,7 @@
+ 		break;
+ 	}
+ 
+-	return count;
++	return ret < 0 ? ret : count;
+ }
+ 
+ struct mca_debugfs_attr_info boost_debugfs_field_tbl[] = {
+@@ -112,7 +114,7 @@
+ 
+ 	if (!np) {
+ 		mca_log_err("device tree info missing\n");
+-		return -1;
++		return -EINVAL;
+ 	}
+ 	mca_parse_dts_u32(np, "vout_threshold", &(info->vout_threshold),
+ 			  VOUT_THRSHOLD_DEFAULT);
+@@ -125,15 +127,15 @@
+ 	return 0;
+ }
+ 
+-static int hl7603_set_voltage_threshold(struct boost_bypass_dev *info,
++static int hl7603_set_voltage_threshold_locked(struct boost_bypass_dev *info,
+ 					u32 vout_threshold)
+ {
+ 	u8 val = 0;
+-	int ret;
++	int ret, readback;
+ 
+ 	if ((vout_threshold > VOUT_REG_MAX) || vout_threshold < VOUT_REG_BASE) {
+ 		mca_log_err("vout_threshold no valid %d", info->vout_threshold);
+-		return -1;
++		return -EINVAL;
+ 	}
+ 	val = (vout_threshold - VOUT_REG_BASE) / VOUT_REG_STEP;
+ 
+@@ -142,9 +144,20 @@
+ 		mca_log_err("i2c read reg 0x%02X faild\n", VOUT_REG);
+ 		return ret;
+ 	}
+-	val = i2c_smbus_read_byte_data(info->client, VOUT_REG);
+-	mca_log_info("i2c read reg [0x%02X]=[%d]\n", VOUT_REG, val);
+-
++	readback = i2c_smbus_read_byte_data(info->client, VOUT_REG);
++	if (readback < 0)
++		return readback;
++	if (readback != val)
++		return -EIO;
++	return 0;
++}
++
++static int hl7603_set_voltage_threshold(struct boost_bypass_dev *info, u32 threshold)
++{
++	int ret;
++	mutex_lock(&info->io_lock);
++	ret = hl7603_set_voltage_threshold_locked(info, threshold);
++	mutex_unlock(&info->io_lock);
+ 	return ret;
+ }
+ 
+@@ -156,7 +169,7 @@
+ 
+ 	switch (event) {
+ 	case MCA_EVENT_PANEL_HBM_STATE_CHANGE:
+-		if (info->suport_hbm)
++		if (info->suport_hbm && val)
+ 			hl7603_set_voltage_threshold(
+ 				info, *(int *)val ? info->hbm_vout_threshold :
+ 						    info->vout_threshold);
+@@ -178,22 +191,30 @@
+ 	if (!info)
+ 		return -ENOMEM;
+ 
++	mutex_init(&info->io_lock);
+ 	info->client = client;
+ 	info->dev = &client->dev;
+ 	i2c_set_clientdata(client, info);
+ 	ret = hl7603_parse_dt(info);
+-	ret |= hl7603_set_voltage_threshold(info, info->vout_threshold);
++	if (ret)
++		return ret;
++	ret = hl7603_set_voltage_threshold(info, info->vout_threshold);
+ 	if (ret) {
+ 		mca_log_err("failed to init hl7603\n");
+ 		return ret;
+ 	}
++	info->panel_nb.notifier_call = hl7603_panel_notifier_cb;
++	ret = mca_event_block_notify_register(MCA_EVENT_TYPE_PANEL, &info->panel_nb);
++	if (ret)
++		return ret;
+ #ifdef CONFIG_DEBUG_FS
+-	mca_debugfs_create_group("hl7603", boost_debugfs_field_tbl,
+-				 BOOST_DEBUGFS_ATTRS_SIZE, info);
++	ret = mca_debugfs_create_group("hl7603", boost_debugfs_field_tbl,
++				     BOOST_DEBUGFS_ATTRS_SIZE, info);
++	if (ret) {
++		mca_event_block_notify_unregister(MCA_EVENT_TYPE_PANEL, &info->panel_nb);
++		return ret;
++	}
+ #endif
+-
+-	info->panel_nb.notifier_call = hl7603_panel_notifier_cb;
+-	mca_event_block_notify_register(MCA_EVENT_TYPE_PANEL, &info->panel_nb);
+ 
+ 	mca_log_err("probe success\n");
+ 	return 0;
+@@ -205,7 +226,7 @@
+ 
+ 	mca_event_block_notify_unregister(MCA_EVENT_TYPE_PANEL,
+ 					  &info->panel_nb);
+-	devm_kfree(&client->dev, info);
++	mca_debugfs_remove_group("hl7603");
+ }
+ 
+ static const struct of_device_id hl7603_of_match[] = {
+--- a/drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/inc/hl7603.h
++++ b/drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/inc/hl7603.h
+@@ -1,3 +1,4 @@
++#include <linux/mutex.h>
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /*
+  * hl7603.h
+@@ -51,6 +52,7 @@
+ #define STATUS 0x05
+ 
+ struct boost_bypass_dev {
++	struct mutex io_lock;
+ 	struct device *dev;
+ 	struct i2c_client *client;
+ 	struct notifier_block panel_nb;
+--- a/drivers/power/supply/mca/mca_ut_test/mca_ut_test.c
++++ b/drivers/power/supply/mca/mca_ut_test/mca_ut_test.c
+@@ -38,7 +38,10 @@
+ 			   const struct class_attribute *attr, char *buf)
+ {
+ 	struct ut_test *ut = container_of(class, struct ut_test, class);
+-	const char *str = ut->config_str ? ut->config_str : "";
++	const char *str = smp_load_acquire(&ut->config_str);
++
++	if (!str)
++		str = "";
+ 
+ 	return scnprintf(buf, PAGE_SIZE, "%s\n", str);
+ }
+@@ -73,7 +76,7 @@
+ 			fcc = mca_get_effective_result(ut->buck_charge_votable);
+ 	}
+ 
+-	return scnprintf(buf, PAGE_SIZE, "%d\n", fcc * 1000);
++	return scnprintf(buf, PAGE_SIZE, "%lld\n", (long long)fcc * 1000);
+ }
+ static CLASS_ATTR_RO(current_fcc);
+ 
+@@ -136,18 +139,11 @@
+ 		__val;                                                    \
+ 	})
+ 
+-static int ut_test_append_kv(char **p, bool comma, const char *key,
+-			     const char *val)
+-{
+-	int n = comma ? sprintf(*p, ",%s,%s", key, val) :
+-			sprintf(*p, "%s,%s", key, val);
+-
+-	if (n < 0) {
+-		mca_log_err("sprintf %s failed, ret = %d\n", key, n);
+-		return n;
+-	}
+-	*p += n;
+-	return 0;
++static void ut_test_append_kv(char *out, size_t size, size_t *len,
++			       const char *key, const char *val)
++{
++	*len += scnprintf(out + *len, size - *len, "%s%s,%s",
++			 *len ? "," : "", key, val);
+ }
+ 
+ static void ut_test_parse_dt_work(struct work_struct *work)
+@@ -167,9 +163,8 @@
+ 	bool has_lossless;
+ 	char key[64];
+ 	int vendor_id = 0;
+-	int len = 0;
+-	char *out, *p;
+-	int n;
++	size_t len = 1, used = 0;
++	char *out;
+ 
+ 	if (of_find_property(node, "has-global-batt-para", NULL)) {
+ 		strategy_class_fg_get_pack_vendor_id(&vendor_id);
+@@ -226,34 +221,37 @@
+ 	mca_log_info("dts_key: %s\n", key);
+ 	has_lossless = of_find_property(node, key, NULL) != NULL;
+ 	if (has_lossless)
+-		len += 0xf;
++		len += sizeof(",lossless_rechg");
+ 	mca_log_info("%s : %s\n", key, has_lossless ? "true" : "false");
+ 
+-	out = devm_kmalloc(ut->dev, len, GFP_KERNEL);
+-	if (!out) {
+-		mca_log_err("memory alloc for output str failed!\n");
++	/* Class output is limited to one page, including its terminating NUL. */
++	if (len > PAGE_SIZE - 1) {
++		mca_log_err("battery configuration exceeds class output size\n");
+ 		return;
+ 	}
+-	ut->config_str = out;
+-	p = out;
+-
+-	if (cycle_volt &&
+-	    ut_test_append_kv(&p, false, "cycle_volt", cycle_volt))
++	out = kzalloc(len, GFP_KERNEL);
++	if (!out)
+ 		return;
+-	if (cycle_step_curr &&
+-	    ut_test_append_kv(&p, true, "cycle_step_curr", cycle_step_curr))
+-		return;
+-	if (temp_term_curr &&
+-	    ut_test_append_kv(&p, true, "temp_term_curr", temp_term_curr))
+-		return;
+-	if (thermal && ut_test_append_kv(&p, true, "thermal", thermal))
+-		return;
+-	if (has_lossless) {
+-		n = sprintf(p, ",%s", "lossless_rechg");
+-		if (n < 0)
+-			mca_log_err("sprintf %s failed, ret = %d\n",
+-				    "lossless_rechg", n);
+-	}
++	if (cycle_volt)
++		ut_test_append_kv(out, len, &used, "cycle_volt", cycle_volt);
++	if (cycle_step_curr)
++		ut_test_append_kv(out, len, &used, "cycle_step_curr", cycle_step_curr);
++	if (temp_term_curr)
++		ut_test_append_kv(out, len, &used, "temp_term_curr", temp_term_curr);
++	if (thermal)
++		ut_test_append_kv(out, len, &used, "thermal", thermal);
++	if (has_lossless)
++		scnprintf(out + used, len - used, "%slossless_rechg", used ? "," : "");
++	/* This work runs once; publish only a complete immutable string. */
++	smp_store_release(&ut->config_str, out);
++}
++
++static void ut_test_class_release(const struct class *class)
++{
++	struct ut_test *ut = container_of(class, struct ut_test, class);
++
++	kfree(ut->config_str);
++	kfree(ut);
+ }
+ 
+ static int ut_test_probe(struct platform_device *pdev)
+@@ -263,7 +261,7 @@
+ 
+ 	mca_log_err("start\n");
+ 
+-	ut = devm_kzalloc(&pdev->dev, sizeof(*ut), GFP_KERNEL);
++	ut = kzalloc(sizeof(*ut), GFP_KERNEL);
+ 	if (!ut) {
+ 		mca_log_err("memory alloc failed!\n");
+ 		return -ENOMEM;
+@@ -272,10 +270,12 @@
+ 	ut->dev = &pdev->dev;
+ 	ut->class.name = "ut_test";
+ 	ut->class.class_groups = ut_test_groups;
++	ut->class.class_release = ut_test_class_release;
+ 
+ 	rc = class_register(&ut->class);
+ 	if (rc < 0) {
+ 		mca_log_err("Failed to create ut_class, rc = %d\n", rc);
++		kfree(ut);
+ 		return rc;
+ 	}
+ 
+@@ -283,19 +283,20 @@
+ 	INIT_DELAYED_WORK(&ut->parse_dt_work, ut_test_parse_dt_work);
+ 	platform_set_drvdata(pdev, ut);
+ 
+-	queue_delayed_work(system_wq, &ut->parse_dt_work, 5000);
++	queue_delayed_work(system_wq, &ut->parse_dt_work, msecs_to_jiffies(5000));
+ 	mca_log_err("success\n");
+-	queue_delayed_work(system_wq, &ut->voter_monitor_work, 6250);
++	queue_delayed_work(system_wq, &ut->voter_monitor_work, msecs_to_jiffies(6250));
+ 
+ 	return 0;
+ }
+ 
+-static int ut_test_remove(struct platform_device *pdev)
++static void ut_test_remove(struct platform_device *pdev)
+ {
+ 	struct ut_test *ut = platform_get_drvdata(pdev);
+ 
++	cancel_delayed_work_sync(&ut->voter_monitor_work);
++	cancel_delayed_work_sync(&ut->parse_dt_work);
+ 	class_unregister(&ut->class);
+-	return 0;
+ }
+ 
+ static const struct of_device_id ut_test_of_match[] = {

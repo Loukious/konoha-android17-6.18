@@ -828,7 +828,7 @@ business_charger_process_plate_shock(struct business_charger *charger,
 					  value == 1 ? 1 : 0);
 }
 
-static void
+static int
 business_charger_process_handle_logic(struct business_charger *charger)
 {
 	int last_handle_state = charger->last_handle_state;
@@ -836,6 +836,7 @@ business_charger_process_handle_logic(struct business_charger *charger)
 	int stop = charger->stop_handle_charge;
 	int hs = charger->handle_state;
 	int allow_charge = -1;
+	int ret, restore;
 
 	if (last_stop_handle_charge != 0 && stop == 0 && hs != 0) {
 		/* stop just cleared while a handle-state is set: hold off */
@@ -856,19 +857,26 @@ business_charger_process_handle_logic(struct business_charger *charger)
 		charger->usb_psy_info->charge_enable, last_handle_state,
 		last_stop_handle_charge, allow_charge, hs, stop);
 
-	charger->last_handle_state = charger->handle_state;
-	charger->last_stop_handle_charge = charger->stop_handle_charge;
-
 	if (allow_charge != -1 &&
 	    allow_charge != charger->usb_psy_info->charge_enable) {
-		charger->usb_psy_info->charge_enable = allow_charge;
-		business_usb_psy_event_process(charger->usb_psy_info);
-		business_charger_strategy_process(
-			charger, STRATEGY_FUNC_TYPE_BUCK_CHARGE,
-			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
-		business_charger_strategy_process(
+		int previous = charger->usb_psy_info->charge_enable;
+
+		ret = business_charger_strategy_process(
 			charger, STRATEGY_FUNC_TYPE_QUICK_CHARGE,
 			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
+		if (ret)
+			return ret;
+		ret = business_charger_strategy_process(
+			charger, STRATEGY_FUNC_TYPE_BUCK_CHARGE,
+			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
+		if (ret) {
+			restore = business_charger_strategy_process(
+				charger, STRATEGY_FUNC_TYPE_QUICK_CHARGE,
+				MCA_EVENT_HANDLE_ALLOW_CHARGE, previous);
+			return restore ? -EIO : ret;
+		}
+		charger->usb_psy_info->charge_enable = allow_charge;
+		business_usb_psy_event_process(charger->usb_psy_info);
 		if (allow_charge == 0) {
 			if (charger->real_type != 0) {
 				struct mca_event_notify_data n_data = { 0 };
@@ -883,6 +891,9 @@ business_charger_process_handle_logic(struct business_charger *charger)
 				charger);
 		}
 	}
+	charger->last_handle_state = charger->handle_state;
+	charger->last_stop_handle_charge = charger->stop_handle_charge;
+	return 0;
 }
 
 static void
@@ -1770,13 +1781,8 @@ static ssize_t bussiness_charger_sysfs_store(struct device *dev,
 	} else if (value != 0 && value != 1) {
 		return -EINVAL;
 	}
-	/* These stock extension events have no downstream strategy handlers yet. */
-	if (info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_HANDLE_STATE ||
-	    info->sysfs_attr_name ==
-		    BUSSINESS_CHARGER_PROP_STOP_HANDLE_CHARGE ||
-	    info->sysfs_attr_name ==
-		    BUSSINESS_CHARGER_PROP_START_QUICK_REVCHG ||
-	    info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_REVCHG_BCL)
+	/* Reverse battery-current limiting still has no fitted provider operation. */
+	if (info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_REVCHG_BCL)
 		return -EOPNOTSUPP;
 
 	switch (info->sysfs_attr_name) {
@@ -1807,11 +1813,15 @@ static ssize_t bussiness_charger_sysfs_store(struct device *dev,
 		break;
 	case BUSSINESS_CHARGER_PROP_HANDLE_STATE:
 		charger->handle_state = value;
-		business_charger_process_handle_logic(charger);
+		ret = business_charger_process_handle_logic(charger);
+		if (ret)
+			charger->handle_state = charger->last_handle_state;
 		break;
 	case BUSSINESS_CHARGER_PROP_STOP_HANDLE_CHARGE:
 		charger->stop_handle_charge = value;
-		business_charger_process_handle_logic(charger);
+		ret = business_charger_process_handle_logic(charger);
+		if (ret)
+			charger->stop_handle_charge = charger->last_stop_handle_charge;
 		break;
 	default:
 		return -EINVAL;

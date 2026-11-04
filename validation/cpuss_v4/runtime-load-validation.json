@@ -1,0 +1,15 @@
+{
+  "status": "PASS: verified v4 module loads with matching GKI and native platform driver registration",
+  "utc": "2026-11-03T14:25:05.135065+00:00",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T141132910330Z",
+  "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+  "kernel_build_id": "2d97afecef7f0f1ca73725d4f5368c0ac0b387de",
+  "module_build_id": "29eb863c0936feedbda1bf1b92174cba95871ace",
+  "module_sha256": "6b0c87aac3cc8710a96ccf021639a18c4f0c82e00b1c0cf96f0963d6a9dc552d",
+  "imports_checked": 21,
+  "wlan_module_unchanged_from_tested_fix": true,
+  "hardware_bound": false,
+  "reason": "No native v4 compatible on Onyx; older CPUSS node retained",
+  "persistent_install": false,
+  "limits": "Volatile insmod; not flashed into DLKM yet. No v4 hardware counters or reset tested."
+}

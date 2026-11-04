@@ -1,0 +1,221 @@
+--- a/drivers/soc/qcom/hung_task_enh.c
++++ b/drivers/soc/qcom/hung_task_enh.c
+@@ -8,7 +8,9 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+-#include <linux/syscore_ops.h>
++#include <linux/sysctl.h>
++#include <linux/atomic.h>
++#include <linux/pid.h>
+ #include <linux/sched/walt.h>
+ 
+ #include <trace/hooks/hung_task.h>
+@@ -39,24 +41,39 @@
+ struct hung_task_enh_data {
+ 	int read_pid;
+ 	int global_detect_mode;
+-	int curr_iowait_task_cnt;
++	atomic_t curr_iowait_task_cnt;
+ 	int max_iowait_task_cnt;
+-	int curr_iowait_timeout_cnt;
++	atomic_t curr_iowait_timeout_cnt;
+ 	int max_iowait_timeout_cnt;
+ 	struct ctl_table_header *ctl_table_hdr;
+ };
+ 
+ static struct hung_task_enh_data hung_task_enh;
+ 
+-void qcom_before_check_tasks(void *ignore, struct task_struct *t, unsigned long timeout,
++/* A disabled panic threshold must not allow signed scan-count overflow. */
++static int hung_task_saturating_inc(atomic_t *counter)
++{
++	int old = atomic_read(counter);
++
++	while (old < INT_MAX) {
++		int seen = atomic_cmpxchg(counter, old, old + 1);
++
++		if (seen == old)
++			return old + 1;
++		old = seen;
++	}
++	return INT_MAX;
++}
++
++static void qcom_before_check_tasks(void *ignore, struct task_struct *t, unsigned long timeout,
+ 							bool *need_check)
+ {
+-	struct walt_task_struct *wts = (struct walt_task_struct *) t->android_vendor_data1;
+-
+-	if ((hung_task_enh.global_detect_mode == HUNG_TASK_MODE_ALLOWLIST &&
+-			wts->hung_detect_status != TASK_IN_ALLOWLIST) ||
+-			(hung_task_enh.global_detect_mode == HUNG_TASK_MODE_BLOCKLIST &&
+-			wts->hung_detect_status == TASK_IN_BLOCKLIST)) {
++	struct walt_task_struct *wts = task_walt(t);
++
++	if ((READ_ONCE(hung_task_enh.global_detect_mode) == HUNG_TASK_MODE_ALLOWLIST &&
++			READ_ONCE(wts->hung_detect_status) != TASK_IN_ALLOWLIST) ||
++			(READ_ONCE(hung_task_enh.global_detect_mode) == HUNG_TASK_MODE_BLOCKLIST &&
++			READ_ONCE(wts->hung_detect_status) == TASK_IN_BLOCKLIST)) {
+ 		*need_check = false;
+ 		return;
+ 	}
+@@ -68,25 +85,27 @@
+ 			t->last_switch_time != 0 &&
+ 			time_is_before_jiffies(t->last_switch_time + timeout * HZ) &&
+ 			(t->mm != NULL && t == t->group_leader))
+-		hung_task_enh.curr_iowait_task_cnt++;
+-}
+-
+-void qcom_check_tasks_done(void *ignore, void *extra)
+-{
+-	if (hung_task_enh.curr_iowait_task_cnt >= hung_task_enh.max_iowait_task_cnt)
+-		hung_task_enh.curr_iowait_timeout_cnt++;
+-	else
+-		hung_task_enh.curr_iowait_timeout_cnt = 0;
+-
+-	if (hung_task_enh.max_iowait_timeout_cnt != 0 &&
+-	   hung_task_enh.curr_iowait_timeout_cnt >= hung_task_enh.max_iowait_timeout_cnt)
++		hung_task_saturating_inc(&hung_task_enh.curr_iowait_task_cnt);
++}
++
++static void qcom_check_tasks_done(void *ignore, void *extra)
++{
++	int count = atomic_xchg(&hung_task_enh.curr_iowait_task_cnt, 0);
++	int limit = READ_ONCE(hung_task_enh.max_iowait_timeout_cnt);
++	int consecutive;
++
++	if (count >= READ_ONCE(hung_task_enh.max_iowait_task_cnt))
++		consecutive = hung_task_saturating_inc(&hung_task_enh.curr_iowait_timeout_cnt);
++	else {
++		atomic_set(&hung_task_enh.curr_iowait_timeout_cnt, 0);
++		consecutive = 0;
++	}
++	if (limit && consecutive >= limit)
+ 		panic("Detect IO wait too long time for multiple tasks!\n");
+-
+-	hung_task_enh.curr_iowait_task_cnt = 0;
+ }
+ 
+ static DEFINE_MUTEX(readpid_mutex);
+-static int read_pid_handler(struct ctl_table *table, int write,
++static int read_pid_handler(const struct ctl_table *table, int write,
+ 				void __user *buffer, size_t *lenp, loff_t *ppos)
+ {
+ 	int ret;
+@@ -98,11 +117,12 @@
+ 	return ret;
+ }
+ 
+-static int hung_task_handler(struct ctl_table *table, int write,
++static int hung_task_handler(const struct ctl_table *table, int write,
+ 				void __user *buffer, size_t *lenp, loff_t *ppos)
+ {
+ 	int ret;
+ 	struct task_struct *task;
++	struct pid *pid;
+ 	struct walt_task_struct *wts;
+ 	int pid_and_val[2] = {-1, -1};
+ 
+@@ -115,15 +135,16 @@
+ 	mutex_lock(&readpid_mutex);
+ 
+ 	if (!write) {
+-		task = get_pid_task(find_vpid(hung_task_enh.read_pid),
+-				PIDTYPE_PID);
++		pid = find_get_pid(hung_task_enh.read_pid);
++		task = get_pid_task(pid, PIDTYPE_PID);
++		put_pid(pid);
+ 		if (!task) {
+ 			ret = -ENOENT;
+ 			goto unlock_mutex;
+ 		}
+-		wts = (struct walt_task_struct *) task->android_vendor_data1;
++		wts = task_walt(task);
+ 		pid_and_val[0] = hung_task_enh.read_pid;
+-		pid_and_val[1] = wts->hung_detect_status;
++		pid_and_val[1] = READ_ONCE(wts->hung_detect_status);
+ 		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
+ 		goto put_task;
+ 	}
+@@ -137,20 +158,22 @@
+ 		goto unlock_mutex;
+ 	}
+ 
+-	task = get_pid_task(find_vpid(pid_and_val[0]), PIDTYPE_PID);
++	pid = find_get_pid(pid_and_val[0]);
++	task = get_pid_task(pid, PIDTYPE_PID);
++	put_pid(pid);
+ 	if (!task) {
+ 		ret = -ENOENT;
+ 		goto unlock_mutex;
+ 	}
+ 
+-	wts = (struct walt_task_struct *) task->android_vendor_data1;
++	wts = task_walt(task);
+ 	if (pid_and_val[1] == 1) {
+-		if (hung_task_enh.global_detect_mode == HUNG_TASK_MODE_ALLOWLIST)
+-			wts->hung_detect_status = TASK_IN_ALLOWLIST;
++		if (READ_ONCE(hung_task_enh.global_detect_mode) == HUNG_TASK_MODE_ALLOWLIST)
++			WRITE_ONCE(wts->hung_detect_status, TASK_IN_ALLOWLIST);
+ 		else
+-			wts->hung_detect_status = TASK_IN_BLOCKLIST;
++			WRITE_ONCE(wts->hung_detect_status, TASK_IN_BLOCKLIST);
+ 	} else {
+-		wts->hung_detect_status = TASK_DEFAULT;
++		WRITE_ONCE(wts->hung_detect_status, TASK_DEFAULT);
+ 	}
+ 
+ put_task:
+@@ -161,7 +184,7 @@
+ 	return ret;
+ }
+ 
+-struct ctl_table hung_task_table[] = {
++static const struct ctl_table hung_task_table[] = {
+ 	{
+ 		.procname	= "global_detect_mode",
+ 		.data		= &hung_task_enh.global_detect_mode,
+@@ -205,13 +228,17 @@
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_INT_MAX,
+ 	},
+-	{ }
+ };
+ 
+ static int __init hung_task_enh_init(void)
+ {
+ 	int ret;
+ 
++	/* The native WALT provider owns and validates the GKI task extension. */
++	if (!walt_task_data_available())
++		return -ENODEV;
++	atomic_set(&hung_task_enh.curr_iowait_task_cnt, 0);
++	atomic_set(&hung_task_enh.curr_iowait_timeout_cnt, 0);
+ 	hung_task_enh.max_iowait_task_cnt = DEFAULT_MAX_IOWAIT_TASK;
+ 
+ 	ret = register_trace_android_vh_check_uninterruptible_tasks(
+@@ -224,6 +251,7 @@
+ 	if (ret) {
+ 		unregister_trace_android_vh_check_uninterruptible_tasks(
+ 						qcom_before_check_tasks, NULL);
++		tracepoint_synchronize_unregister();
+ 		return ret;
+ 	}
+ 
+@@ -234,6 +262,7 @@
+ 						qcom_before_check_tasks, NULL);
+ 		unregister_trace_android_vh_check_uninterruptible_tasks_dn(
+ 						qcom_check_tasks_done, NULL);
++		tracepoint_synchronize_unregister();
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -248,6 +277,7 @@
+ 						qcom_before_check_tasks, NULL);
+ 	unregister_trace_android_vh_check_uninterruptible_tasks_dn(
+ 						qcom_check_tasks_done, NULL);
++	tracepoint_synchronize_unregister();
+ }
+ module_exit(hung_task_enh_exit);
+ 

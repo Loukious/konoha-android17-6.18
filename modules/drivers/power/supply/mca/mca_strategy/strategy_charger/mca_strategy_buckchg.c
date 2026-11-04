@@ -1257,11 +1257,19 @@ strategy_buckchg_check_reverse_quick_charge(struct strategy_buckchg_dev *info,
 	int soc;
 	bool otg = false;
 	int eligible = 0;
+	int ret;
 
-	strategy_class_fg_ops_get_temperature(&batt_temp);
+	*out = 0;
+	ret = strategy_class_fg_ops_get_temperature(&batt_temp);
+	if (ret)
+		return ret;
 	soc = strategy_class_fg_ops_get_soc();
+	if (soc < 0)
+		return soc;
 	batt_temp /= 10;
-	protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
+	ret = protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
+	if (ret)
+		return ret;
 	mca_log_info(
 		"otg_present = %d, batt_temp = %d, thermal_board_temp =%d\n",
 		otg, batt_temp, info->thermal_board_temp);
@@ -3113,6 +3121,8 @@ static void strategy_csd_pulse_process_workfunc_locked(struct work_struct *work)
 	}
 }
 
+static int strategy_buckchg_set_reverse_gear(struct strategy_buckchg_dev *info, int gear);
+
 static void
 strategy_source_status_monitor_workfunc_locked(struct work_struct *work)
 {
@@ -3127,7 +3137,12 @@ strategy_source_status_monitor_workfunc_locked(struct work_struct *work)
 	char buf[128];
 	struct mca_event_notify_data n;
 
-	strategy_buckchg_check_reverse_quick_charge(info, &eligible);
+	ret = strategy_buckchg_check_reverse_quick_charge(info, &eligible);
+	if (ret) {
+		/* Invalid sensor/OTG data must request the safe gear. */
+		eligible = 0;
+		goto commit;
+	}
 
 	if (info->support_revchg_screenon) {
 		if (info->src_monitor_flag) {
@@ -3141,7 +3156,11 @@ strategy_source_status_monitor_workfunc_locked(struct work_struct *work)
 				goto reschedule;
 			eligible = 2;
 		}
-		strategy_class_fg_ops_get_current(&info->src_monitor_cur);
+		ret = strategy_class_fg_ops_get_current(&info->src_monitor_cur);
+		if (ret) {
+			eligible = 0;
+			goto commit;
+		}
 		mca_log_info("source monitor current: %d\n",
 			     info->src_monitor_cur);
 		if (info->src_monitor_cur > 3000031)
@@ -3156,23 +3175,26 @@ commit:
 
 	if (!info->support_revchg_screenon) {
 		mca_log_err("source boost status: %d\n", eligible);
-		info->source_boost_status = eligible;
-		protocol_class_pd_set_gear_shift(TYPEC_PORT_0,
-						 info->source_boost_status);
+		ret = strategy_buckchg_set_reverse_gear(info, eligible);
+		if (!ret)
+			info->source_boost_status = eligible;
 		goto reschedule;
 	}
 
 	if (info->src_gear_last != eligible) {
 		mca_log_err("set gear shift: %d\n", eligible);
-		protocol_class_pd_set_gear_shift(TYPEC_PORT_0, eligible);
-		info->src_gear_last = eligible;
+		ret = strategy_buckchg_set_reverse_gear(info, eligible);
+		if (ret)
+			goto reschedule;
 	}
 
 	if (eligible == 2 && info->source_boost_status == 1) {
 		info->src_monitor_byte = 0;
 		retry = 5;
 		do {
-			platform_class_cp_enable_adc(CP_ROLE_MASTER, true);
+			ret = platform_class_cp_enable_adc(CP_ROLE_MASTER, true);
+			if (ret)
+				goto reschedule;
 			for (i = 0; i < 20; i++)
 				udelay(1000);
 			ret = platform_class_cp_get_bus_current(CP_ROLE_MASTER,
@@ -3631,6 +3653,49 @@ strategy_buckchg_soc_limit_stepper_workfunc(struct work_struct *work)
 	strategy_buckchg_soc_limit_stepper_workfunc_locked(work);
 }
 
+/* Record accepted hardware gears only. Caller holds policy_lock. */
+static int strategy_buckchg_set_reverse_gear(struct strategy_buckchg_dev *info, int gear)
+{
+	int ret = protocol_class_pd_set_gear_shift(TYPEC_PORT_0, gear);
+
+	if (!ret)
+		info->src_gear_last = gear;
+	return ret;
+}
+
+/* A user request changes the existing wired PD gear, never peer authentication. */
+static int strategy_buckchg_request_reverse(struct strategy_buckchg_dev *info,
+                                           int value)
+{
+	bool old_gate = info->reverse_qc_gate0;
+	int eligible = 0, ret;
+
+	if (value != 0 && value != 1)
+		return -EINVAL;
+	if (!info->support_reverse_quick_charge)
+		return -EOPNOTSUPP;
+	if (value && (!info->cp_revert_auth || !info->reverse_auth))
+		return -EACCES;
+	info->reverse_qc_gate0 = !value;
+	if (value) {
+		ret = strategy_buckchg_check_reverse_quick_charge(info, &eligible);
+		if (ret)
+			goto restore;
+		if (!eligible) {
+			ret = -EAGAIN;
+			goto restore;
+		}
+	}
+	ret = strategy_buckchg_set_reverse_gear(info, eligible);
+	if (ret)
+		goto restore;
+	info->source_boost_status = eligible;
+	return 0;
+restore:
+	info->reverse_qc_gate0 = old_gate;
+	return ret;
+}
+
 static int strategy_buckchg_process_event(int event, int value, void *data)
 {
 	struct strategy_buckchg_dev *info = data;
@@ -3640,6 +3705,21 @@ static int strategy_buckchg_process_event(int event, int value, void *data)
 
 	if (!info)
 		return -EINVAL;
+	if (event == MCA_EVENT_START_QUICK_REVCHG) {
+		guard(mutex)(&info->policy_lock);
+		if (info->stopping)
+			return -ENODEV;
+		return strategy_buckchg_request_reverse(info, value);
+	}
+	/* Handle policy needs a synchronous result for business-layer rollback. */
+	if (event == MCA_EVENT_HANDLE_ALLOW_CHARGE) {
+		if (value != 0 && value != 1)
+			return -EINVAL;
+		guard(mutex)(&info->policy_lock);
+		if (info->stopping)
+			return -ENODEV;
+		return mca_vote_policy(info->chg_enable_voter, "handle", !value, 0);
+	}
 	if (event == MCA_EVENT_WIRELESS_REVCHG &&
 	    !IS_ENABLED(CONFIG_MCA_BUCK_WLS_REV_COORDINATION))
 		return -EOPNOTSUPP;

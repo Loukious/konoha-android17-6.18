@@ -1,0 +1,38 @@
+{
+  "status": "UNBOUND: native driver registers but probe rejects device",
+  "utc": "2026-11-03T14:33:15.898735+00:00",
+  "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/hotspot-wiphy-lock-20261103T135827Z/cpuss-native-load-20261103T143314Z",
+  "module_build_id": "da2cfac4203bd60479a65b6a34f801a023193466",
+  "module_sha256": "1b06c93fc223aa2c9b01934cb4994001618e640b78ee17a64631d71b943432a5",
+  "module_verification": [
+    {
+      "module": "qcom_cpuss_sleep_stats.ko",
+      "sha256": "1b06c93fc223aa2c9b01934cb4994001618e640b78ee17a64631d71b943432a5",
+      "vermagic": "6.18.38-android17-5-maybe-dirty-4k SMP preempt mod_unload modversions aarch64",
+      "imports_checked": 40,
+      "depends": "qcom-scm",
+      "aliases": [
+        "of:N*T*Cqcom,cpuss-sleep-stats",
+        "of:N*T*Cqcom,cpuss-sleep-statsC*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v2C*",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3",
+        "of:N*T*Cqcom,cpuss-sleep-stats-v3C*"
+      ]
+    }
+  ],
+  "device": "17800054.cpuss-sleep-stats",
+  "stats_lines": 0,
+  "hardware_bound": false,
+  "persistent_install": false,
+  "limits": [
+    "Native SCM configuration read at 0x17800054 returned -EINVAL; no counter reads or reset performed.",
+    "Volatile standalone module only; not in persistent DLKM images."
+  ],
+  "probe_messages": [
+    "[ 1433.347698] qcom_cpuss_sleep_stats 17800054.cpuss-sleep-stats: probe with driver qcom_cpuss_sleep_stats failed with error -22",
+    "[ 1742.088874] qcom_cpuss_sleep_stats 17800054.cpuss-sleep-stats: error -EINVAL: Cannot read CPU config at 0x0000000017800054",
+    "[ 1742.088896] qcom_cpuss_sleep_stats 17800054.cpuss-sleep-stats: probe with driver qcom_cpuss_sleep_stats failed with error -22"
+  ]
+}

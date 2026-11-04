@@ -1,0 +1,42 @@
+[
+  {
+    "command": "cat /proc/sys/kernel/random/boot_id",
+    "returncode": 0,
+    "output": "f2e3caf9-2423-4d93-801e-1f0927f1b27e\n"
+  },
+  {
+    "command": "ls /sys/module/onyx_cpuss_diag",
+    "returncode": 1,
+    "output": "ls: /sys/module/onyx_cpuss_diag: No such file or directory\n"
+  },
+  {
+    "command": "sha256sum /data/local/tmp/onyx-cpuss-mmio-20261103T152400Z.ko",
+    "returncode": 0,
+    "output": "9870462e0bc98499dd61dc98b62b8ed6fe4ba54dc904220d9df9b95ad1e7375d  /data/local/tmp/onyx-cpuss-mmio-20261103T152400Z.ko\n"
+  },
+  {
+    "command": "insmod /data/local/tmp/onyx-cpuss-mmio-20261103T152400Z.ko",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "cat /proc/sys/kernel/random/boot_id",
+    "returncode": 0,
+    "output": "f2e3caf9-2423-4d93-801e-1f0927f1b27e\n"
+  },
+  {
+    "command": "getenforce",
+    "returncode": 0,
+    "output": "Enforcing\n"
+  },
+  {
+    "command": "rmmod onyx_cpuss_diag",
+    "returncode": 0,
+    "output": ""
+  },
+  {
+    "command": "rm -f /data/local/tmp/onyx-cpuss-mmio-20261103T152400Z.ko",
+    "returncode": 0,
+    "output": ""
+  }
+]

@@ -1,0 +1,53 @@
+{
+  "serial": "5493f3c6",
+  "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+  "slot": "_a",
+  "utc": "2026-11-03T15:05:05.162325+00:00",
+  "read_only_acquisition": true,
+  "partitions": {
+    "tz": {
+      "partition": "/dev/block/bootdevice/by-name/tz_a",
+      "resolved_device": "/dev/block/sdd5",
+      "size": 5242880,
+      "sha256": "6f5766bcc00a00014c3fd128a4f759aecb4ca397078070ddc45a95276a9bfeb0",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/tz_a.img"
+    },
+    "hyp": {
+      "partition": "/dev/block/bootdevice/by-name/hyp_a",
+      "resolved_device": "/dev/block/sdd6",
+      "size": 8388608,
+      "sha256": "130e8d202b64798a6aae82220dc85abc5810ca9a90f3668b9974e7a1097b3b69",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/hyp_a.img"
+    },
+    "cpucp": {
+      "partition": "/dev/block/bootdevice/by-name/cpucp_a",
+      "resolved_device": "/dev/block/sdd22",
+      "size": 1048576,
+      "sha256": "2a167ea5de2ae51a5b9d9fa27e25bfba156e3bd3f94f544752312fc60d968930",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/cpucp_a.img"
+    },
+    "cpucp_dtb": {
+      "partition": "/dev/block/bootdevice/by-name/cpucp_dtb_a",
+      "resolved_device": "/dev/block/sdd30",
+      "size": 65536,
+      "sha256": "8b915dd42cb60015e10cba2607ccc7870a5e571eaf0d1c1b83e2a95b56077531",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/cpucp_dtb_a.img"
+    },
+    "uefi": {
+      "partition": "/dev/block/bootdevice/by-name/uefi_a",
+      "resolved_device": "/dev/block/sdd1",
+      "size": 5242880,
+      "sha256": "a22986de65e19a745645b3fe8d85a4a414cffd585c526e4a5f63c1dbdfc237fa",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/uefi_a.img"
+    },
+    "uefisecapp": {
+      "partition": "/dev/block/bootdevice/by-name/uefisecapp_a",
+      "resolved_device": "/dev/block/sdd19",
+      "size": 2097152,
+      "sha256": "7b88911dee444876ae021a5df838b11e2162724d66e24b5ee797626754855783",
+      "path": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/uefisecapp_a.img"
+    }
+  },
+  "boot_unchanged": true,
+  "selinux": "Enforcing"
+}

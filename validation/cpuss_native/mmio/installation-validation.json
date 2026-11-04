@@ -1,0 +1,30 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T153808728566Z",
+  "attempt": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/cpuss-config-mmio-20261103T153750Z",
+  "changed_images": [
+    "system_dlkm",
+    "vendor_dlkm",
+    "vendor_boot",
+    "boot"
+  ],
+  "image_report_sha256": "eb5f40e1b4fb3c7856c72c8e92c48184de75220ea69a0f3c56b1734392715016",
+  "fresh_backup_receipt_sha256": "f2212be662f388563e8d1a7acc4d4a5af22baad1ac740272a6a868f91a54aa1a",
+  "installer_sha256": "df2cd6c1b9dd80f902cc6d52a88ebaf933b3221fced4e171fed68372bec9467b",
+  "installer_mock_sha256": "5181785e8be9736bdd76ef629bdbb07474847975f119bc52132882b5fe5bfb3b",
+  "installer_mock_result": "PASS: 10 installer preflight, write/readback failure and success cases; no device writes",
+  "installation_receipt_sha256": "b9623b9389af536bf60011f99a887814989c8e3133f7aa433b14b17866489a85",
+  "installation_status": "changed candidate images flashed; vendor_boot readback verified; corrected recovery retained; reboot pending",
+  "partition_readbacks": {
+    "boot": "ac93379733a1b82ae8a4ea385a79add423ad80fa2d693591e3691a8ed5df2975",
+    "vendor_boot": "6f507299c7590705fb038b0694f1097da1e2d8b6ec9d60dc48d81cf90539c6e4",
+    "dtbo": "fc4da5b5b04160fc1760c425f684d584d2780f308c8ef200d62eaa8d9e6d9680",
+    "system_dlkm": "0717ae341dc5b98852545260c279559c118c05c3fd3f1b4cc020abfdae6211ff",
+    "vendor_dlkm": "78c85c6f4f75b0a374da2e9c18c4e49a0ff488681ccba7b66be2edc03cf9252a",
+    "recovery": "cd4a2ccff5bd02170ac4054780eeb72b7ff9ecacfc2c79f70010d416cc28e5f3"
+  },
+  "persistent_runtime": "persistent-runtime.json",
+  "first_preflight_failure": "WSL fastboot launch failed before any flash; receipt preserved locally. Final exact CPUSS installer/mocks use a fresh receipt.",
+  "archived_installer_sha256": "bd91cea8887b72a839a04f84976783bbe54d2ca38e34be492976f1de65e76aff",
+  "archived_installer_normalization": "Trailing whitespace removed in inspection copy; installer_sha256 pins exact executed script retained at the recorded private attempt."
+}

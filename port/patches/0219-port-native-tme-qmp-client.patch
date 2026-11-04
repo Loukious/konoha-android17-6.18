@@ -1,0 +1,495 @@
+--- a/drivers/soc/qcom/tmecom/tmecom.c
++++ b/drivers/soc/qcom/tmecom/tmecom.c
+@@ -15,6 +15,10 @@
+ #include <linux/mailbox/qmp.h>
+ #include <linux/uaccess.h>
+ #include <linux/mailbox_controller.h>
++#include <linux/jiffies.h>
++#include <linux/spinlock.h>
++#include <linux/random.h>
++#include <linux/unaligned.h>
+ 
+ #include "tmecom.h"
+ 
+@@ -22,12 +26,24 @@
+ 	struct device *dev;
+ 	struct mbox_client cl;
+ 	struct mbox_chan *chan;
+-	struct mutex lock;
+-	struct qmp_pkt pkt;
++	spinlock_t rx_lock;
++	struct qmp_pkt tx_pkt;
+ 	wait_queue_head_t waitq;
+ 	void *txbuf;
++	void *rxbuf;
++	size_t rxsize;
++	int rx_error;
+ 	bool rx_done;
++	bool waiting;
++	bool desynchronized;
++	u32 transaction;
++	int tx_error;
+ };
++
++/* Serialize requests and pin the device until each request has finished. */
++static DEFINE_MUTEX(tmecom_lock);
++/* Shared by reprobes. Never reuse an ID within this module lifetime. */
++static u32 next_transaction;
+ 
+ #if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
+ #include <linux/tme_hwkm_master_defs.h>
+@@ -56,112 +72,102 @@
+ #define CBOR_NUM_BYTES (sizeof(unsigned int))
+ #define TMECOM_RX_HDR_SIZE (TMECOM_TX_HDR_SIZE + CBOR_NUM_BYTES)
+ 
+-/*
+- * CBOR encode emulation
+- * Prepend tmecom_msg_hdr space
+- * CBOR tag is prepended in request
+- */
+-static inline size_t tmecom_encode(struct tmecom *tdev, const void *reqbuf,
+-		size_t size)
+-{
+-	unsigned int *msg = tdev->txbuf + TMECOM_TX_HDR_SIZE;
+-	unsigned int *src = (unsigned int *)reqbuf;
+-
+-	memcpy(msg, src, size);
+-	return (size + TMECOM_TX_HDR_SIZE);
+-}
+-
+-/*
+- * CBOR decode emulation
+- * Strip tmecom_msg_hdr & CBOR tag
+- */
+-static inline size_t tmecom_decode(struct tmecom *tdev, void *respbuf)
+-{
+-	unsigned int *msg = tdev->pkt.data + TMECOM_RX_HDR_SIZE;
+-	unsigned int *rbuf = (unsigned int *)respbuf;
+-
+-	memcpy(rbuf, msg, (tdev->pkt.size - TMECOM_RX_HDR_SIZE));
+-	return (tdev->pkt.size - TMECOM_RX_HDR_SIZE);
+-}
+-
+-static bool tmecom_check_rx_done(struct tmecom *tdev)
+-{
+-	return  tdev->rx_done;
++/* Use the native transaction header and clear reserved/alignment bytes. */
++static size_t tmecom_encode(struct tmecom *tdev, const void *reqbuf, size_t size)
++{
++	size_t frame_size = ALIGN(size + TMECOM_TX_HDR_SIZE, sizeof(u32));
++
++	memset(tdev->txbuf, 0, frame_size);
++	put_unaligned_le32(tdev->transaction, (u8 *)tdev->txbuf + sizeof(u32));
++	memcpy((u8 *)tdev->txbuf + TMECOM_TX_HDR_SIZE, reqbuf, size);
++	return frame_size;
+ }
+ 
+ int tmecom_process_request(const void *reqbuf, size_t reqsize, void *respbuf,
+ 		size_t *respsize)
+ {
+-	struct tmecom *tdev = tmedev;
+-	long time_left = 0;
+-	int ret = 0;
+-
+-	/*
+-	 * Check to handle if probe is not successful or not completed yet
+-	 */
++	struct tmecom *tdev;
++	size_t capacity, payload_size;
++	unsigned long flags;
++	long time_left;
++	int ret;
++
++	if (!reqbuf || !reqsize || reqsize > MBOX_MAX_MSG_LEN - TMECOM_TX_HDR_SIZE ||
++	    !respbuf || !respsize)
++		return -EINVAL;
++	capacity = *respsize;
++	if (!capacity || capacity > MBOX_MAX_MSG_LEN)
++		return -EINVAL;
++	*respsize = 0;
++	ret = mutex_lock_interruptible(&tmecom_lock);
++	if (ret)
++		return ret;
++	tdev = tmedev;
+ 	if (!tdev) {
+-		pr_err("%s: tmecom dev is NULL\n", __func__);
+-		return -ENODEV;
+-	}
+-
+-	if (!reqbuf || !reqsize || (reqsize > MBOX_MAX_MSG_LEN)) {
+-		dev_err(tdev->dev, "invalid reqbuf or reqsize\n");
+-		return -EINVAL;
+-	}
+-
+-	if (!respbuf || !respsize || (*respsize > MBOX_MAX_MSG_LEN)) {
+-		dev_err(tdev->dev, "invalid respbuf or respsize\n");
+-		return -EINVAL;
+-	}
+-
+-	mutex_lock(&tdev->lock);
+-
++		ret = -ENODEV;
++		goto unlock;
++	}
++	spin_lock_irqsave(&tdev->rx_lock, flags);
++	if (tdev->desynchronized) {
++		spin_unlock_irqrestore(&tdev->rx_lock, flags);
++		ret = -EPIPE;
++		goto unlock;
++	}
++	if (!next_transaction)
++		next_transaction = get_random_u32() ?: 1;
++	if (next_transaction == U32_MAX) {
++		spin_unlock_irqrestore(&tdev->rx_lock, flags);
++		ret = -EOVERFLOW;
++		goto unlock;
++	}
++	tdev->transaction = next_transaction++;
++	tdev->tx_error = 0;
++	tdev->waiting = true;
+ 	tdev->rx_done = false;
+-	tdev->pkt.size = tmecom_encode(tdev, reqbuf, reqsize);
+-	/*
+-	 * Controller expects a 4 byte aligned buffer
+-	 */
+-	tdev->pkt.size = (tdev->pkt.size + 0x3) & ~0x3;
+-	tdev->pkt.data = tdev->txbuf;
+-
+-	pr_debug("tmecom encoded request size = %u\n", tdev->pkt.size);
+-	print_hex_dump_bytes("tmecom sending bytes : ",
+-			DUMP_PREFIX_ADDRESS, tdev->pkt.data, tdev->pkt.size);
+-
+-	if (mbox_send_message(tdev->chan, &tdev->pkt) < 0) {
+-		dev_err(tdev->dev, "failed to send qmp message\n");
+-		ret = -EAGAIN;
+-		goto err_exit;
+-	}
+-
++	tdev->rx_error = 0;
++	tdev->rxsize = 0;
++	spin_unlock_irqrestore(&tdev->rx_lock, flags);
++	tdev->tx_pkt.size = tmecom_encode(tdev, reqbuf, reqsize);
++	tdev->tx_pkt.data = tdev->txbuf;
++	ret = mbox_send_message(tdev->chan, &tdev->tx_pkt);
++	if (ret < 0)
++		goto finish;
++	if (READ_ONCE(tdev->tx_error)) {
++		ret = READ_ONCE(tdev->tx_error);
++		goto finish;
++	}
+ 	time_left = wait_event_interruptible_timeout(tdev->waitq,
+-			tmecom_check_rx_done(tdev), tdev->cl.tx_tout);
+-
+-	if (!time_left) {
+-		dev_err(tdev->dev, "request timed out\n");
++			smp_load_acquire(&tdev->rx_done), msecs_to_jiffies(tdev->cl.tx_tout));
++	if (time_left < 0)
++		ret = time_left;
++	else if (!time_left)
+ 		ret = -ETIMEDOUT;
+-		goto err_exit;
+-	}
+-
+-	dev_info(tdev->dev, "response received\n");
+-
+-	pr_debug("tmecom received size = %u\n", tdev->pkt.size);
+-	print_hex_dump_bytes("tmecom received bytes : ",
+-			DUMP_PREFIX_ADDRESS, tdev->pkt.data, tdev->pkt.size);
+-
+-	if (tdev->pkt.size <= TMECOM_RX_HDR_SIZE) {
+-		dev_err(tdev->dev, "invalid pkt.size received\n");
+-		ret = -EPROTO;
+-		goto err_exit;
+-	}
+-
+-	*respsize = tmecom_decode(tdev, respbuf);
+-
+-	tdev->rx_done = false;
+-	ret = 0;
+-
+-err_exit:
+-	mutex_unlock(&tdev->lock);
++	else
++		ret = 0;
++finish:
++	spin_lock_irqsave(&tdev->rx_lock, flags);
++	tdev->waiting = false;
++	if (ret == -ETIME) {
++		/* The mailbox core can leave an unsubmitted packet queued on TX timeout.
++		 * Keep this packet stable until the channel has been shut down/drained.
++		 * Response timeouts/interrupted waits are recoverable through new IDs.
++		 */
++		tdev->desynchronized = true;
++	} else if (!ret && tdev->rx_error) {
++		ret = tdev->rx_error;
++	} else if (!ret) {
++		payload_size = tdev->rxsize - TMECOM_RX_HDR_SIZE;
++		if (payload_size > capacity) {
++			*respsize = payload_size;
++			ret = -EMSGSIZE;
++		} else {
++			memcpy(respbuf, (u8 *)tdev->rxbuf + TMECOM_RX_HDR_SIZE, payload_size);
++			*respsize = payload_size;
++		}
++	}
++	spin_unlock_irqrestore(&tdev->rx_lock, flags);
++unlock:
++	mutex_unlock(&tmecom_lock);
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(tmecom_process_request);
+@@ -171,7 +177,7 @@
+ 		const char __user *userstr, size_t len, loff_t *pos)
+ {
+ 	int ret = 0;
+-	size_t rxlen = 0;
++	size_t rxlen = MBOX_MAX_MSG_LEN;
+ 	struct tme_ext_err_info *err_info = (struct tme_ext_err_info *)dpkt;
+ 
+ 	if (!len || (len > MBOX_MAX_MSG_LEN)) {
+@@ -179,14 +185,16 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	memset(dpkt, 0, sizeof(*dpkt));
++	memset(dpkt, 0, sizeof(dpkt));
+ 	ret = copy_from_user(dpkt, userstr, len);
+ 	if (ret) {
+ 		pr_err("%s copy from user failed, ret=%d\n", __func__, ret);
+-		return len;
+-	}
+-
+-	tmecom_process_request(dpkt, len, dpkt, &rxlen);
++		return -EFAULT;
++	}
++
++	ret = tmecom_process_request(dpkt, len, dpkt, &rxlen);
++	if (ret)
++		return ret;
+ 
+ 	print_hex_dump_bytes("tmecom decoded bytes : ",
+ 			DUMP_PREFIX_ADDRESS, dpkt, rxlen);
+@@ -208,101 +216,107 @@
+ 
+ static void tmecom_receive_message(struct mbox_client *client, void *message)
+ {
+-	struct tmecom *tdev = dev_get_drvdata(client->dev);
+-	struct qmp_pkt *pkt = NULL;
+-
+-	if (!message) {
+-		dev_err(tdev->dev, "spurious message received\n");
+-		goto tmecom_receive_end;
+-	}
+-
+-	if (tdev->rx_done) {
+-		dev_err(tdev->dev, "tmecom response pending\n");
+-		goto tmecom_receive_end;
+-	}
+-	pkt = (struct qmp_pkt *)message;
+-	tdev->pkt.size = pkt->size;
+-	tdev->pkt.data = pkt->data;
+-	tdev->rx_done = true;
+-tmecom_receive_end:
++	struct tmecom *tdev = container_of(client, struct tmecom, cl);
++	const struct qmp_pkt *pkt = message;
++	unsigned long flags;
++
++	spin_lock_irqsave(&tdev->rx_lock, flags);
++	if (tdev->desynchronized || !tdev->waiting)
++		goto unlock;
++	if (tdev->rx_done)
++		goto unlock;
++	/* Only the response to the outstanding native transaction may complete it. */
++	if (!pkt || !pkt->data || pkt->size < TMECOM_TX_HDR_SIZE ||
++	    get_unaligned_le32((const u8 *)pkt->data + sizeof(u32)) != tdev->transaction)
++		goto unlock;
++	if (pkt->size <= TMECOM_RX_HDR_SIZE ||
++	    pkt->size > MBOX_MAX_MSG_LEN) {
++		tdev->rx_error = -EPROTO;
++	} else {
++		/* The controller reuses pkt->data as soon as this callback returns. */
++		memcpy(tdev->rxbuf, pkt->data, pkt->size);
++		tdev->rxsize = pkt->size;
++	}
++	smp_store_release(&tdev->rx_done, true);
++unlock:
++	spin_unlock_irqrestore(&tdev->rx_lock, flags);
+ 	wake_up_interruptible(&tdev->waitq);
+ }
+ 
++static void tmecom_transmit_done(struct mbox_client *client, void *message, int error)
++{
++	struct tmecom *tdev = container_of(client, struct tmecom, cl);
++
++	WRITE_ONCE(tdev->tx_error, error);
++}
++
+ static int tmecom_probe(struct platform_device *pdev)
+ {
+ 	struct tmecom *tdev;
+-	const char *label;
+-	char name[32];
++	int ret = 0;
+ 
+ 	tdev = devm_kzalloc(&pdev->dev, sizeof(*tdev), GFP_KERNEL);
+ 	if (!tdev)
+ 		return -ENOMEM;
+-
++	tdev->txbuf = devm_kzalloc(&pdev->dev, MBOX_MAX_MSG_LEN, GFP_KERNEL);
++	tdev->rxbuf = devm_kzalloc(&pdev->dev, MBOX_MAX_MSG_LEN, GFP_KERNEL);
++	if (!tdev->txbuf || !tdev->rxbuf)
++		return -ENOMEM;
++	tdev->dev = &pdev->dev;
++	spin_lock_init(&tdev->rx_lock);
++	init_waitqueue_head(&tdev->waitq);
+ 	tdev->cl.dev = &pdev->dev;
+ 	tdev->cl.tx_block = true;
+ 	tdev->cl.tx_tout = 500;
+ 	tdev->cl.knows_txdone = false;
+ 	tdev->cl.rx_callback = tmecom_receive_message;
+-
+-	label = of_get_property(pdev->dev.of_node, "mbox-names", NULL);
+-	if (!label)
+-		return -EINVAL;
+-	snprintf(name, 32, "%s_send_message", label);
+-
++	tdev->cl.tx_done = tmecom_transmit_done;
++	platform_set_drvdata(pdev, tdev);
++
++	mutex_lock(&tmecom_lock);
++	if (tmedev) {
++		ret = -EBUSY;
++		goto unlock;
++	}
+ 	tdev->chan = mbox_request_channel(&tdev->cl, 0);
+ 	if (IS_ERR(tdev->chan)) {
+-		dev_err(&pdev->dev, "failed to get mbox channel\n");
+-		return PTR_ERR(tdev->chan);
+-	}
+-
+-	mutex_init(&tdev->lock);
+-
+-	if (tdev->chan) {
+-		tdev->txbuf =
+-			devm_kzalloc(&pdev->dev, MBOX_MAX_MSG_LEN, GFP_KERNEL);
+-		if (!tdev->txbuf) {
+-			dev_err(&pdev->dev, "message buffer alloc faile\n");
+-			return -ENOMEM;
+-		}
+-	}
+-
+-	init_waitqueue_head(&tdev->waitq);
+-
++		ret = PTR_ERR(tdev->chan);
++		goto unlock;
++	}
++	/* QMP carries no channel ID in RX; shared mailboxes are transmit-only. */
++	if (tdev->chan->mbox->num_chans != 1) {
++		mbox_free_channel(tdev->chan);
++		ret = -EOPNOTSUPP;
++		goto unlock;
++	}
+ #if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
+-	debugfs_file = debugfs_create_file(name, 0220, NULL, tdev,
++	debugfs_file = debugfs_create_file("tmecom_send_message", 0220, NULL, tdev,
+ 			&tmecom_debugfs_ops);
+-	if (!debugfs_file)
+-		goto err;
+-#endif /* CONFIG_DEBUG_FS */
+-
+-	tdev->rx_done = false;
+-	tdev->dev = &pdev->dev;
+-	dev_set_drvdata(&pdev->dev, tdev);
+-
++	if (IS_ERR_OR_NULL(debugfs_file)) {
++		ret = debugfs_file ? PTR_ERR(debugfs_file) : -ENOMEM;
++		mbox_free_channel(tdev->chan);
++		goto unlock;
++	}
++#endif
+ 	tmedev = tdev;
+-
+-	dev_info(&pdev->dev, "tmecom probe success\n");
+-	return 0;
+-#if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
+-err:
+-	mbox_free_channel(tdev->chan);
+-	return -ENOMEM;
+-#endif /* CONFIG_DEBUG_FS */
+-}
+-
+-static int tmecom_remove(struct platform_device *pdev)
++unlock:
++	mutex_unlock(&tmecom_lock);
++	return ret;
++}
++
++static void tmecom_remove(struct platform_device *pdev)
+ {
+ 	struct tmecom *tdev = platform_get_drvdata(pdev);
+ 
+ #if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
+ 	debugfs_remove(debugfs_file);
+-#endif /* CONFIG_DEBUG_FS */
+-
+-	if (tdev->chan)
+-		mbox_free_channel(tdev->chan);
+-
+-	dev_info(&pdev->dev, "tmecom remove success\n");
+-	return 0;
++#endif
++	/* Stop new callers and wait for the serialized request before shutdown. */
++	mutex_lock(&tmecom_lock);
++	if (tmedev == tdev)
++		tmedev = NULL;
++	mbox_free_channel(tdev->chan);
++	mutex_unlock(&tmecom_lock);
+ }
+ 
+ static const struct of_device_id tmecom_match_tbl[] = {
+--- a/drivers/soc/qcom/tmecom/tmecom.h
++++ b/drivers/soc/qcom/tmecom/tmecom.h
+@@ -7,6 +7,14 @@
+ 
+ #define MBOX_MAX_MSG_LEN	1024
+ 
++/*
++ * respsize is the response buffer capacity on entry and payload length on success.
++ * On -EMSGSIZE it reports the required length without writing any payload.
++ * Requests are at most MBOX_MAX_MSG_LEN minus the 8-byte native header.
++ * Responses must echo the native transaction ID. Late responses cannot satisfy
++ * a subsequent request. A mailbox TX timeout leaves the packet stable and the
++ * session unavailable (-EPIPE) until the channel has been shut down/drained.
++ */
+ int tmecom_process_request(const void *reqbuf, size_t reqsize, void *respbuf,
+ 		size_t *respsize);
+ #endif  /*_TMECOM_H_ */
+--- a/drivers/soc/qcom/tmecom/tmelog.c
++++ b/drivers/soc/qcom/tmecom/tmelog.c
+@@ -32,10 +32,10 @@
+ {
+ 	struct tmelog_get_req_t *request;
+ 	struct tmelog_get_rsp_t *response;
+-	size_t response_len = 0;
++	size_t response_len = sizeof(*response);
+ 	int ret = 0;
+ 
+-	if (!buf || !buf_size) {
++	if (!buf || !buf_capacity || !buf_size) {
+ 		pr_err("Invalid input parameters\n");
+ 		return -EINVAL;
+ 	}
+@@ -65,8 +65,12 @@
+ 
+ 	if (response_len != sizeof(*response)) {
+ 		pr_err("Tme Log failed with invalid length: %zu, %ld\n",
+-				response_len, sizeof(response));
++				response_len, sizeof(*response));
+ 		ret = -EBADMSG;
++		goto err_exit;
++	}
++	if (response->log_len > buf_capacity) {
++		ret = -EOVERFLOW;
+ 		goto err_exit;
+ 	}
+ 	*buf_size = response->log_len;

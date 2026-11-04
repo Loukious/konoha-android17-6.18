@@ -1,0 +1,63 @@
+{
+  "source": "/home/loukious/Android/konoha-android17-6.18-port-20261031/firmware-analysis/cpuss-20261103T150504Z/tz_a.img",
+  "sha256": "6f5766bcc00a00014c3fd128a4f759aecb4ca397078070ddc45a95276a9bfeb0",
+  "scope": "Read-only static TZ native IO501 dispatch trace. No device commands, source edits, firmware changes or installs.",
+  "address_mapping": "For relevant LOAD8/9/10, file offset=ELF VA-0x1520d000. Primary segment VA15248000 maps PA d8128000; ELF VA is used throughout.",
+  "native_read_handler": {
+    "id": "02000501",
+    "arginfo": 1,
+    "flags": "0201",
+    "function": "15326e5c",
+    "selector_entry": "152cb2c8",
+    "case_compare": "152cbcb0..152cbcbc",
+    "case_metadata": "152cc9bc..152cc9d8",
+    "metadata_store": "152cd1fc..152cd208"
+  },
+  "dispatch_trace": [
+    {
+      "range": "152b5594..152b55ac",
+      "finding": "Masks guest syscall c2000501 with3f00ffff\u219202000501 and invokes selector with stack metadata."
+    },
+    {
+      "range": "152b41e4..152b4218",
+      "finding": "Native expected arginfo1 is compared exactly with saved guest arginfo; wrong argument descriptor fails before handler."
+    },
+    {
+      "range": "152b4794..152b47a4,152b485c..152b4888",
+      "finding": "Copies metadata to invocation object+98; loads handler at+a8 and arginfo+count at+a0; constructs {handler,count1} at object+30."
+    },
+    {
+      "range": "152b59d0..152b5a28,152b5bf4..152b5c64",
+      "finding": "Invokes handler through152b5cac, copies returned values to invocation object; common dispatcher retrieves handler status fromobject+30."
+    },
+    {
+      "range": "152b5cac..152b5d1c,15257d70..15257d78",
+      "finding": "Loads handlerx9. Argument count1 selectsjump-table1539dd78[1]=4\u2192152b5d0c, loadingaddressx0 and resultpointerx1. Thunk15257d70 branchesx9 to15326e5c."
+    },
+    {
+      "range": "152b5e18..152b5e1c",
+      "finding": "Sign-extends handlerw0 and saves status into invocationobject+30."
+    },
+    {
+      "range": "152b5a9c..152b5b10,152b56b8..152b56c8",
+      "finding": "Negative handler status takes common error logging path;152b5b0c sets w23=-2, then saved returnx0 written at152b56c4."
+    }
+  ],
+  "cpuss_whitelist": {
+    "table_va": "153d2db0",
+    "count": 54,
+    "record_va": "153d2ff0",
+    "record_file_offset": "1c5ff0",
+    "physical_register": "17800054",
+    "flags": "82820000",
+    "record_hex": "54008017000082820000000000000000"
+  },
+  "read_gate_logic": "For exact matching address and topflagsbyte82, gate15261c24(1)==0 permitsread. Otherwise gate1526d5fc()==0 permitsread. Both nonzero reject withhandler-1, translated toSCM-2 by common dispatcher.",
+  "gate2_fuse_read": "1526d5fc reads221c8780 and221c8784, returns1 iff ((word0&07800780)|(word1&00004000))==0.",
+  "limits": [
+    "Static trace proves whitelist gates are on nativeIO501 path; live gate values were not observed.",
+    "ObservedSCM-2 is compatible with handler denial and other negative handler states; no live rootcause attribution from static trace alone.",
+    "Gate1 semantics are unresolved; do not label it a specific fuse/security/debug state without supporting evidence.",
+    "Configured HLOS MMIO read access from HYP analysis is separate from secureSCM access authorization."
+  ]
+}

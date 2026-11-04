@@ -1,0 +1,656 @@
+--- a/drivers/firmware/arm_scmi/qcom_scmi_vendor.c
++++ b/drivers/firmware/arm_scmi/qcom_scmi_vendor.c
+@@ -7,7 +7,7 @@
+ #include <linux/qcom_scmi_vendor.h>
+ 
+ #define	EXTENDED_MSG_ID			0
+-#define	SCMI_MAX_TX_RX_SIZE		128
++#define	SCMI_MAX_TX_SIZE			128
+ #define	PROTOCOL_PAYLOAD_SIZE		16
+ #define	SET_PARAM			0x10
+ #define	GET_PARAM			0x11
+@@ -23,10 +23,11 @@
+ 
+ 	if (!ph || !ph->xops || (size && !buf))
+ 		return ret;
+-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
++	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+ 		return -EMSGSIZE;
++	/* RX size zero selects the active transport limit (104 on shmem). */
+ 	ret = ph->xops->xfer_get_init(ph, SET_PARAM, size + PROTOCOL_PAYLOAD_SIZE,
+-			SCMI_MAX_TX_RX_SIZE, &t);
++			0, &t);
+ 	if (ret)
+ 		return ret;
+ 	msg = t->tx.buf;
+@@ -34,7 +35,8 @@
+ 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
+ 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
+ 	*msg++ = cpu_to_le32(param_id);
+-	memcpy(msg, buf, size);
++	if (size)
++		memcpy(msg, buf, size);
+ 	ret = ph->xops->do_xfer(ph, t);
+ 	ph->xops->xfer_put(ph, t);
+ 	return ret;
+@@ -50,10 +52,10 @@
+ 
+ 	if (!ph || !ph->xops || !buf)
+ 		return ret;
+-	if (tx_size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
++	if (tx_size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+ 		return -EMSGSIZE;
+ 	ret = ph->xops->xfer_get_init(ph, GET_PARAM, tx_size + PROTOCOL_PAYLOAD_SIZE,
+-			SCMI_MAX_TX_RX_SIZE, &t);
++			0, &t);
+ 	if (ret)
+ 		return ret;
+ 	msg = t->tx.buf;
+@@ -87,10 +89,10 @@
+ 
+ 	if (!ph || !ph->xops || (size && !buf))
+ 		return ret;
+-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
++	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+ 		return -EMSGSIZE;
+ 	ret = ph->xops->xfer_get_init(ph, START_ACTIVITY, size + PROTOCOL_PAYLOAD_SIZE,
+-			SCMI_MAX_TX_RX_SIZE, &t);
++			0, &t);
+ 	if (ret)
+ 		return ret;
+ 	msg = t->tx.buf;
+@@ -98,7 +100,8 @@
+ 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
+ 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
+ 	*msg++ = cpu_to_le32(param_id);
+-	memcpy(msg, buf, size);
++	if (size)
++		memcpy(msg, buf, size);
+ 	ret = ph->xops->do_xfer(ph, t);
+ 	ph->xops->xfer_put(ph, t);
+ 
+@@ -114,10 +117,10 @@
+ 
+ 	if (!ph || !ph->xops || (size && !buf))
+ 		return ret;
+-	if (size > SCMI_MAX_TX_RX_SIZE - PROTOCOL_PAYLOAD_SIZE)
++	if (size > SCMI_MAX_TX_SIZE - PROTOCOL_PAYLOAD_SIZE)
+ 		return -EMSGSIZE;
+ 	ret = ph->xops->xfer_get_init(ph, STOP_ACTIVITY, size + PROTOCOL_PAYLOAD_SIZE,
+-			SCMI_MAX_TX_RX_SIZE, &t);
++			0, &t);
+ 	if (ret)
+ 		return ret;
+ 	msg = t->tx.buf;
+@@ -125,7 +128,8 @@
+ 	*msg++ = cpu_to_le32(algo_str & GENMASK(31, 0));
+ 	*msg++ = cpu_to_le32((algo_str & GENMASK(63, 32)) >> 32);
+ 	*msg++ = cpu_to_le32(param_id);
+-	memcpy(msg, buf, size);
++	if (size)
++		memcpy(msg, buf, size);
+ 	ret = ph->xops->do_xfer(ph, t);
+ 	ph->xops->xfer_put(ph, t);
+ 	return ret;
+--- a/drivers/hwtracing/coresight/coresight-tmc-core.c
++++ b/drivers/hwtracing/coresight/coresight-tmc-core.c
+@@ -805,6 +805,12 @@
+ 
+ 	devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
+ 	drvdata->config_type = BMVAL(devid, 6, 7);
++	/* Native ETR requires CSR ATID/IRQ control, which is not ported here. */
++	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR &&
++	    device_property_present(dev, "coresight-csr")) {
++		ret = -EOPNOTSUPP;
++		goto out;
++	}
+ 	drvdata->memwidth = tmc_get_memwidth(devid);
+ 	/* This device is not associated with a session */
+ 	drvdata->pid = -1;
+--- a/drivers/hwtracing/coresight/coresight-tpda.c
++++ b/drivers/hwtracing/coresight/coresight-tpda.c
+@@ -141,6 +141,52 @@
+ 	return rc;
+ }
+ 
++
++/* Native v1 supplies (port, width) pairs on TPDA, rather than TPDM. */
++static int tpda_parse_widths(const u32 *cells, unsigned int count, bool cmb,
++                             u32 *widths)
++{
++	unsigned int i;
++
++	if (!count || count > 2 * TPDA_MAX_INPORTS || count % 2)
++		return -EINVAL;
++	for (i = 0; i < count; i += 2) {
++		u32 port = cells[i], width = cells[i + 1];
++
++		if (port >= TPDA_MAX_INPORTS || widths[port] ||
++		    (width != 32 && width != 64 && !(cmb && width == 8)))
++			return -EINVAL;
++		widths[port] = width;
++	}
++	return 0;
++}
++
++static int tpda_read_legacy_widths(struct device *dev, const char *name,
++                                 bool cmb, u32 *widths)
++{
++	u32 cells[2 * TPDA_MAX_INPORTS];
++	int count, ret;
++
++	if (!device_property_present(dev, name))
++		return 0;
++	count = device_property_count_u32(dev, name);
++	if (count <= 0 || count > ARRAY_SIZE(cells))
++		return -EINVAL;
++	ret = device_property_read_u32_array(dev, name, cells, count);
++	return ret ? ret : tpda_parse_widths(cells, count, cmb, widths);
++}
++
++static bool tpda_legacy_authorized(u32 status)
++{
++	unsigned int shift;
++
++	/* Honor the native AUTHSTATUS check; do not bypass debug authorization. */
++	for (shift = 0; shift < 8; shift += 2)
++		if (((status >> shift) & 3) == 2)
++			return false;
++	return true;
++}
++
+ /* Settings pre enabling port control register */
+ static void tpda_enable_pre_port(struct tpda_drvdata *drvdata)
+ {
+@@ -148,6 +194,11 @@
+ 
+ 	val = readl_relaxed(drvdata->base + TPDA_CR);
+ 	val &= ~TPDA_CR_ATID;
++	if (drvdata->legacy) {
++		/* Native default: frequency timestamp on, trigger fields off. */
++		val &= ~(GENMASK(19, 13) | BIT(20) | GENMASK(5, 2));
++		val |= BIT(2);
++	}
+ 	val |= FIELD_PREP(TPDA_CR_ATID, drvdata->atid);
+ 	writel_relaxed(val, drvdata->base + TPDA_CR);
+ }
+@@ -158,8 +209,18 @@
+ 	int rc;
+ 
+ 	val = readl_relaxed(drvdata->base + TPDA_Pn_CR(port));
++	if (port < 0 || port >= TPDA_MAX_INPORTS)
++		return -EINVAL;
+ 	tpda_clear_element_size(drvdata->csdev);
+-	rc = tpda_get_element_size(drvdata, drvdata->csdev, port);
++	if (drvdata->legacy) {
++		drvdata->dsb_esize = drvdata->legacy_dsb[port];
++		drvdata->cmb_esize = drvdata->legacy_cmb[port];
++		rc = (drvdata->dsb_esize || drvdata->cmb_esize) ? 0 : -ENODATA;
++		val &= ~GENMASK(3, 1);
++		val |= FIELD_PREP(GENMASK(3, 1), 5);
++	} else {
++		rc = tpda_get_element_size(drvdata, drvdata->csdev, port);
++	}
+ 	if (!rc && (drvdata->dsb_esize || drvdata->cmb_esize)) {
+ 		tpda_set_element_size(drvdata, &val);
+ 		/* Enable the port */
+@@ -301,6 +362,7 @@
+ 	if (!drvdata)
+ 		return -ENOMEM;
+ 
++	drvdata->legacy = id->data != NULL;
+ 	drvdata->dev = &adev->dev;
+ 	dev_set_drvdata(dev, drvdata);
+ 
+@@ -310,14 +372,30 @@
+ 	drvdata->base = base;
+ 
+ 	spin_lock_init(&drvdata->spinlock);
++	if (resource_size(&adev->res) < 0x1000)
++		return -EINVAL;
++	if (drvdata->legacy) {
++		if (!tpda_legacy_authorized(readl_relaxed(base + CORESIGHT_AUTHSTATUS)))
++			return -EACCES;
++		ret = tpda_read_legacy_widths(dev, "qcom,dsb-elem-size", false,
++					    drvdata->legacy_dsb);
++		if (ret)
++			return ret;
++		ret = tpda_read_legacy_widths(dev, "qcom,cmb-elem-size", true,
++					    drvdata->legacy_cmb);
++		if (ret)
++			return ret;
++	}
+ 
+ 	ret = tpda_init_default_data(drvdata);
+ 	if (ret)
+ 		return ret;
+ 
+ 	desc.name = coresight_alloc_device_name(&tpda_devs, dev);
+-	if (!desc.name)
++	if (!desc.name) {
++		coresight_trace_id_put_system_id(drvdata->atid);
+ 		return -ENOMEM;
++	}
+ 	desc.type = CORESIGHT_DEV_TYPE_LINK;
+ 	desc.subtype.link_subtype = CORESIGHT_DEV_SUBTYPE_LINK_MERG;
+ 	desc.ops = &tpda_cs_ops;
+@@ -325,8 +403,10 @@
+ 	desc.dev = &adev->dev;
+ 	desc.access = CSDEV_ACCESS_IOMEM(base);
+ 	drvdata->csdev = coresight_register(&desc);
+-	if (IS_ERR(drvdata->csdev))
++	if (IS_ERR(drvdata->csdev)) {
++		coresight_trace_id_put_system_id(drvdata->atid);
+ 		return PTR_ERR(drvdata->csdev);
++	}
+ 
+ 	pm_runtime_put(&adev->dev);
+ 
+@@ -338,8 +418,8 @@
+ {
+ 	struct tpda_drvdata *drvdata = dev_get_drvdata(&adev->dev);
+ 
++	coresight_unregister(drvdata->csdev);
+ 	coresight_trace_id_put_system_id(drvdata->atid);
+-	coresight_unregister(drvdata->csdev);
+ }
+ 
+ /*
+@@ -351,6 +431,11 @@
+ 		.id     = 0x000f0f00,
+ 		.mask   = 0x000fff00,
+ 	},
++	{
++		.id = 0x0003b969,
++		.mask = 0x0003ffff,
++		.data = (void *)1,
++	},
+ 	{ 0, 0, NULL },
+ };
+ 
+@@ -364,6 +449,8 @@
+ 	.id_table	= tpda_ids,
+ };
+ 
++MODULE_DEVICE_TABLE(amba, tpda_ids);
++
+ module_amba_driver(tpda_driver);
+ 
+ MODULE_LICENSE("GPL");
+--- a/drivers/hwtracing/coresight/coresight-tpda.h
++++ b/drivers/hwtracing/coresight/coresight-tpda.h
+@@ -35,6 +35,9 @@
+ 	struct device		*dev;
+ 	struct coresight_device	*csdev;
+ 	spinlock_t		spinlock;
++	bool			legacy;
++	u32			legacy_dsb[TPDA_MAX_INPORTS];
++	u32			legacy_cmb[TPDA_MAX_INPORTS];
+ 	u8			atid;
+ 	u32			dsb_esize;
+ 	u32			cmb_esize;
+--- a/drivers/hwtracing/coresight/coresight-tpdm.c
++++ b/drivers/hwtracing/coresight/coresight-tpdm.c
+@@ -282,12 +282,19 @@
+ 	u32 mode;
+ 
+ 	/* Set the test accurate mode */
+-	mode = TPDM_DSB_MODE_TEST(drvdata->dsb->mode);
+-	*val &= ~TPDM_DSB_CR_TEST_MODE;
+-	*val |= FIELD_PREP(TPDM_DSB_CR_TEST_MODE, mode);
++	if (drvdata->legacy) {
++		/* Native v1 cycle-accurate mode occupies bits 9..11. */
++		mode = drvdata->dsb->mode & GENMASK(2, 0);
++		*val &= ~GENMASK(11, 9);
++		*val |= FIELD_PREP(GENMASK(11, 9), mode);
++	} else {
++		mode = TPDM_DSB_MODE_TEST(drvdata->dsb->mode);
++		*val &= ~TPDM_DSB_CR_TEST_MODE;
++		*val |= FIELD_PREP(TPDM_DSB_CR_TEST_MODE, mode);
++	}
+ 
+ 	/* Set the byte lane for high-performance mode */
+-	mode = TPDM_DSB_MODE_HPBYTESEL(drvdata->dsb->mode);
++	mode = FIELD_GET(GENMASK(8, 4), drvdata->dsb->mode);
+ 	*val &= ~TPDM_DSB_CR_HPSEL;
+ 	*val |= FIELD_PREP(TPDM_DSB_CR_HPSEL, mode);
+ 
+@@ -575,6 +582,10 @@
+ 	/*  Get the datasets present on the TPDM. */
+ 	pidr = readl_relaxed(drvdata->base + CORESIGHT_PERIPHIDR0);
+ 	drvdata->datasets |= pidr & GENMASK(TPDM_DATASETS - 1, 0);
++	/* This provider implements DSB/CMB/MCMB, not legacy BC/TC/GPR. */
++	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB |
++				  TPDM_PIDR0_DS_MCMB)))
++		return -EOPNOTSUPP;
+ 
+ 	if (tpdm_has_dsb_dataset(drvdata) && (!drvdata->dsb)) {
+ 		drvdata->dsb = devm_kzalloc(drvdata->dev,
+@@ -639,7 +650,13 @@
+ 	if (!drvdata->enable)
+ 		return -EINVAL;
+ 
+-	if (val == 1)
++	if (drvdata->legacy) {
++		/* Native v1 uses dataset-specific integration packets. */
++		bool cmb = !tpdm_has_dsb_dataset(drvdata);
++
++		val = val == 1 ? (cmb ? 0x401e9600 : 0x401e9700) :
++				 (cmb ? 0x400e9600 : 0x400e9700);
++	} else if (val == 1)
+ 		val = ATBCNTRL_VAL_64;
+ 	else
+ 		val = ATBCNTRL_VAL_32;
+@@ -1360,6 +1377,7 @@
+ 	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+ 	if (!drvdata)
+ 		return -ENOMEM;
++	drvdata->legacy = id->data != NULL;
+ 	drvdata->dev = &adev->dev;
+ 	dev_set_drvdata(dev, drvdata);
+ 
+@@ -1423,6 +1441,12 @@
+ 		.id	= 0x001f0e00,
+ 		.mask	= 0x00ffff00,
+ 	},
++	{
++		/* Pinned Qualcomm v1: verified DSB/CMB layout; distinct mode bits. */
++		.id = 0x0003b968,
++		.mask = 0x0003ffff,
++		.data = (void *)1,
++	},
+ 	{ 0, 0, NULL },
+ };
+ 
+@@ -1436,6 +1460,8 @@
+ 	.remove		= tpdm_remove,
+ };
+ 
++MODULE_DEVICE_TABLE(amba, tpdm_ids);
++
+ module_amba_driver(tpdm_driver);
+ 
+ MODULE_LICENSE("GPL");
+--- a/drivers/hwtracing/coresight/coresight-tpdm.h
++++ b/drivers/hwtracing/coresight/coresight-tpdm.h
+@@ -308,6 +308,7 @@
+ 	struct coresight_device	*csdev;
+ 	spinlock_t		spinlock;
+ 	bool			enable;
++	bool			legacy;
+ 	unsigned long		datasets;
+ 	struct dsb_dataset	*dsb;
+ 	struct cmb_dataset	*cmb;
+--- a/drivers/power/supply/mca/include/mca/common/mca_voter.h
++++ b/drivers/power/supply/mca/include/mca/common/mca_voter.h
+@@ -2,6 +2,7 @@
+ #define _MCA_COMMON_MCA_VOTER_H_
+ 
+ #include <linux/types.h>
++#include <linux/errno.h>
+ 
+ struct mca_votable;
+ 
+@@ -53,4 +54,22 @@
+ 
+ int mca_rerun_named_election(const char *name);
+ 
++/* Caller serializes this client's updates with the owning policy lock. */
++static inline int mca_vote_policy(struct mca_votable *votable,
++                                 const char *client, bool enabled, int value)
++{
++	bool old_enabled = mca_is_client_vote_enabled(votable, client);
++	int old_value = old_enabled ? mca_get_client_vote(votable, client) : 0;
++	int ret, restore;
++
++	ret = mca_vote(votable, client, enabled, value);
++	if (!ret)
++		return 0;
++	/* mca_vote updates cached votes even when the hardware callback fails. */
++	restore = mca_vote(votable, client, old_enabled, old_value);
++	if (restore || mca_rerun_election(votable))
++		return -EIO;
++	return ret;
++}
++
+ #endif /* _MCA_COMMON_MCA_VOTER_H_ */
+--- a/drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c
++++ b/drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c
+@@ -75,6 +75,13 @@
+ 	}
+ 	if (!usb.intval && !wireless.intval) {
+ 		value->intval = POWER_SUPPLY_STATUS_DISCHARGING;
++		return 0;
++	}
++	/* A wired handle hold inhibits both charging paths while USB stays online. */
++	if (usb.intval &&
++	    mca_get_named_client_vote("chg_enable", "handle") == 0 &&
++	    mca_get_named_client_vote("quick_chg_en", "handle") == 0) {
++		value->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+ 		return 0;
+ 	}
+ 	soc = strategy_class_fg_ops_get_soc();
+--- a/drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c
++++ b/drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c
+@@ -828,7 +828,7 @@
+ 					  value == 1 ? 1 : 0);
+ }
+ 
+-static void
++static int
+ business_charger_process_handle_logic(struct business_charger *charger)
+ {
+ 	int last_handle_state = charger->last_handle_state;
+@@ -836,6 +836,7 @@
+ 	int stop = charger->stop_handle_charge;
+ 	int hs = charger->handle_state;
+ 	int allow_charge = -1;
++	int ret, restore;
+ 
+ 	if (last_stop_handle_charge != 0 && stop == 0 && hs != 0) {
+ 		/* stop just cleared while a handle-state is set: hold off */
+@@ -856,19 +857,26 @@
+ 		charger->usb_psy_info->charge_enable, last_handle_state,
+ 		last_stop_handle_charge, allow_charge, hs, stop);
+ 
+-	charger->last_handle_state = charger->handle_state;
+-	charger->last_stop_handle_charge = charger->stop_handle_charge;
+-
+ 	if (allow_charge != -1 &&
+ 	    allow_charge != charger->usb_psy_info->charge_enable) {
++		int previous = charger->usb_psy_info->charge_enable;
++
++		ret = business_charger_strategy_process(
++			charger, STRATEGY_FUNC_TYPE_QUICK_CHARGE,
++			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
++		if (ret)
++			return ret;
++		ret = business_charger_strategy_process(
++			charger, STRATEGY_FUNC_TYPE_BUCK_CHARGE,
++			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
++		if (ret) {
++			restore = business_charger_strategy_process(
++				charger, STRATEGY_FUNC_TYPE_QUICK_CHARGE,
++				MCA_EVENT_HANDLE_ALLOW_CHARGE, previous);
++			return restore ? -EIO : ret;
++		}
+ 		charger->usb_psy_info->charge_enable = allow_charge;
+ 		business_usb_psy_event_process(charger->usb_psy_info);
+-		business_charger_strategy_process(
+-			charger, STRATEGY_FUNC_TYPE_BUCK_CHARGE,
+-			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
+-		business_charger_strategy_process(
+-			charger, STRATEGY_FUNC_TYPE_QUICK_CHARGE,
+-			MCA_EVENT_HANDLE_ALLOW_CHARGE, allow_charge);
+ 		if (allow_charge == 0) {
+ 			if (charger->real_type != 0) {
+ 				struct mca_event_notify_data n_data = { 0 };
+@@ -883,6 +891,9 @@
+ 				charger);
+ 		}
+ 	}
++	charger->last_handle_state = charger->handle_state;
++	charger->last_stop_handle_charge = charger->stop_handle_charge;
++	return 0;
+ }
+ 
+ static void
+@@ -1770,13 +1781,8 @@
+ 	} else if (value != 0 && value != 1) {
+ 		return -EINVAL;
+ 	}
+-	/* These stock extension events have no downstream strategy handlers yet. */
+-	if (info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_HANDLE_STATE ||
+-	    info->sysfs_attr_name ==
+-		    BUSSINESS_CHARGER_PROP_STOP_HANDLE_CHARGE ||
+-	    info->sysfs_attr_name ==
+-		    BUSSINESS_CHARGER_PROP_START_QUICK_REVCHG ||
+-	    info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_REVCHG_BCL)
++	/* Reverse battery-current limiting still has no fitted provider operation. */
++	if (info->sysfs_attr_name == BUSSINESS_CHARGER_PROP_REVCHG_BCL)
+ 		return -EOPNOTSUPP;
+ 
+ 	switch (info->sysfs_attr_name) {
+@@ -1807,11 +1813,15 @@
+ 		break;
+ 	case BUSSINESS_CHARGER_PROP_HANDLE_STATE:
+ 		charger->handle_state = value;
+-		business_charger_process_handle_logic(charger);
++		ret = business_charger_process_handle_logic(charger);
++		if (ret)
++			charger->handle_state = charger->last_handle_state;
+ 		break;
+ 	case BUSSINESS_CHARGER_PROP_STOP_HANDLE_CHARGE:
+ 		charger->stop_handle_charge = value;
+-		business_charger_process_handle_logic(charger);
++		ret = business_charger_process_handle_logic(charger);
++		if (ret)
++			charger->stop_handle_charge = charger->last_stop_handle_charge;
+ 		break;
+ 	default:
+ 		return -EINVAL;
+--- a/drivers/power/supply/mca/mca_business/business_charger/mca_charger_usb_psy.c
++++ b/drivers/power/supply/mca/mca_business/business_charger/mca_charger_usb_psy.c
+@@ -176,11 +176,20 @@
+ 
+ void business_usb_psy_event_process(struct usb_psy_info *info)
+ {
++	struct power_supply *battery;
++
+ 	if (!info)
+ 		return;
+-	guard(mutex)(&info->lock);
+-	if (!info->stopping)
++	scoped_guard(mutex, &info->lock) {
++		if (info->stopping)
++			return;
+ 		power_supply_changed(info->usb_psy);
++	}
++	battery = power_supply_get_by_name("battery");
++	if (battery) {
++		power_supply_changed(battery);
++		power_supply_put(battery);
++	}
+ }
+ 
+ struct usb_psy_info *business_charger_usb_psy_init(struct device *dev)
+--- a/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c
++++ b/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c
+@@ -1257,11 +1257,19 @@
+ 	int soc;
+ 	bool otg = false;
+ 	int eligible = 0;
+-
+-	strategy_class_fg_ops_get_temperature(&batt_temp);
++	int ret;
++
++	*out = 0;
++	ret = strategy_class_fg_ops_get_temperature(&batt_temp);
++	if (ret)
++		return ret;
+ 	soc = strategy_class_fg_ops_get_soc();
++	if (soc < 0)
++		return soc;
+ 	batt_temp /= 10;
+-	protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
++	ret = protocol_class_pd_get_otg_plugin_status(TYPEC_PORT_0, &otg);
++	if (ret)
++		return ret;
+ 	mca_log_info(
+ 		"otg_present = %d, batt_temp = %d, thermal_board_temp =%d\n",
+ 		otg, batt_temp, info->thermal_board_temp);
+@@ -3631,6 +3639,39 @@
+ 	strategy_buckchg_soc_limit_stepper_workfunc_locked(work);
+ }
+ 
++/* A user request changes the existing wired PD gear, never peer authentication. */
++static int strategy_buckchg_request_reverse(struct strategy_buckchg_dev *info,
++                                           int value)
++{
++	bool old_gate = info->reverse_qc_gate0;
++	int eligible = 0, ret;
++
++	if (value != 0 && value != 1)
++		return -EINVAL;
++	if (!info->support_reverse_quick_charge)
++		return -EOPNOTSUPP;
++	if (value && (!info->cp_revert_auth || !info->reverse_auth))
++		return -EACCES;
++	info->reverse_qc_gate0 = !value;
++	if (value) {
++		ret = strategy_buckchg_check_reverse_quick_charge(info, &eligible);
++		if (ret)
++			goto restore;
++		if (!eligible) {
++			ret = -EAGAIN;
++			goto restore;
++		}
++	}
++	ret = protocol_class_pd_set_gear_shift(TYPEC_PORT_0, eligible);
++	if (ret)
++		goto restore;
++	info->source_boost_status = eligible;
++	return 0;
++restore:
++	info->reverse_qc_gate0 = old_gate;
++	return ret;
++}
++
+ static int strategy_buckchg_process_event(int event, int value, void *data)
+ {
+ 	struct strategy_buckchg_dev *info = data;
+@@ -3640,6 +3681,21 @@
+ 
+ 	if (!info)
+ 		return -EINVAL;
++	if (event == MCA_EVENT_START_QUICK_REVCHG) {
++		guard(mutex)(&info->policy_lock);
++		if (info->stopping)
++			return -ENODEV;
++		return strategy_buckchg_request_reverse(info, value);
++	}
++	/* Handle policy needs a synchronous result for business-layer rollback. */
++	if (event == MCA_EVENT_HANDLE_ALLOW_CHARGE) {
++		if (value != 0 && value != 1)
++			return -EINVAL;
++		guard(mutex)(&info->policy_lock);
++		if (info->stopping)
++			return -ENODEV;
++		return mca_vote_policy(info->chg_enable_voter, "handle", !value, 0);
++	}
+ 	if (event == MCA_EVENT_WIRELESS_REVCHG &&
+ 	    !IS_ENABLED(CONFIG_MCA_BUCK_WLS_REV_COORDINATION))
+ 		return -EOPNOTSUPP;
+--- a/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_quickchg.c
++++ b/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_quickchg.c
+@@ -3522,6 +3522,10 @@
+ 
+ 	mca_log_info("event: %d, value: %d\n", event, value);
+ 	switch (event) {
++	case MCA_EVENT_HANDLE_ALLOW_CHARGE:
++		if (value != 0 && value != 1)
++			return -EINVAL;
++		return mca_vote_policy(info->chg_en_voter, "handle", !value, 0);
+ 	case MCA_EVENT_MASTER_BATT_CLOSE:
+ 		mca_log_err("master batt close event %d\n", value);
+ 		info->base_close_curr = value *

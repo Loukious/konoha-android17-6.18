@@ -1,0 +1,40 @@
+{
+  "utc": "2026-11-03T13:26:04.906205+00:00",
+  "original_boot": "7a2cddfe-24af-4a16-a85e-0fb8c09d9ca6",
+  "new_boot": "031f802d-e1a1-4a17-8081-05cb8814f86e",
+  "cleanup_operations": [],
+  "status": "REPRODUCED: response-handler stall narrowed; exact cause unresolved",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-runtime-probes-v4/capture-20261103T132423Z",
+  "installed_artifact": "20261103T125226341911Z",
+  "last_trace_event": "scheduler_threa-5218    [006] d....   461.655270: fn8_enter: (wma_vdev_start_resp_handler+0x0/0x42c [qca_cld3_wcn7750]) arg1=18446743563729921024 arg2=18446743801828687032",
+  "normal_returns": [
+    "sap_validate_chan",
+    "send_vdev_start_cmd_tlv",
+    "wma_rso_cmd_status_event_handler",
+    "cm_rso_cmd_status_event_handler",
+    "cm_roam_event_handler",
+    "target_if_cm_roam_event"
+  ],
+  "unreturned_handlers": [
+    "wma_vdev_start_resp_handler",
+    "target_if_vdev_mgr_start_response_handler"
+  ],
+  "limits": [
+    "An absent return at stream loss narrows the execution path but is not proof of the exact fault or lock site.",
+    "No captured panic/oops; post-reboot pstore remains empty."
+  ],
+  "hashes": {
+    "DONE.json": "49a84fef439547f967a2016a92c0ab422b48e96bbdde6227f2e214c6a58ed4a3",
+    "dmesg-final.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pstore-final.tar": "e9c0b2e4953ac31d0fb4dcaf7838894881a58aad571490df4222c840ab53a35d",
+    "dmesg-final.txt": "12a16227e0290f8d1eb5de7c0a3aceea69bb3c2f541263032a9a1a58e74afa8c",
+    "states.jsonl": "082d5c1d31c6faf91b3378ffddce3f5f4a8ffb313b07cab8358ad6dd152cc247",
+    "logcat-live.txt": "2c6551c4e051c4f245806a9514cf7f87ab4dd274edefc537b265e6023a005599",
+    "dmesg-live.txt": "c6894f5c2f2537ccb6d80e7aad62c4f9763cd0c09606ae9e54fdae7ff6316c24",
+    "LIVE.json": "ccd0042f919bfe6e7f7c84543272b7750cbf4a563d78783451be47a8c2641a4c",
+    "pstore-final.tar.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trace-final.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trace-live.txt": "39ad973b26cae9a459820bf6245c4b18a93f051f7033c8f327de2ccafc652121",
+    "trace-final.txt.stderr": "75319ea3cb4eb6746577e9840ab38e125597abd84644f73f3de42f54357b8df2"
+  }
+}

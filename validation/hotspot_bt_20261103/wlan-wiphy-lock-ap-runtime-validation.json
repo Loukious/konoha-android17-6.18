@@ -1,0 +1,253 @@
+{
+  "status": "PASS: both secured AP startup cases stay active without reboot",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T135741329740Z",
+  "attempt": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/hotspot-wiphy-lock-20261103T135827Z",
+  "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+  "results": [
+    {
+      "case": "connected-sta",
+      "status": "PASS",
+      "stable_seconds": 44.70915039101965,
+      "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+      "state_lines": [
+        "current StateMachine mode: StartedState",
+        "mApInterfaceName: wlan1",
+        "mCurrentSoftApInfoMap {wlan1=SoftApInfo{bandwidth= 4, frequency= 5260,bssid=c6:06:ae:eb:d8:82, wifiStandard= 6, mApInstanceIdentifier= wlan1, mIdleShutdownTimeoutMillis= 600000, mVendorData= []}}",
+        "rec[4]: time=11-03 15:05:37.834 processed=WaitingForDriverCountryCodeChangedState org=WaitingForDriverCountryCodeChangedState dest=StartedState what=CMD_DRIVER_COUNTRY_CODE_CHANGE_TIMED_OUT",
+        "rec[5]: time=11-03 15:05:37.841 processed=StartedState org=StartedState dest=<null> what=CMD_UPDATE_CAPABILITY",
+        "rec[6]: time=11-03 15:05:37.845 processed=StartedState org=StartedState dest=<null> what=CMD_AP_INFO_CHANGED",
+        "rec[7]: time=11-03 15:05:37.846 processed=StartedState org=StartedState dest=<null> what=CMD_AP_INFO_CHANGED",
+        "rec[8]: time=11-03 15:05:37.850 processed=StartedState org=StartedState dest=<null> what=CMD_INTERFACE_STATUS_CHANGED",
+        "curState=StartedState",
+        "rec[0]: time=11-03 15:04:33.380 processed=IdleState org=IdleState dest=StartedState what=CMD_START 0 0 Role: ROLE_CLIENT_PRIMARY, RequestorWs: WorkSource{1000 com.android.settings}, ModeListener: com.android.server.wifi.ActiveModeWarden$ClientListener@51cd2d7",
+        "rec[1]: time=11-03 15:04:33.468 processed=StartedState org=StartedState dest=ConnectModeState what=CMD_SWITCH_TO_CONNECT_MODE 0 0 Role: ROLE_CLIENT_PRIMARY, RequestorWs: WorkSource{1000 com.android.settings}, ModeListener: com.android.server.wifi.ActiveModeWarden$ClientListener@51cd2d7"
+      ],
+      "samples": [
+        {
+          "elapsed": 0.1161737040092703,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 2.2419074390199967,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 4.359893335000379,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 6.484153361001518,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 8.60937354201451,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 10.72536782201496,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 12.856791844998952,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 14.96254791400861,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 17.0853034890024,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 19.21140927899978,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 21.34881609599688,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 23.479299647005973,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 25.602685593010392,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 27.732275982998544,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 29.850231660995632,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 31.967326275014784,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 34.09013052500086,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 36.21398637301172,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 38.343230296013644,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 40.46984235200216,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 42.58565703500062,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 44.70915039101965,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        }
+      ],
+      "active_framework_state_verified": "StartedState in active SoftApManager, excluding graveyard/history"
+    },
+    {
+      "case": "ap-only",
+      "status": "PASS",
+      "stable_seconds": 44.74382899500779,
+      "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+      "state_lines": [
+        "current StateMachine mode: StartedState",
+        "mApInterfaceName: wlan1",
+        "mCurrentSoftApInfoMap {wlan1=SoftApInfo{bandwidth= 2, frequency= 2462,bssid=b6:df:4d:e3:92:95, wifiStandard= 6, mApInstanceIdentifier= wlan1, mIdleShutdownTimeoutMillis= 600000, mVendorData= []}}",
+        "rec[7]: time=11-03 15:06:34.501 processed=WaitingForDriverCountryCodeChangedState org=WaitingForDriverCountryCodeChangedState dest=StartedState what=CMD_DRIVER_COUNTRY_CODE_CHANGE_TIMED_OUT",
+        "rec[8]: time=11-03 15:06:34.508 processed=StartedState org=StartedState dest=<null> what=CMD_UPDATE_CAPABILITY",
+        "rec[9]: time=11-03 15:06:34.508 processed=StartedState org=StartedState dest=<null> what=CMD_UPDATE_CAPABILITY",
+        "rec[10]: time=11-03 15:06:34.509 processed=StartedState org=StartedState dest=<null> what=CMD_UPDATE_CAPABILITY",
+        "rec[11]: time=11-03 15:06:34.513 processed=StartedState org=StartedState dest=<null> what=CMD_AP_INFO_CHANGED",
+        "rec[12]: time=11-03 15:06:34.513 processed=StartedState org=StartedState dest=<null> what=CMD_AP_INFO_CHANGED",
+        "rec[13]: time=11-03 15:06:34.520 processed=StartedState org=StartedState dest=<null> what=CMD_INTERFACE_STATUS_CHANGED",
+        "curState=StartedState",
+        "rec[0]: time=11-03 15:04:33.380 processed=IdleState org=IdleState dest=StartedState what=CMD_START 0 0 Role: ROLE_CLIENT_PRIMARY, RequestorWs: WorkSource{1000 com.android.settings}, ModeListener: com.android.server.wifi.ActiveModeWarden$ClientListener@51cd2d7",
+        "rec[1]: time=11-03 15:04:33.468 processed=StartedState org=StartedState dest=ConnectModeState what=CMD_SWITCH_TO_CONNECT_MODE 0 0 Role: ROLE_CLIENT_PRIMARY, RequestorWs: WorkSource{1000 com.android.settings}, ModeListener: com.android.server.wifi.ActiveModeWarden$ClientListener@51cd2d7",
+        "mApInterfaceName: null",
+        "mCurrentSoftApInfoMap {}",
+        "2026-11-03T15:06:28.437779 - ConcreteClientModeManager.ConcreteClientModeManager$ClientModeStateMachine$StartedState.Exit was running for 195 ms",
+        "11-03 15:06:25.078  1878  4139 D SoftApManager[wlan1]:  currentstate: StartedState",
+        "11-03 15:06:25.298  1878  4139 E Nl80211Native: \tat com.android.server.wifi.SoftApManager$SoftApStateMachine$StartedState.exitImpl(SoftApManager.java:2027)",
+        "11-03 15:06:25.306  1878  4139 D SoftApManager[unknown]: SoftApInfo update null, isRemoved: false",
+        "11-03 15:06:25.306  5699  5759 V WifiManager: SoftApCallbackProxy on mode 1, send InfoChanged, newInfo: SoftApInfo{bandwidth= 0, frequency= 0, wifiStandard= 0, mApInstanceIdentifier= null, mIdleShutdownTimeoutMillis= 0, mVendorData= []}",
+        "11-03 15:06:25.306  4462  4806 V WifiManager: SoftApCallbackProxy on mode 1, send InfoChanged, newInfo: SoftApInfo{bandwidth= 0, frequency= 0, wifiStandard= 0, mApInstanceIdentifier= null, mIdleShutdownTimeoutMillis= 0, mVendorData= []}",
+        "11-03 15:06:25.306  4462  4924 V WifiManager: SoftApCallbackProxy on mode 1, send InfoChanged, newInfo: SoftApInfo{bandwidth= 0, frequency= 0, wifiStandard= 0, mApInstanceIdentifier= null, mIdleShutdownTimeoutMillis= 0, mVendorData= []}"
+      ],
+      "samples": [
+        {
+          "elapsed": 0.10559900099178776,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 2.2231109899876174,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 4.3467818479985,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 6.479877828009194,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 8.600050001987256,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 10.728895556996576,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 12.860457047005184,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 14.986718661995837,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 17.10022877898882,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 19.2184156680014,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 21.340613509994,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 23.464849783980753,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 25.592497125006048,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 27.733894129982218,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 29.876344566000625,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 31.99772046599537,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 34.11824788298691,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 36.24304682700313,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 38.36898804400698,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 40.4898007120064,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 42.617259719001595,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        },
+        {
+          "elapsed": 44.74382899500779,
+          "boot_id": "f2e3caf9-2423-4d93-801e-1f0927f1b27e"
+        }
+      ],
+      "active_framework_state_verified": "StartedState in active SoftApManager, excluding graveyard/history"
+    }
+  ],
+  "channel_notification_lines": [
+    "[   85.252947] [schedu][0x67982a1b][14:05:37.801417] wcn7750: [5262:I:HDD] AP started vid 2 freq 5260 BW 2",
+    "[  141.915388] [schedu][0xa8707d2b][14:06:34.463857] wcn7750: [5262:I:HDD] AP started vid 2 freq 2462 BW 0"
+  ],
+  "saved_config_unchanged_sha256": "5b92b65c0ad726301261f9d194bf3584dd88fb0ecc25ff30b2e867911a41cbd4",
+  "wifi_restored_enabled": true,
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/hotspot-wiphy-lock-20261103T135827Z/hotspot-validation-20261103T140531Z",
+  "limits": [
+    "User Settings hotspot toggle passes; connected-client internet forwarding has not yet been tested.",
+    "No attached-client throughput or endurance claim."
+  ],
+  "wifi_restored_connected": true,
+  "user_settings_toggle": "User reports it stays on",
+  "user_settings_toggle_utc": "2026-11-03T14:10:12.526735+00:00"
+}

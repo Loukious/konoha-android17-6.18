@@ -40,6 +40,7 @@
 
 #define GUNYAH_RM_MAX_NUM_FRAGMENTS		62
 #define RM_RPC_FRAGMENTS_MASK		GENMASK(7, 2)
+#define GUNYAH_RM_NOTIF_VM_CONSOLE_CHARS	0x56100080
 /* clang-format on */
 
 struct gunyah_rm_log {
@@ -59,6 +60,12 @@ struct gunyah_rm_rpc_hdr {
 struct gunyah_rm_rpc_reply_hdr {
 	struct gunyah_rm_rpc_hdr hdr;
 	__le32 err_code; /* GUNYAH_RM_ERROR_* */
+} __packed;
+
+struct gunyah_rm_console_chars {
+	__le16 vmid;
+	__le16 num_bytes;
+	u8 bytes[];
 } __packed;
 
 #define GUNYAH_RM_MSGQ_MSG_SIZE 240
@@ -330,6 +337,18 @@ static void gunyah_rm_abort_message(struct gunyah_rm *rm)
 	rm->active_rx_message = NULL;
 }
 
+/* The notifier API passes only payload, so validate its variable tail here. */
+static bool gunyah_rm_notification_valid(const struct gunyah_rm_message *message)
+{
+	const struct gunyah_rm_console_chars *console = message->payload;
+
+	if (message->msg_id != GUNYAH_RM_NOTIF_VM_CONSOLE_CHARS)
+		return true;
+	if (!console || message->size < sizeof(*console))
+		return false;
+	return le16_to_cpu(console->num_bytes) <= message->size - sizeof(*console);
+}
+
 static inline void gunyah_rm_try_complete_message(struct gunyah_rm *rm)
 {
 	struct gunyah_rm_message *message = rm->active_rx_message;
@@ -342,8 +361,12 @@ static inline void gunyah_rm_try_complete_message(struct gunyah_rm *rm)
 		gunyah_rm_complete_reply(rm, message);
 		break;
 	case RM_RPC_TYPE_NOTIF:
-		blocking_notifier_call_chain(&rm->nh, message->msg_id,
-					     message->payload);
+		if (gunyah_rm_notification_valid(message))
+			blocking_notifier_call_chain(&rm->nh, message->msg_id,
+						     message->payload);
+		else
+			pr_warn_ratelimited("Invalid console notification length: %zu\n",
+					    message->size);
 
 		kfree(message->payload);
 		kfree(message);

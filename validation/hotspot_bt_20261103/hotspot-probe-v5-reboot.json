@@ -1,0 +1,34 @@
+{
+  "utc": "2026-11-03T13:31:12.964222+00:00",
+  "original_boot": "031f802d-e1a1-4a17-8081-05cb8814f86e",
+  "new_boot": null,
+  "cleanup_operations": [],
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-runtime-probes-v5/capture-20261103T133027Z",
+  "confirmed_reboot_followup_boot": "97f8a970-5612-4842-88f4-eaa16333f91b",
+  "status": "REPRODUCED; AP-start notification reached, diagnostic stream incomplete",
+  "last_kernel_lines": [
+    "[  321.917824] [schedu][0x17685e8be][13:31:03.344185] wcn7750: [5251:E:CMN_MLME] target_if_stop_rso_stop_timer: vdev response timer is null VDEV_0 PSOC_0",
+    "[  321.928662] [schedu][0x176891599][13:31:03.355023] wcn7750: [5251:I:HDD] AP started vid 2 freq 5260 BW 2",
+    "[  321.928729] [schedu][0x176891a9d][13:31:03.355090] wcn7750: [5251:E:TWT] wlan_twt_init_context: Peer object not found ff:ff:ff:ff:ff:ff",
+    "[  321.928736] [schedu][0x176891b29][13:31:03.355097] wcn7750: [5251:E:HDD] hdd_hostapd_channel_prevent_suspend: DFS: preventing suspend (chan_freq: 5260)"
+  ],
+  "capture_limitations": [
+    "8-second ADB poll timeout raised TimeoutExpired and terminated capture before reconnect.",
+    "Trace instance inherited buffer_percent50; sparse final events can remain buffered. Missing handler returns do not establish the hang site."
+  ],
+  "corrected_next_capture": "v6: buffer_percent0 confirmed, poll timeouts recorded without terminating streams",
+  "hashes": {
+    "DONE.json": "88ab01413fc341dc190ff41408e6a2c12c75e521b005ebb5fbec2f8f9de62fa6",
+    "dmesg-final.txt.stderr": "a375bbaa739bf908dd9010d7a38e29c6a87564a9d7450032e500508d83d1d78c",
+    "pstore-final.tar": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dmesg-final.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "states.jsonl": "be3e0c9b07ae3cad2728a19a90cd134bb32032402ae6943edf7e88c952e6fb40",
+    "logcat-live.txt": "456af64bd8a466930e1ef84a342c84a8bf7f878864bcfbeb615550238cded179",
+    "dmesg-live.txt": "7da48a3a844ffb55deb133d2698f2b5737777eb40e29ac3727a10a3f994400ab",
+    "LIVE.json": "95f8e66a4ffdbb2430d861443c5e6958a918eff5cc28c39cb73d92313e5b8312",
+    "pstore-final.tar.stderr": "a375bbaa739bf908dd9010d7a38e29c6a87564a9d7450032e500508d83d1d78c",
+    "trace-final.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trace-live.txt": "7eedd1699845243d9634f6fbc698e3f834958e13042437465541459e485e3838",
+    "trace-final.txt.stderr": "66d2a0fdef730eba1f0a0788bcbc9d4969f39e71fc5cb78b043a9d1bf28b61e3"
+  }
+}

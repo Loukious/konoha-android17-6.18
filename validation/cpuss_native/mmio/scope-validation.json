@@ -1,0 +1,29 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T153808728566Z",
+  "dt_policy": {
+    "tuna.dtb": "PASS: only qcom,config-mmio added; all other merged and board-composed FDT properties identical",
+    "tuna7.dtb": "PASS: only qcom,config-mmio added; all other merged and board-composed FDT properties identical"
+  },
+  "gki_image_unchanged": false,
+  "gki_differences_confined_to": [
+    {
+      "start": "__start_notes",
+      "end": "__stop_notes",
+      "offset_start": 29036892,
+      "offset_end": 29036976
+    },
+    {
+      "start": "system_certificate_list",
+      "end": "__cert_list_end",
+      "offset_start": 41057736,
+      "offset_end": 41059064
+    }
+  ],
+  "gki_config_symbol_crcs_and_system_map_unchanged": true,
+  "existing_platform_modules_unchanged": true,
+  "added_modules": [
+    "qcom_cpuss_sleep_stats.ko",
+    "qcom_cpuss_sleep_stats_v4.ko"
+  ]
+}

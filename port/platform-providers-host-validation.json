@@ -1,0 +1,104 @@
+{
+  "status": "PASS",
+  "fixtures": [
+    {
+      "name": "bam-register-window",
+      "cases": 9,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "gear-input",
+      "cases": 19,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "hl7603-i2c-errors",
+      "cases": 9,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "bam-remote-fifo-bounds",
+      "cases": 7,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "stats-ioctl-routing",
+      "cases": 17,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "pmic-response-validation",
+      "cases": 15,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "cpu-partition-allocation",
+      "cases": 6,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "scmi-transport-limits",
+      "cases": 45,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "charging-policy-rollback",
+      "cases": 8,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "handle-state-transaction",
+      "cases": 10,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "trace-native-widths-auth",
+      "cases": 14,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "wired-reverse-eligibility",
+      "cases": 16,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "trace-dsb-mode-registers",
+      "cases": 41,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    },
+    {
+      "name": "handle-battery-status",
+      "cases": 11,
+      "sanitizers": "ASan+UBSan",
+      "status": "PASS"
+    }
+  ],
+  "source_sha256": {
+    "include/soc/qcom/mpam.h": "7714fef07599ff7c82ac94bee834beab674a6b0385cd027a19ad7cf89c1cbff5",
+    "drivers/power/supply/mca/mca_hardware_ic/boost_ic/hl7603/hl7603.c": "6ff47f7c9317b5f3f7ccadf68b9f417e91db0ba27e293738b2c1c3fe4114f841",
+    "drivers/dma/qcom/bam_dma.c": "02011e90f1bf6fbd2eecb49d71d4399893c7f60b0253fb6e49dc320899efee25",
+    "drivers/soc/qcom/qcom_stats.c": "b1155d9fd055031d3bd31c465e12c21c900eea35d6331f5af7584d293532f0b5",
+    "drivers/soc/qcom/mpam/cpu_mpam.c": "1b715a60147061367598f5e2f5e437a10066d17ba04ce7743007a0cb797ba592",
+    "drivers/soc/qcom/pmic-glink-debug.c": "b43a2f507520778bb100046e2f6826945edb41507720f864dbf9f31e6efc52f3",
+    "drivers/firmware/arm_scmi/qcom_scmi_vendor.c": "ab01cc02d57e69eca5cb4701650b3870a054419bb9e60dcf23308bdd91e28968",
+    "drivers/hwtracing/coresight/coresight-tpda.c": "3d103f450b72bbdb54e817ac0737327ed77ae588f963dddfa1a11a73600572da",
+    "drivers/hwtracing/coresight/coresight-tpdm.c": "0533a8d25dc7088bf4eabeb214edae36d73dcccc1f8b5901f446a6cba9dc2782",
+    "drivers/power/supply/mca/include/mca/common/mca_voter.h": "2281d33e2cf785f225e78aebac686ad95da538dfeed2ffd1644f0aa82f948b80",
+    "drivers/power/supply/mca/mca_business/business_charger/mca_business_charger.c": "4339375596928f1a17639d2d5eb3fd84febe056b5008af9166ff7aee7dab5cee",
+    "drivers/power/supply/mca/mca_business/business_battery/mca_battery_psy.c": "588e8778bd2b48b592eba4c192c50ab3da1d664fa46923713505ba3e2fde8dfd"
+  },
+  "cases": 227
+}

@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T125226341911Z",
+  "first_stage": "/home/loukious/Android/konoha-android17-6.18-port-20261031/packaging/remaining-371-first-stage-20261103T125226341911Z",
+  "bundle": "/home/loukious/Android/konoha-android17-6.18-port-20261031/packaging/remaining-371-bundle-20261103T125226341911Z",
+  "first_stage_modules": 100,
+  "packaged_modules": 451,
+  "catalog_modules_checked": 480,
+  "packaged_hashes_checked": 991,
+  "unavailable_distinct_load_list_names": 100,
+  "limits": "Dependency/CRC metadata and modprobe dry runs; no images flashed, phone boot or hardware playback test."
+}

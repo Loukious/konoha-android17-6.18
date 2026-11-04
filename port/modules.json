@@ -332,6 +332,10 @@
     "output": "qcom-pmu-lib.ko"
   },
   {
+    "target": "memlat",
+    "output": "memlat.ko"
+  },
+  {
     "target": "qcom_cpufreq_hw",
     "output": "qcom-cpufreq-hw.ko"
   },
@@ -1275,5 +1279,289 @@
   {
     "target": "mi_thermal_interface",
     "output": "mi_thermal_interface.ko"
+  },
+  {
+    "target": "ir_spi",
+    "output": "ir-spi.ko"
+  },
+  {
+    "target": "adsp_sleepmon",
+    "output": "adsp_sleepmon.ko"
+  },
+  {
+    "target": "cdsprm",
+    "output": "cdsprm.ko"
+  },
+  {
+    "target": "heap_mem_ext_v01",
+    "output": "heap_mem_ext_v01.ko"
+  },
+  {
+    "target": "msm_memshare",
+    "output": "msm_memshare.ko"
+  },
+  {
+    "target": "sps_drv",
+    "output": "sps_drv.ko"
+  },
+  {
+    "target": "qce50_dlkm",
+    "output": "qce50_dlkm.ko"
+  },
+  {
+    "target": "qcedev_mod_dlkm",
+    "output": "qcedev-mod_dlkm.ko"
+  },
+  {
+    "target": "qcrypto_msm_dlkm",
+    "output": "qcrypto-msm_dlkm.ko"
+  },
+  {
+    "target": "snd_usb_audio_qmi",
+    "output": "snd-usb-audio-qmi.ko"
+  },
+  {
+    "target": "mpam",
+    "output": "mpam.ko"
+  },
+  {
+    "target": "cpu_mpam",
+    "output": "cpu_mpam.ko"
+  },
+  {
+    "target": "platform_mpam",
+    "output": "platform_mpam.ko"
+  },
+  {
+    "target": "mpam_msc",
+    "output": "mpam_msc.ko"
+  },
+  {
+    "target": "mpam_msc_slc",
+    "output": "mpam_msc_slc.ko"
+  },
+  {
+    "target": "slc_mpam",
+    "output": "slc_mpam.ko"
+  },
+  {
+    "target": "llcc_heuristics",
+    "output": "llcc_heuristics.ko"
+  },
+  {
+    "target": "gpio_mi_t1",
+    "output": "gpio-mi-t1.ko"
+  },
+  {
+    "target": "gh_tlmm_vm_mem_access",
+    "output": "gh_tlmm_vm_mem_access.ko"
+  },
+  {
+    "target": "qcom_stats",
+    "output": "qcom_stats.ko"
+  },
+  {
+    "target": "msm_show_resume_irq",
+    "output": "msm_show_resume_irq.ko"
+  },
+  {
+    "target": "pmic_glink_debug",
+    "output": "pmic-glink-debug.ko"
+  },
+  {
+    "target": "spmi_pmic_arb_debug",
+    "output": "spmi-pmic-arb-debug.ko"
+  },
+  {
+    "target": "qcom_pbs",
+    "output": "qcom-pbs.ko"
+  },
+  {
+    "target": "leds_qcom_lpg",
+    "output": "leds-qcom-lpg.ko"
+  },
+  {
+    "target": "bam_dma",
+    "output": "bam_dma.ko"
+  },
+  {
+    "target": "coresight_tpdm",
+    "output": "coresight-tpdm.ko"
+  },
+  {
+    "target": "mca_ut_test",
+    "output": "mca_ut_test.ko"
+  },
+  {
+    "target": "hl7603",
+    "output": "hl7603.ko"
+  },
+  {
+    "target": "coresight_tpda",
+    "output": "coresight-tpda.ko"
+  },
+  {
+    "target": "coresight_tmc",
+    "output": "coresight-tmc.ko"
+  },
+  {
+    "target": "coresight_csr",
+    "output": "coresight-csr.ko"
+  },
+  {
+    "target": "coresight_trace_noc",
+    "output": "coresight-trace-noc.ko"
+  },
+  {
+    "target": "mca_vbat_ovp_monitor",
+    "output": "mca_vbat_ovp_monitor.ko"
+  },
+  {
+    "target": "mca_qcom_sysfs",
+    "output": "mca_qcom_sysfs.ko"
+  },
+  {
+    "target": "coresight_cti",
+    "output": "coresight-cti.ko"
+  },
+  {
+    "target": "boot_stats",
+    "output": "boot_stats.ko"
+  },
+  {
+    "target": "msm_show_epoch",
+    "output": "msm_show_epoch.ko"
+  },
+  {
+    "target": "mca_business_misc_comp",
+    "output": "mca_business_misc_comp.ko"
+  },
+  {
+    "target": "mca_ibat_ocp_monitor",
+    "output": "mca_ibat_ocp_monitor.ko"
+  },
+  {
+    "target": "cpufreq_stats_scmi_v2",
+    "output": "cpufreq_stats_scmi_v2.ko"
+  },
+  {
+    "target": "cpufreq_stats_scmi_v3",
+    "output": "cpufreq_stats_scmi_v3.ko"
+  },
+  {
+    "target": "coresight_qmi",
+    "output": "coresight-qmi.ko"
+  },
+  {
+    "target": "coresight_tgu",
+    "output": "coresight-tgu.ko"
+  },
+  {
+    "target": "cpucp_log",
+    "output": "cpucp_log.ko"
+  },
+  {
+    "target": "c1dcvs_scmi_v2",
+    "output": "c1dcvs_scmi_v2.ko"
+  },
+  {
+    "target": "dynpf_scmi",
+    "output": "dynpf_scmi.ko"
+  },
+  {
+    "target": "cpucp_fast",
+    "output": "cpucp_fast.ko"
+  },
+  {
+    "target": "coresight_dummy",
+    "output": "coresight-dummy.ko"
+  },
+  {
+    "target": "coresight_remote_etm",
+    "output": "coresight-remote-etm.ko"
+  },
+  {
+    "target": "glink_pkt",
+    "output": "glink_pkt.ko"
+  },
+  {
+    "target": "qcom_cpuss_sleep_stats_v4",
+    "output": "qcom_cpuss_sleep_stats_v4.ko"
+  },
+  {
+    "target": "qcom_cpuss_sleep_stats",
+    "output": "qcom_cpuss_sleep_stats.ko"
+  },
+  {
+    "target": "qcom_lpm",
+    "output": "qcom_lpm.ko"
+  },
+  {
+    "target": "mem_hooks",
+    "output": "mem-hooks.ko"
+  },
+  {
+    "target": "gh_rm_booster",
+    "output": "gh_rm_booster.ko"
+  },
+  {
+    "target": "tmecom_intf",
+    "output": "tmecom-intf.ko"
+  },
+  {
+    "target": "gh_panic_notifier",
+    "output": "gh_panic_notifier.ko"
+  },
+  {
+    "target": "qcom_edac",
+    "output": "qcom_edac.ko"
+  },
+  {
+    "target": "qcom_cpufreq_hw_debug",
+    "output": "qcom-cpufreq-hw-debug.ko"
+  },
+  {
+    "target": "charger_ulog_glink",
+    "output": "charger-ulog-glink.ko"
+  },
+  {
+    "target": "sysmon_subsystem_stats",
+    "output": "sysmon_subsystem_stats.ko"
+  },
+  {
+    "target": "sys_pm_vx",
+    "output": "sys_pm_vx.ko"
+  },
+  {
+    "target": "qcom_i2c_pmic",
+    "output": "qcom-i2c-pmic.ko"
+  },
+  {
+    "target": "qti_battery_debug",
+    "output": "qti_battery_debug.ko"
+  },
+  {
+    "target": "hung_task_enh",
+    "output": "hung_task_enh.ko"
+  },
+  {
+    "target": "qcom_iommu_debug",
+    "output": "qcom_iommu_debug.ko"
+  },
+  {
+    "target": "hvc_gunyah",
+    "output": "hvc_gunyah.ko"
+  },
+  {
+    "target": "mtd",
+    "output": "mtd.ko"
+  },
+  {
+    "target": "block2mtd",
+    "output": "block2mtd.ko"
+  },
+  {
+    "target": "mtdoops",
+    "output": "mtdoops.ko"
   }
 ]

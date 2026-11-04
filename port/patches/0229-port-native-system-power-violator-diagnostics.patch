@@ -1,0 +1,723 @@
+--- a/drivers/soc/qcom/sys_pm_vx.c
++++ b/drivers/soc/qcom/sys_pm_vx.c
+@@ -9,6 +9,8 @@
+ 
+ #include <linux/debugfs.h>
+ #include <linux/init.h>
++#include <linux/io.h>
++#include <linux/mutex.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+@@ -42,16 +44,6 @@
+ #define DEFAULT_TIMER (5000)
+ #define MAX_DRV_NAMES	27
+ 
+-#define read_word(base, itr) ({					\
+-		u32 v;						\
+-		v = le32_to_cpu(readl_relaxed(base + itr));	\
+-		pr_debug("Addr:%p val:%#x\n", base + itr, v);	\
+-		itr += sizeof(u32);				\
+-		/* Barrier to enssure sequential read */	\
+-		smp_rmb();					\
+-		v;						\
+-		})
+-
+ struct vx_header {
+ 	struct {
+ 		u16 unused;
+@@ -66,7 +58,7 @@
+ };
+ 
+ struct vx_data {
+-	u32 ts;
++	u64 ts;
+ 	u32 *drv_vx;
+ };
+ 
+@@ -78,11 +70,12 @@
+ 
+ struct vx_platform_data {
+ 	void __iomem *base;
++	resource_size_t size;
+ 	struct dentry *vx_dir;
+ 	size_t n_cxpc_drv;
+ 	size_t n_aoss_drv;
+-	const char **cxpc_drvs;
+-	const char **aoss_drvs;
++	const char * const *cxpc_drvs;
++	const char * const *aoss_drvs;
+ 	struct mutex lock;
+ 	struct qmp *qmp;
+ 	ktime_t suspend_time;
+@@ -95,6 +88,11 @@
+ };
+ 
+ static struct vx_platform_data *g_pd;
++/* Exports hold this lock until all uses of the published instance finish. */
++static DEFINE_MUTEX(vx_global_lock);
++
++void trigger_dump_enable(void);
++void trigger_dump_disable(void);
+ 
+ enum {
+ 	CXPC_DRV_NAME,
+@@ -170,7 +168,7 @@
+ {
+ 	struct vx_platform_data *pd = dev_get_drvdata(dev);
+ 
+-	return scnprintf(buf, PAGE_SIZE, "%d\n", pd->detect_time_ms);
++	return scnprintf(buf, PAGE_SIZE, "%d\n", READ_ONCE(pd->detect_time_ms));
+ }
+ 
+ static ssize_t debug_time_ms_store(struct device *dev,
+@@ -200,7 +198,7 @@
+ {
+ 	struct vx_platform_data *pd = dev_get_drvdata(dev);
+ 
+-	return scnprintf(buf, PAGE_SIZE, "%d\n", pd->timer_ms);
++	return scnprintf(buf, PAGE_SIZE, "%d\n", READ_ONCE(pd->timer_ms));
+ }
+ 
+ static ssize_t set_timer_ms_store(struct device *dev,
+@@ -230,7 +228,7 @@
+ {
+ 	struct vx_platform_data *pd = dev_get_drvdata(dev);
+ 
+-	return scnprintf(buf, PAGE_SIZE, "%d\n", pd->debug_enable);
++	return scnprintf(buf, PAGE_SIZE, "%d\n", READ_ONCE(pd->debug_enable));
+ }
+ 
+ static ssize_t debug_enable_store(struct device *dev,
+@@ -249,14 +247,14 @@
+ 
+ 	mutex_lock(&pd->lock);
+ 	pd->debug_enable = val;
+-	mutex_unlock(&pd->lock);
+-
+ 	subsystem_sleep_debug_enable(pd->debug_enable);
++	mutex_unlock(&pd->lock);
+ 
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(debug_enable);
+ 
++/* Callers hold pd->lock for monitor state and QMP transactions. */
+ static void trigger_dump(struct vx_platform_data *pd)
+ {
+ 	int ret = 0;
+@@ -265,15 +263,13 @@
+ 	if (!pd->debug_dump_enable)
+ 		return;
+ 
+-	mutex_lock(&pd->lock);
+ 	scnprintf(buf, sizeof(buf),
+ 			"{class: misc_debug, res: do_crash_dump, tmr: %d}", pd->timer_ms);
+ 
+-	ret = qmp_send(pd->qmp, buf, sizeof(buf));
++	ret = qmp_send(pd->qmp, "%s", buf);
+ 	if (ret)
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 
+-	mutex_unlock(&pd->lock);
+ }
+ 
+ static void sys_pm_vx_send_msg(struct vx_platform_data *pd)
+@@ -281,7 +277,6 @@
+ 	int ret = 0;
+ 	char buf[MAX_QMP_MSG_SIZE] = {};
+ 
+-	mutex_lock(&pd->lock);
+ 	switch (pd->monitor_status) {
+ 	case AOSS_SHUTDOWN_MSG:
+ 		scnprintf(buf, sizeof(buf),
+@@ -296,21 +291,19 @@
+ 			"{class: lpm_mon, type: cxpc, dur: 1000, flush: 1, log_once: 1}");
+ 		break;
+ 	default:
+-		mutex_unlock(&pd->lock);
+ 		return;
+ 	}
+ 
+-	ret = qmp_send(pd->qmp, buf, sizeof(buf));
++	ret = qmp_send(pd->qmp, "%s", buf);
+ 	if (ret)
+ 		pr_err("Error sending qmp message: %d\n", ret);
+ 
+-	mutex_unlock(&pd->lock);
+-}
+-
+-static const char **vx_get_drvs_info(u8 type, struct vx_platform_data *pd,
++}
++
++static const char * const *vx_get_drvs_info(u8 type, struct vx_platform_data *pd,
+ 				      size_t *ndrvs)
+ {
+-	const char **drvs;
++	const char * const *drvs;
+ 
+ 	switch (type) {
+ 	case MODE_CXPC:
+@@ -329,94 +322,108 @@
+ 	return drvs;
+ }
+ 
++static void free_vx_data(struct vx_log *log)
++{
++	int i;
++
++	for (i = 0; i < log->loglines; i++)
++		kfree(log->data[i].drv_vx);
++	kfree(log->data);
++	log->data = NULL;
++	log->loglines = 0;
++}
++
+ static int read_vx_data(struct vx_platform_data *pd, struct vx_log *log)
+ {
+-	void __iomem *base = pd->base;
+ 	struct vx_header *hdr = &log->header;
+-	struct vx_data *data;
+-	u32 *vx, val, itr = 0;
+-	int i, j, k;
++	const char * const *drvs;
++	size_t n_drv, words, extent;
++	u32 mode, flags, val, itr = 8, timestamp;
++	int i, j, k, ret;
++
++	memset(log, 0, sizeof(*log));
++	if (pd->size < 8)
++		return -EMSGSIZE;
++	mode = readl_relaxed(pd->base);
++	if (!mode)
++		return -ENOENT;
++	hdr->mode.type = mode & VX_MODE_MASK_TYPE;
++	hdr->mode.logsize = (mode >> VX_MODE_SHIFT_LOGSIZE) & VX_MODE_MASK_LOGSIZE;
++	drvs = vx_get_drvs_info(hdr->mode.type, pd, &n_drv);
++	if (!drvs || !n_drv || n_drv > MAX_DRV_NAMES)
++		return -ENODEV;
++	if (!hdr->mode.logsize)
++		return -EINVAL;
++	flags = readl_relaxed(pd->base + 4);
++	if (!flags)
++		return -ENOENT;
++	hdr->flags.dur_ms = flags & VX_FLAG_MASK_DUR;
++	hdr->flags.ts_shift = (flags >> VX_FLAG_SHIFT_TS) & VX_FLAG_MASK_TS;
++	hdr->flags.flush_threshold = (flags >> VX_FLAG_SHIFT_FLUSH_THRESH) & VX_FLAG_MASK_FLUSH_THRESH;
++	/* Native timestamps are 32-bit words; retain all shifted bits in u64. */
++	if (hdr->flags.ts_shift >= 32)
++		return -EINVAL;
++	words = DIV_ROUND_UP(n_drv, 4);
++	extent = 8 + hdr->mode.logsize * (sizeof(u32) + words * sizeof(u32));
++	if (extent > pd->size)
++		return -EMSGSIZE;
++	log->data = kcalloc(hdr->mode.logsize, sizeof(*log->data), GFP_KERNEL);
++	if (!log->data)
++		return -ENOMEM;
++	for (i = 0; i < hdr->mode.logsize; i++) {
++		timestamp = readl_relaxed(pd->base + itr);
++		itr += sizeof(u32);
++		if (!timestamp)
++			break;
++		log->data[i].ts = (u64)timestamp << hdr->flags.ts_shift;
++		log->data[i].drv_vx = kcalloc(n_drv, sizeof(u32), GFP_KERNEL);
++		if (!log->data[i].drv_vx) {
++			ret = -ENOMEM;
++			goto fail;
++		}
++		log->loglines++;
++		for (j = 0; j < words; j++) {
++			val = readl_relaxed(pd->base + itr);
++			itr += sizeof(u32);
++			for (k = 0; k < 4 && 4 * j + k < n_drv; k++)
++				log->data[i].drv_vx[4 * j + k] = (val >> (8 * k)) & 0xff;
++		}
++	}
++	/* Detect changed headers; the firmware has no whole-log sequence lock. */
++	if (readl(pd->base) != mode || readl(pd->base + 4) != flags) {
++		ret = -EAGAIN;
++		goto fail;
++	}
++	return 0;
++fail:
++	free_vx_data(log);
++	return ret;
++}
++
++static void vx_check_drv(struct vx_platform_data *pd)
++{
++	struct vx_log log;
++	const char * const *drvs;
+ 	size_t n_drv;
+-	const char **drvs;
+-
+-	val = read_word(base, itr);
+-	if (!val)
+-		return -ENOENT;
+-
+-	hdr->mode.type = val & VX_MODE_MASK_TYPE;
+-	hdr->mode.logsize = (val >> VX_MODE_SHIFT_LOGSIZE) &
+-				    VX_MODE_MASK_LOGSIZE;
+-	drvs = vx_get_drvs_info(hdr->mode.type, pd, &n_drv);
+-	if (!drvs || !n_drv)
+-		return -ENODEV;
+-
+-	val = read_word(base, itr);
+-	if (!val)
+-		return -ENOENT;
+-
+-	hdr->flags.dur_ms = val & VX_FLAG_MASK_DUR;
+-	hdr->flags.ts_shift = (val >> VX_FLAG_SHIFT_TS) & VX_FLAG_MASK_TS;
+-	hdr->flags.flush_threshold = (val >> VX_FLAG_SHIFT_FLUSH_THRESH) &
+-					     VX_FLAG_MASK_FLUSH_THRESH;
+-
+-	data = kcalloc(hdr->mode.logsize, sizeof(*data), GFP_KERNEL);
+-	if (!data)
+-		return -ENOMEM;
+-
+-	for (i = 0; i < hdr->mode.logsize; i++) {
+-		data[i].ts = read_word(base, itr);
+-		if (!data[i].ts)
+-			break;
+-		data[i].ts <<= hdr->flags.ts_shift;
+-		vx = kcalloc(ALIGN(n_drv, 4), sizeof(*vx), GFP_KERNEL);
+-		if (!vx)
+-			goto no_mem;
+-
+-		for (j = 0; j < n_drv;) {
+-			val = read_word(base, itr);
+-			for (k = 0; k < 4; k++)
+-				vx[j++] = val >> (8 * k) & 0xFF;
+-		}
+-		data[i].drv_vx = vx;
+-	}
+-
+-	log->data = data;
+-	log->loglines = i;
+-
+-	return 0;
+-no_mem:
+-	for (j = 0; j < i; j++)
+-		kfree(data[j].drv_vx);
+-	kfree(data);
+-
+-	return -ENOMEM;
+-}
+-
+-static void vx_check_drv(struct vx_platform_data *pd)
+-{
+-	struct vx_log log;
+ 	int i, j, ret;
+ 
+ 	ret = read_vx_data(pd, &log);
+ 	if (ret) {
+-		pr_err("fail to read vx data\n");
++		pr_err("fail to read vx data: %d\n", ret);
+ 		return;
+ 	}
+-
+-	for (i = 0; i < pd->n_cxpc_drv; i++) {
++	drvs = vx_get_drvs_info(log.header.mode.type, pd, &n_drv);
++	for (i = 0; i < n_drv; i++) {
+ 		for (j = 0; j < log.loglines; j++) {
+-			if (log.data[j].drv_vx[i] == 0)
++			if (!log.data[j].drv_vx[i])
+ 				break;
+ 			if (j == log.loglines - 1) {
+-				pr_warn("DRV: %s has blocked power collapse\n", pd->cxpc_drvs[i]);
++				pr_warn("DRV: %s has blocked power collapse\n", drvs[i]);
+ 				trigger_dump(pd);
+ 			}
+ 		}
+ 	}
+-
+-	for (i = 0; i < log.loglines; i++)
+-		kfree(log.data[i].drv_vx);
+-	kfree(log.data);
++	free_vx_data(&log);
+ }
+ 
+ static void show_vx_data(struct vx_platform_data *pd, struct vx_log *log,
+@@ -427,7 +434,7 @@
+ 	struct vx_data *data;
+ 	u32 prev;
+ 	bool from_exit = false;
+-	const char **drvs;
++	const char * const *drvs;
+ 	size_t ndrv;
+ 
+ 	drvs = vx_get_drvs_info(hdr->mode.type, pd, &ndrv);
+@@ -453,7 +460,7 @@
+ 
+ 	for (i = 0; i < log->loglines; i++) {
+ 		data = &log->data[i];
+-		seq_printf(seq, "%*x|", 9, data->ts);
++		seq_printf(seq, "%*llx|", 9, data->ts);
+ 		/* An all-zero line indicates we entered LPM */
+ 		for (j = 0, prev = data->drv_vx[0]; j < ndrv; j++)
+ 			prev |= data->drv_vx[j];
+@@ -478,24 +485,15 @@
+ 	struct vx_platform_data *pd = seq->private;
+ 	struct vx_log log;
+ 	int ret;
+-	int i;
+-
+-	/*
+-	 * Read the data into memory to allow for
+-	 * post processing of data and present it
+-	 * cleanly.
+-	 */
++
++	mutex_lock(&pd->lock);
+ 	ret = read_vx_data(pd, &log);
+-	if (ret)
+-		return ret;
+-
+-	show_vx_data(pd, &log, seq);
+-
+-	for (i = 0; i < log.loglines; i++)
+-		kfree(log.data[i].drv_vx);
+-	kfree(log.data);
+-
+-	return 0;
++	if (!ret) {
++		show_vx_data(pd, &log, seq);
++		free_vx_data(&log);
++	}
++	mutex_unlock(&pd->lock);
++	return ret;
+ }
+ 
+ static int open_vx(struct inode *inode, struct file *file)
+@@ -504,6 +502,7 @@
+ }
+ 
+ static const struct file_operations sys_pm_vx_fops = {
++	.owner = THIS_MODULE,
+ 	.open = open_vx,
+ 	.read = seq_read,
+ 	.llseek = seq_lseek,
+@@ -526,7 +525,11 @@
+ 	struct vx_platform_data *pd = data;
+ 
+ 	mutex_lock(&pd->lock);
+-	pd->debug_dump_enable = (bool)val;
++	if (val > 1) {
++		mutex_unlock(&pd->lock);
++		return -EINVAL;
++	}
++	pd->debug_dump_enable = val;
+ 	mutex_unlock(&pd->lock);
+ 
+ 	return 0;
+@@ -537,29 +540,41 @@
+ 			trigger_dump_enable_set,
+ 			"%lld\n");
+ 
++static void set_global_dump_enable(bool enable)
++{
++	mutex_lock(&vx_global_lock);
++	if (g_pd) {
++		mutex_lock(&g_pd->lock);
++		g_pd->debug_dump_enable = enable;
++		mutex_unlock(&g_pd->lock);
++	}
++	mutex_unlock(&vx_global_lock);
++}
++
+ void trigger_dump_enable(void)
+ {
+-	mutex_lock(&g_pd->lock);
+-	g_pd->debug_dump_enable = true;
+-	mutex_unlock(&g_pd->lock);
++	set_global_dump_enable(true);
+ }
+ EXPORT_SYMBOL_GPL(trigger_dump_enable);
+ 
+ void trigger_dump_disable(void)
+ {
+-	mutex_lock(&g_pd->lock);
+-	g_pd->debug_dump_enable = false;
+-	mutex_unlock(&g_pd->lock);
++	set_global_dump_enable(false);
+ }
+ EXPORT_SYMBOL_GPL(trigger_dump_disable);
+ 
+-static void vx_create_debug_nodes(struct dentry *root, struct vx_platform_data *pd)
+-{
+-	debugfs_create_file("sys_pm_violators", 0400, root,
+-				 pd, &sys_pm_vx_fops);
+-
+-	debugfs_create_file("trigger_dump", 0600, root,
+-				 pd, &trigger_dump_enable_fops);
++static int vx_create_debug_nodes(struct vx_platform_data *pd)
++{
++	struct dentry *entry;
++
++	pd->vx_dir = debugfs_create_dir("sys_pm_vx", NULL);
++	if (IS_ERR_OR_NULL(pd->vx_dir))
++		return pd->vx_dir ? PTR_ERR(pd->vx_dir) : -ENOMEM;
++	entry = debugfs_create_file("sys_pm_violators", 0400, pd->vx_dir, pd, &sys_pm_vx_fops);
++	if (IS_ERR_OR_NULL(entry))
++		return entry ? PTR_ERR(entry) : -ENOMEM;
++	entry = debugfs_create_file("trigger_dump", 0600, pd->vx_dir, pd, &trigger_dump_enable_fops);
++	return IS_ERR_OR_NULL(entry) ? (entry ? PTR_ERR(entry) : -ENOMEM) : 0;
+ }
+ 
+ static const struct of_device_id drv_match_table[] = {
+@@ -582,161 +597,147 @@
+ {
+ 	const struct of_device_id *match_id;
+ 	struct vx_platform_data *pd;
+-	const char **drvs;
++	struct resource *res;
++	const char * const *drvs;
+ 	int i, ret;
+ 
+-	g_pd = pd = devm_kzalloc(&pdev->dev, sizeof(*pd), GFP_KERNEL);
++	pd = devm_kzalloc(&pdev->dev, sizeof(*pd), GFP_KERNEL);
+ 	if (!pd)
+ 		return -ENOMEM;
+-
+-	pd->base = of_iomap(pdev->dev.of_node, 0);
+-	if (IS_ERR_OR_NULL(pd->base))
++	mutex_init(&pd->lock);
++	pd->detect_time_ms = DEFAULT_DEBUG_TIME;
++	pd->timer_ms = DEFAULT_TIMER;
++	pd->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
++	if (IS_ERR(pd->base))
+ 		return PTR_ERR(pd->base);
+-
++	pd->size = resource_size(res);
++	if (pd->size < 8)
++		return -EINVAL;
+ 	match_id = of_match_node(drv_match_table, pdev->dev.of_node);
+ 	if (!match_id)
+ 		return -ENODEV;
+-
+-	drvs = (const char **)match_id->data;
+-	for (i = 0; ; i++) {
+-		const char *name = (const char *)drvs[i];
+-
+-		if (!name[0])
+-			break;
+-	}
++	drvs = match_id->data;
++	for (i = 0; i < MAX_DRV_NAMES && drvs[i] && drvs[i][0]; i++)
++		;
++	if (!i || i == MAX_DRV_NAMES)
++		return -EINVAL;
+ 	pd->n_cxpc_drv = i;
+ 	pd->cxpc_drvs = drvs;
+-
+-	for (i = 0; ; i++) {
+-		const char *name = (const char *)drvs[MAX_DRV_NAMES + i];
+-
+-		if (!name[0])
+-			break;
+-	}
++	drvs += MAX_DRV_NAMES;
++	for (i = 0; i < MAX_DRV_NAMES && drvs[i] && drvs[i][0]; i++)
++		;
++	if (!i || i == MAX_DRV_NAMES)
++		return -EINVAL;
+ 	pd->n_aoss_drv = i;
+-	pd->aoss_drvs = &drvs[MAX_DRV_NAMES];
+-
+-	pd->vx_dir = debugfs_create_dir("sys_pm_vx", NULL);
+-	if (!pd->vx_dir)
+-		return -EINVAL;
+-
+-	vx_create_debug_nodes(pd->vx_dir, pd);
+-
++	pd->aoss_drvs = drvs;
++	pd->qmp = qmp_get(&pdev->dev);
++	if (IS_ERR(pd->qmp))
++		return PTR_ERR(pd->qmp);
++	platform_set_drvdata(pdev, pd);
++	/* Serialize singleton publication and removal, including exported calls. */
++	mutex_lock(&vx_global_lock);
++	if (g_pd) {
++		ret = -EBUSY;
++		goto fail_qmp;
++	}
++	ret = vx_create_debug_nodes(pd);
++	if (ret)
++		goto fail_debugfs;
+ 	ret = device_create_file(&pdev->dev, &dev_attr_debug_time_ms);
+-	if (ret) {
+-		dev_err(&pdev->dev, "failed: create sys pm vx sysfs debug time entry\n");
+-		goto fail_create_debug_time;
+-	}
+-
++	if (ret)
++		goto fail_debugfs;
+ 	ret = device_create_file(&pdev->dev, &dev_attr_debug_enable);
+-	if (ret) {
+-		dev_err(&pdev->dev, "failed: create sys pm vx sysfs debug enable entry\n");
+-		goto fail_create_debug_enable;
+-	}
+-
++	if (ret)
++		goto fail_time;
+ 	ret = device_create_file(&pdev->dev, &dev_attr_set_timer_ms);
+-	if (ret) {
+-		dev_err(&pdev->dev, "failed: create sys pm vx sysfs set timer_ms entry\n");
+-		goto fail_create_set_timer;
+-	}
+-
+-	pd->qmp = qmp_get(&pdev->dev);
+-	if (IS_ERR(pd->qmp)) {
+-		ret = PTR_ERR(pd->qmp);
+-		goto fail_get_qmp;
+-	}
+-
+-	mutex_init(&pd->lock);
+-	pd->detect_time_ms = DEFAULT_DEBUG_TIME;
+-	pd->timer_ms = DEFAULT_TIMER;
+-	pd->debug_enable = false;
+-	pd->monitor_status = DISABLE_MSG;
+-	pd->debug_dump_enable = false;
+-
+-	platform_set_drvdata(pdev, pd);
+-
++	if (ret)
++		goto fail_enable;
++	g_pd = pd;
++	mutex_unlock(&vx_global_lock);
+ 	return 0;
+-
+-fail_get_qmp:
+-	device_remove_file(&pdev->dev, &dev_attr_set_timer_ms);
+-fail_create_set_timer:
++fail_enable:
+ 	device_remove_file(&pdev->dev, &dev_attr_debug_enable);
+-fail_create_debug_enable:
++	/* A published setting may have been enabled before a later probe failure. */
++	mutex_lock(&pd->lock);
++	if (pd->debug_enable)
++		subsystem_sleep_debug_enable(false);
++	mutex_unlock(&pd->lock);
++fail_time:
+ 	device_remove_file(&pdev->dev, &dev_attr_debug_time_ms);
+-fail_create_debug_time:
++fail_debugfs:
+ 	debugfs_remove_recursive(pd->vx_dir);
++fail_qmp:
++	mutex_unlock(&vx_global_lock);
++	platform_set_drvdata(pdev, NULL);
++	qmp_put(pd->qmp);
+ 	return ret;
+ }
+ 
+-static int vx_remove(struct platform_device *pdev)
++static void vx_remove(struct platform_device *pdev)
+ {
+ 	struct vx_platform_data *pd = platform_get_drvdata(pdev);
+ 
+-	debugfs_remove_recursive(pd->vx_dir);
++	mutex_lock(&vx_global_lock);
++	if (g_pd == pd)
++		g_pd = NULL;
+ 	device_remove_file(&pdev->dev, &dev_attr_debug_time_ms);
+ 	device_remove_file(&pdev->dev, &dev_attr_debug_enable);
+ 	device_remove_file(&pdev->dev, &dev_attr_set_timer_ms);
++	debugfs_remove_recursive(pd->vx_dir);
++	mutex_lock(&pd->lock);
++	pd->debug_enable = false;
++	subsystem_sleep_debug_enable(false);
++	mutex_unlock(&pd->lock);
+ 	qmp_put(pd->qmp);
+-	subsystem_sleep_debug_enable(false);
+-
++	platform_set_drvdata(pdev, NULL);
++	mutex_unlock(&vx_global_lock);
++}
++
++static int vx_suspend(struct device *dev)
++{
++	struct vx_platform_data *pd = dev_get_drvdata(dev);
++
++	mutex_lock(&pd->lock);
++	if (pd->debug_enable) {
++		pd->suspend_time = ktime_get_boottime();
++		if (pd->monitor_status)
++			sys_pm_vx_send_msg(pd);
++	}
++	mutex_unlock(&pd->lock);
+ 	return 0;
+ }
+ 
+-static int vx_suspend(struct device *dev)
++static int vx_resume(struct device *dev)
+ {
+ 	struct vx_platform_data *pd = dev_get_drvdata(dev);
+-
++	s64 time_delta_ms;
++	bool aosd_enhancement = false;
++
++	mutex_lock(&pd->lock);
+ 	if (!pd->debug_enable)
+-		return 0;
+-
+-	pd->suspend_time = ktime_get_boottime();
+-	if (pd->monitor_status)
+-		sys_pm_vx_send_msg(pd);
+-
+-	return 0;
+-}
+-
+-static int vx_resume(struct device *dev)
+-{
+-	struct vx_platform_data *pd = dev_get_drvdata(dev);
+-	ktime_t time_delta_ms;
+-	bool system_slept;
+-	bool subsystem_slept;
+-	bool aosd_enhancement;
+-
+-	if (!pd->debug_enable)
+-		return 0;
+-
++		goto out;
+ 	pd->resume_time = ktime_get_boottime();
+ 	time_delta_ms = ktime_ms_delta(pd->resume_time, pd->suspend_time);
+ 	if (time_delta_ms <= pd->detect_time_ms)
+-		return 0;
+-
+-	system_slept = has_system_slept(&aosd_enhancement);
+-	if (system_slept)
+-		goto exit;
+-
++		goto out;
++	if (has_system_slept(&aosd_enhancement))
++		goto disable;
+ 	if (aosd_enhancement)
+ 		pd->monitor_status = AOSS_SHUTDOWN_MSG;
+-
+-	subsystem_slept = has_subsystem_slept();
+-	if (!subsystem_slept)
+-		goto exit;
+-
+-	/* if monitor was set last time check DRVs blocking system sleep */
++	if (!has_subsystem_slept())
++		goto disable;
+ 	if (pd->monitor_status)
+ 		vx_check_drv(pd);
+ 	else
+ 		pd->monitor_status = CXPC_MSG;
+-
+-	return 0;
+-
+-exit:
++	goto out;
++disable:
+ 	if (pd->monitor_status) {
+ 		pd->monitor_status = DISABLE_MSG;
+ 		sys_pm_vx_send_msg(pd);
+ 	}
+-
++out:
++	mutex_unlock(&pd->lock);
+ 	return 0;
+ }
+ 

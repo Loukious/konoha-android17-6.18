@@ -1,0 +1,75 @@
+--- a/drivers/mailbox/msm_qmp.c
++++ b/drivers/mailbox/msm_qmp.c
+@@ -157,6 +157,7 @@
+ 	u32 idx_in_flight;
+ 	u32 mcore_mbox_offset;
+ 	u32 mcore_mbox_size;
++	u32 ucore_mbox_size;
+ 	struct qmp_pkt rx_pkt;
+ 	struct qmp_pkt tx_pkt;
+ 	struct work_struct tx_work;
+@@ -348,6 +349,14 @@
+ 		return -EAGAIN;
+ 
+ 	mutex_lock(&mbox->state_lock);
++	if (mbox->ctrl.num_chans == 1) {
++		if (mbox->local_state == LOCAL_DISCONNECTING) {
++			mutex_unlock(&mbox->state_lock);
++			return -EAGAIN;
++		}
++		WRITE_ONCE(mbox->stopping, false);
++		mbox->rx_disabled = false;
++	}
+ 	if (mbox->local_state == LINK_CONNECTED) {
+ 		set_mcore_ch(mbox, QMP_MBOX_CH_CONNECTED);
+ 		mbox->local_state = LOCAL_CONNECTING;
+@@ -431,8 +440,29 @@
+ static void qmp_shutdown(struct mbox_chan *chan)
+ {
+ 	struct qmp_mbox *mbox = chan->con_priv;
++	unsigned long flags;
+ 
+ 	mutex_lock(&mbox->state_lock);
++	if (mbox->ctrl.num_chans == 1) {
++		/* RX runs under this mutex. Stop it before mailbox core clears cl. */
++		mbox->rx_disabled = true;
++		spin_lock_irqsave(&mbox->tx_lock, flags);
++		mbox->stopping = true;
++		mbox->tx_sent = false;
++		spin_unlock_irqrestore(&mbox->tx_lock, flags);
++		if (mbox->local_state > LINK_CONNECTED &&
++		    mbox->local_state != LOCAL_DISCONNECTING) {
++			mbox->local_state = LOCAL_DISCONNECTING;
++			set_mcore_ch(mbox, QMP_MBOX_CH_DISCONNECTED);
++			send_irq(mbox->mdev);
++		}
++		mbox->num_shutdown = 0;
++		mbox->num_assigned = 0;
++		mutex_unlock(&mbox->state_lock);
++		/* The timeout callback may still be notifying core/client; drain it. */
++		cancel_delayed_work_sync(&mbox->dwork);
++		return;
++	}
+ 	if (mbox->local_state <= LINK_CONNECTED) {
+ 		mbox->num_assigned--;
+ 		goto out;
+@@ -489,8 +519,9 @@
+ 	pkt = &mbox->rx_pkt;
+ 	pkt->size = ioread32(addr);
+ 
+-	read_size = (pkt->size + 0x3) & ~0x3;
+-	if (read_size > mbox->mcore_mbox_size)
++	read_size = ALIGN((size_t)pkt->size, sizeof(u32));
++	if (!pkt->data || mbox->ucore_mbox_size < sizeof(u32) ||
++	    read_size > mbox->ucore_mbox_size - sizeof(u32))
+ 		QMP_ERR(mbox->mdev->ilc, "Invalid mailbox packet\n");
+ 	else {
+ 		memcpy32_fromio(pkt->data, addr + sizeof(pkt->size), read_size);
+@@ -557,6 +588,7 @@
+ 	case LINK_DISCONNECTED:
+ 		mbox->version.version = desc.version;
+ 		mbox->version.features = desc.features;
++		mbox->ucore_mbox_size = desc.ucore.mailbox_size;
+ 		set_ucore_link_ack(mbox, desc.ucore.link_state);
+ 		if (desc.mcore.mailbox_size) {
+ 			mbox->mcore_mbox_size = desc.mcore.mailbox_size;

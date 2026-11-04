@@ -1654,6 +1654,11 @@ static int qcom_llcc_cfg_program(struct platform_device *pdev,
 	return ret;
 }
 
+static void qcom_llcc_unregister_edac(void *child)
+{
+	platform_device_unregister(child);
+}
+
 static void qcom_llcc_remove(struct platform_device *pdev)
 {
 	/* Set the global pointer to a error code to avoid referencing it */
@@ -1814,6 +1819,11 @@ static int qcom_llcc_probe(struct platform_device *pdev)
 						sizeof(*drv_data));
 		if (IS_ERR(llcc_edac))
 			dev_err(dev, "Failed to register llcc edac driver\n");
+		else {
+			ret = devm_add_action_or_reset(dev, qcom_llcc_unregister_edac, llcc_edac);
+			if (ret)
+				goto err;
+		}
 	}
 
 	if (of_platform_populate(dev->of_node, NULL, NULL, dev) < 0)

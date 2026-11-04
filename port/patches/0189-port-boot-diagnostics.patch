@@ -1,0 +1,182 @@
+--- a/drivers/soc/qcom/boot_stats.c
++++ b/drivers/soc/qcom/boot_stats.c
+@@ -34,46 +34,59 @@
+ 
+ static int mpm_parse_dt(void)
+ {
+-	struct device_node *np_imem, *np_mpm2;
+-
+-	np_imem = of_find_compatible_node(NULL, NULL,
+-				"qcom,msm-imem-boot_stats");
+-	if (!np_imem) {
+-		pr_err("can't find qcom,msm-imem node\n");
+-		return -ENODEV;
++	struct device_node *np_imem = NULL, *np_mpm2 = NULL;
++	struct resource res;
++	int ret = -ENODEV;
++
++	np_imem = of_find_compatible_node(NULL, NULL, "qcom,msm-imem-boot_stats");
++	if (!np_imem || !of_device_is_available(np_imem))
++		goto out;
++	ret = of_address_to_resource(np_imem, 0, &res);
++	if (ret)
++		goto out;
++	if (resource_size(&res) < sizeof(*boot_stats)) {
++		ret = -EINVAL;
++		goto out;
+ 	}
+ 	boot_stats = of_iomap(np_imem, 0);
+ 	if (!boot_stats) {
+-		pr_err("boot_stats: Can't map imem\n");
+-		goto err1;
++		ret = -ENOMEM;
++		goto out;
+ 	}
+ 
+-	np_mpm2 = of_find_compatible_node(NULL, NULL,
+-				"qcom,mpm2-sleep-counter");
+-	if (!np_mpm2) {
+-		pr_err("mpm_counter: can't find DT node\n");
+-		goto err1;
+-	}
+-
+-	if (of_property_read_u32(np_mpm2, "clock-frequency", &mpm_counter_freq))
+-		goto err2;
+-
+-	if (of_get_address(np_mpm2, 0, NULL, NULL)) {
+-		mpm_counter_base = of_iomap(np_mpm2, 0);
+-		if (!mpm_counter_base) {
+-			pr_err("mpm_counter: can't map counter base\n");
+-			goto err2;
+-		}
+-	} else
+-		goto err2;
+-
+-	return 0;
+-
+-err2:
++	np_mpm2 = of_find_compatible_node(NULL, NULL, "qcom,mpm2-sleep-counter");
++	if (!np_mpm2 || !of_device_is_available(np_mpm2)) {
++		ret = -ENODEV;
++		goto out;
++	}
++	ret = of_property_read_u32(np_mpm2, "clock-frequency", &mpm_counter_freq);
++	if (ret)
++		goto out;
++	if (!mpm_counter_freq) {
++		ret = -EINVAL;
++		goto out;
++	}
++	ret = of_address_to_resource(np_mpm2, 0, &res);
++	if (ret)
++		goto out;
++	if (resource_size(&res) < sizeof(u32)) {
++		ret = -EINVAL;
++		goto out;
++	}
++	mpm_counter_base = of_iomap(np_mpm2, 0);
++	if (!mpm_counter_base) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	ret = 0;
++out:
+ 	of_node_put(np_mpm2);
+-err1:
+ 	of_node_put(np_imem);
+-	return -ENODEV;
++	if (ret && boot_stats) {
++		iounmap(boot_stats);
++		boot_stats = NULL;
++	}
++	return ret;
+ }
+ 
+ static void print_boot_stats(void)
+@@ -97,11 +110,13 @@
+ 
+ 	ret = mpm_parse_dt();
+ 	if (ret < 0)
+-		return -ENODEV;
++		return ret;
+ 
+ 	print_boot_stats();
+ 	iounmap(boot_stats);
+ 	iounmap(mpm_counter_base);
++	boot_stats = NULL;
++	mpm_counter_base = NULL;
+ 
+ 	return 0;
+ }
+@@ -110,7 +125,7 @@
+ static void __exit boot_stats_exit(void)
+ {
+ }
+-module_exit(boot_stats_exit)
++module_exit(boot_stats_exit);
+ 
+ MODULE_DESCRIPTION("MSM boot stats info driver");
+ MODULE_LICENSE("GPL");
+--- a/drivers/soc/qcom/msm_show_epoch.c
++++ b/drivers/soc/qcom/msm_show_epoch.c
+@@ -6,30 +6,33 @@
+ #include <linux/module.h>
+ #include <trace/hooks/epoch.h>
+ 
+-static u64 suspend_ns;
+-static u64 suspend_cycles;
+-static u64 resume_cycles;
+-
+ static void msm_show_suspend_epoch_val(void *data, u64 ns, u64 cycles)
+ {
+-	suspend_ns = ns;
+-	suspend_cycles = cycles;
+ 	pr_info("suspend ns:%17llu      suspend cycles:%17llu\n",
+-						suspend_ns, suspend_cycles);
++						ns, cycles);
+ }
+ 
+ static void msm_show_resume_epoch_val(void *data, u64 cycles)
+ {
+-	resume_cycles = cycles;
+-	pr_info("resume cycles:%17llu\n", resume_cycles);
++	pr_info("resume cycles:%17llu\n", cycles);
+ }
+ 
+ static int __init msm_show_epoch_init(void)
+ {
+-	register_trace_android_vh_show_suspend_epoch_val(
++	int ret;
++
++	ret = register_trace_android_vh_show_suspend_epoch_val(
+ 					msm_show_suspend_epoch_val, NULL);
+-	register_trace_android_vh_show_resume_epoch_val(
++	if (ret)
++		return ret;
++	ret = register_trace_android_vh_show_resume_epoch_val(
+ 					msm_show_resume_epoch_val, NULL);
++	if (ret) {
++		unregister_trace_android_vh_show_suspend_epoch_val(
++					msm_show_suspend_epoch_val, NULL);
++		tracepoint_synchronize_unregister();
++		return ret;
++	}
+ 
+ 	return 0;
+ }
+@@ -40,5 +43,15 @@
+ pure_initcall(msm_show_epoch_init);
+ #endif
+ 
++static void __exit msm_show_epoch_exit(void)
++{
++	unregister_trace_android_vh_show_suspend_epoch_val(
++					msm_show_suspend_epoch_val, NULL);
++	unregister_trace_android_vh_show_resume_epoch_val(
++					msm_show_resume_epoch_val, NULL);
++	tracepoint_synchronize_unregister();
++}
++module_exit(msm_show_epoch_exit);
++
+ MODULE_DESCRIPTION("Qualcomm Technologies, Inc. show epoch values driver");
+ MODULE_LICENSE("GPL");

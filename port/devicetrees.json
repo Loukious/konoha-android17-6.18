@@ -59,7 +59,8 @@
       "devicetrees/onyx-6.18-usb-ipa-interconnect.dts",
       "devicetrees/onyx-6.18-ipa-bus-cells.dts",
       "devicetrees/onyx-6.18-sdam-cell-span.dts",
-      "devicetrees/onyx-6.18-scmi-sram-layout.dts"
+      "devicetrees/onyx-6.18-scmi-sram-layout.dts",
+      "devicetrees/onyx-6.18-cpuss-config-mmio.dts"
     ],
     "tuna7.dtb": [
       "devicetrees/onyx-6.18-cvp-bus-cells.dts",
@@ -67,7 +68,8 @@
       "devicetrees/onyx-6.18-usb-ipa-interconnect.dts",
       "devicetrees/onyx-6.18-ipa-bus-cells.dts",
       "devicetrees/onyx-6.18-sdam-cell-span.dts",
-      "devicetrees/onyx-6.18-scmi-sram-layout.dts"
+      "devicetrees/onyx-6.18-scmi-sram-layout.dts",
+      "devicetrees/onyx-6.18-cpuss-config-mmio.dts"
     ],
     "onyx-sm8735-overlay.dtbo": [
       "devicetrees/onyx-6.18-shared-wcn-sw-ctrl.dts",

@@ -1,0 +1,12 @@
+/dts-v1/;
+/plugin/;
+
+/* Onyx HYP grants HLOS read access; secure IO reads are separately gated. */
+/ {
+	fragment@0 {
+		target-path = "/soc/cpuss-sleep-stats@17800054";
+		__overlay__ {
+			qcom,config-mmio;
+		};
+	};
+};

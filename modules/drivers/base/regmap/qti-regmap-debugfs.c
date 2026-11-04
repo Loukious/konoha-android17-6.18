@@ -24,6 +24,10 @@ struct regmap_qti_debugfs {
 	struct device		*dev;
 	unsigned int		dump_address;
 	unsigned int		dump_count;
+	struct mutex		lock;
+	struct dentry		*address_file;
+	struct dentry		*count_file;
+	struct dentry		*data_file;
 };
 
 static DEFINE_MUTEX(regmap_qti_debugfs_lock);
@@ -74,7 +78,7 @@ static bool _regmap_cached(struct regmap *map, unsigned int reg)
 	if (!map->cache_ops)
 		return false;
 
-	if (map->max_register && reg > map->max_register)
+	if (map->max_register_is_set && reg > map->max_register)
 		return false;
 
 	map->lock(map->lock_arg);
@@ -91,7 +95,7 @@ static bool _regmap_readable(struct regmap *map, unsigned int reg)
 	if (!map->reg_read)
 		return false;
 
-	if (map->max_register && reg > map->max_register)
+	if (map->max_register_is_set && reg > map->max_register)
 		return false;
 
 	if (map->format.format_write)
@@ -384,37 +388,46 @@ out:
 	return ret;
 }
 
-static ssize_t regmap_data_read_file(struct file *file, char __user *user_buf,
+static ssize_t regmap_data_read_locked(struct file *file, char __user *user_buf,
 				    size_t count, loff_t *ppos)
 {
 	struct regmap_qti_debugfs *debug_map = file->private_data;
-	loff_t reg_pos = 0;
-	unsigned int max_reg;
+	struct regmap *map = debug_map->regmap;
+	loff_t reg_pos = 0, pos;
+	unsigned int max_reg, entries = debug_map->dump_count ?: 1;
 	ssize_t ret;
 
-	ret = regmap_debugfs_get_reg_offset(debug_map->regmap,
-					    debug_map->dump_address, &reg_pos);
+	if (*ppos < 0 || debug_map->dump_address > map->max_register ||
+	    entries - 1 > (map->max_register - debug_map->dump_address) / map->reg_stride)
+		return -EINVAL;
+	ret = regmap_debugfs_get_reg_offset(map, debug_map->dump_address, &reg_pos);
 	if (ret < 0)
 		return ret;
-
-	/* Treat the file position of dump_address as 0 */
-	*ppos += reg_pos;
-	max_reg = debug_map->dump_address +
-		  (debug_map->dump_count ? (debug_map->dump_count - 1) : 0) *
-		  (debug_map->regmap->reg_stride ?: 1);
-
-	ret = regmap_read_debugfs(debug_map->regmap, 0, max_reg, user_buf,
-				  count, ppos);
-	if (*ppos < reg_pos)
+	if (*ppos > S64_MAX - reg_pos)
 		return -EINVAL;
-	*ppos -= reg_pos;
+	pos = *ppos + reg_pos;
+	max_reg = debug_map->dump_address + (entries - 1) * map->reg_stride;
+	ret = regmap_read_debugfs(map, 0, max_reg, user_buf, count, &pos);
+	if (ret >= 0)
+		*ppos = pos - reg_pos;
+	return ret;
+}
 
+static ssize_t regmap_data_read_file(struct file *file, char __user *user_buf,
+				   size_t count, loff_t *ppos)
+{
+	struct regmap_qti_debugfs *debug_map = file->private_data;
+	ssize_t ret;
+
+	mutex_lock(&debug_map->lock);
+	ret = regmap_data_read_locked(file, user_buf, count, ppos);
+	mutex_unlock(&debug_map->lock);
 	return ret;
 }
 
 #ifdef CONFIG_REGMAP_QTI_DEBUGFS_ALLOW_WRITE
 
-static ssize_t regmap_data_write_file(struct file *file,
+static ssize_t regmap_data_write_locked(struct file *file,
 				     const char __user *user_buf,
 				     size_t count, loff_t *ppos)
 {
@@ -446,6 +459,18 @@ static ssize_t regmap_data_write_file(struct file *file,
 	return buf_size;
 }
 
+static ssize_t regmap_data_write_file(struct file *file, const char __user *buf,
+				    size_t count, loff_t *ppos)
+{
+	struct regmap_qti_debugfs *debug_map = file->private_data;
+	ssize_t ret;
+
+	mutex_lock(&debug_map->lock);
+	ret = regmap_data_write_locked(file, buf, count, ppos);
+	mutex_unlock(&debug_map->lock);
+	return ret;
+}
+
 #define QTI_DEBUGFS_FILE_MODE 0600
 
 #else
@@ -456,68 +481,121 @@ static ssize_t regmap_data_write_file(struct file *file,
 #endif
 
 static const struct file_operations regmap_data_fops = {
+	.owner = THIS_MODULE,
 	.open = simple_open,
 	.read = regmap_data_read_file,
 	.write = regmap_data_write_file,
 	.llseek = default_llseek,
 };
 
-/**
- * regmap_qti_debugfs_add() - register extra debugfs files for a regmap
- * @dev:		Device pointer of regmap owner
- * @regmap:		regmap pointer
- *
- * This function adds various debugfs files for the specified regmap which
- * provide a mechanism for userspace to read and write regmap register values
- * with easy.
- *
- * Returns a valid pointer on success or ERR_PTR() on failure.
- */
+static int address_get(void *data, u64 *value)
+{
+	struct regmap_qti_debugfs *debug_map = data;
+
+	mutex_lock(&debug_map->lock);
+	*value = debug_map->dump_address;
+	mutex_unlock(&debug_map->lock);
+	return 0;
+}
+
+static int address_set(void *data, u64 value)
+{
+	struct regmap_qti_debugfs *debug_map = data;
+
+	if (value > debug_map->regmap->max_register || value % debug_map->regmap->reg_stride)
+		return -EINVAL;
+	mutex_lock(&debug_map->lock);
+	debug_map->dump_address = value;
+	mutex_unlock(&debug_map->lock);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(address_fops, address_get, address_set, "0x%08llx\n");
+
+static int count_get(void *data, u64 *value)
+{
+	struct regmap_qti_debugfs *debug_map = data;
+
+	mutex_lock(&debug_map->lock);
+	*value = debug_map->dump_count;
+	mutex_unlock(&debug_map->lock);
+	return 0;
+}
+
+static int count_set(void *data, u64 value)
+{
+	struct regmap_qti_debugfs *debug_map = data;
+
+	if (value > (u64)debug_map->regmap->max_register / debug_map->regmap->reg_stride + 1)
+		return -EINVAL;
+	mutex_lock(&debug_map->lock);
+	debug_map->dump_count = value;
+	mutex_unlock(&debug_map->lock);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(count_fops, count_get, count_set, "%llu\n");
+
+static void remove_debug_files(struct regmap_qti_debugfs *debug_map)
+{
+	/* Protected debugfs callbacks drain before the regmap or state is freed. */
+	debugfs_remove(debug_map->data_file);
+	debugfs_remove(debug_map->address_file);
+	debugfs_remove(debug_map->count_file);
+}
+
 static struct regmap_qti_debugfs *regmap_qti_debugfs_add(struct device *dev,
 							 struct regmap *regmap)
 {
-	struct regmap_qti_debugfs *debug_map = NULL;
+	struct regmap_qti_debugfs *debug_map;
+	int ret;
 
-	if (!dev || !regmap) {
-		pr_err("%s: dev or regmap is NULL\n", __func__);
+	if (IS_ERR_OR_NULL(dev) || IS_ERR_OR_NULL(regmap))
 		return ERR_PTR(-EINVAL);
-	}
-
+	if (IS_ERR_OR_NULL(regmap->debugfs))
+		return ERR_PTR(-EOPNOTSUPP);
+	/* The native cache scanner uses signed int register positions. */
+	if (regmap->reg_stride <= 0 || regmap->max_register > INT_MAX - regmap->reg_stride)
+		return ERR_PTR(-EINVAL);
 	mutex_lock(&regmap_qti_debugfs_lock);
 	list_for_each_entry(debug_map, &regmap_qti_debugfs_list, list) {
 		if (debug_map->regmap == regmap) {
-			debug_map = ERR_PTR(-EINVAL);
-			dev_err(dev, "%s: qti debugfs files already registered for regmap\n",
-				__func__);
-			goto done;
+			ret = -EINVAL;
+			goto unlock;
 		}
 	}
-
 	debug_map = kzalloc(sizeof(*debug_map), GFP_KERNEL);
 	if (!debug_map) {
-		debug_map = ERR_PTR(-ENOMEM);
-		goto done;
+		ret = -ENOMEM;
+		goto unlock;
 	}
-
 	debug_map->dev = dev;
 	debug_map->regmap = regmap;
 	debug_map->dump_count = 1;
-
+	mutex_init(&debug_map->lock);
+	debug_map->address_file = debugfs_create_file("address", 0600, regmap->debugfs, debug_map, &address_fops);
+	if (IS_ERR_OR_NULL(debug_map->address_file)) {
+		ret = debug_map->address_file ? PTR_ERR(debug_map->address_file) : -ENOMEM;
+		goto free;
+	}
+	debug_map->count_file = debugfs_create_file("count", 0600, regmap->debugfs, debug_map, &count_fops);
+	if (IS_ERR_OR_NULL(debug_map->count_file)) {
+		ret = debug_map->count_file ? PTR_ERR(debug_map->count_file) : -ENOMEM;
+		goto free;
+	}
+	debug_map->data_file = debugfs_create_file("data", QTI_DEBUGFS_FILE_MODE, regmap->debugfs, debug_map, &regmap_data_fops);
+	if (IS_ERR_OR_NULL(debug_map->data_file)) {
+		ret = debug_map->data_file ? PTR_ERR(debug_map->data_file) : -ENOMEM;
+		goto free;
+	}
 	list_add(&debug_map->list, &regmap_qti_debugfs_list);
-
-	debugfs_create_x32("address", 0600, regmap->debugfs,
-			   &debug_map->dump_address);
-
-	debugfs_create_u32("count", 0600, regmap->debugfs,
-			   &debug_map->dump_count);
-
-	debugfs_create_file_unsafe("data", QTI_DEBUGFS_FILE_MODE,
-				regmap->debugfs, debug_map, &regmap_data_fops);
-
-done:
 	mutex_unlock(&regmap_qti_debugfs_lock);
-
 	return debug_map;
+free:
+	remove_debug_files(debug_map);
+	mutex_destroy(&debug_map->lock);
+	kfree(debug_map);
+unlock:
+	mutex_unlock(&regmap_qti_debugfs_lock);
+	return ERR_PTR(ret);
 }
 
 /**
@@ -540,21 +618,9 @@ EXPORT_SYMBOL(regmap_qti_debugfs_register);
 /* regmap_qti_debugfs_lock must be held by caller. */
 static void regmap_qti_debugfs_remove(struct regmap_qti_debugfs *debug_map)
 {
-	struct dentry *file;
-
-	file = debugfs_lookup("address", debug_map->regmap->debugfs);
-	dput(file);
-	debugfs_remove(file);
-
-	file = debugfs_lookup("count", debug_map->regmap->debugfs);
-	dput(file);
-	debugfs_remove(file);
-
-	file = debugfs_lookup("data", debug_map->regmap->debugfs);
-	dput(file);
-	debugfs_remove(file);
-
+	remove_debug_files(debug_map);
 	list_del(&debug_map->list);
+	mutex_destroy(&debug_map->lock);
 	kfree(debug_map);
 }
 
@@ -672,22 +738,26 @@ static int devm_regmap_qti_debugfs_match(struct device *dev, void *res,
  */
 void devm_regmap_qti_debugfs_unregister(struct regmap *regmap)
 {
-	struct regmap_qti_debugfs *debug_map, *temp;
+	struct regmap_qti_debugfs *debug_map, *found = NULL;
+	struct device *dev = NULL;
 
-	if (IS_ERR_OR_NULL(regmap)) {
-		pr_err("%s: invalid regmap pointer\n", __func__);
+	if (IS_ERR_OR_NULL(regmap))
 		return;
-	}
-
 	mutex_lock(&regmap_qti_debugfs_lock);
-	list_for_each_entry_safe(debug_map, temp, &regmap_qti_debugfs_list,
-				 list) {
-		if (debug_map->regmap == regmap)
-			devres_release(debug_map->dev,
-				_devm_regmap_qti_debugfs_release,
-				devm_regmap_qti_debugfs_match, debug_map);
+	list_for_each_entry(debug_map, &regmap_qti_debugfs_list, list) {
+		if (debug_map->regmap == regmap) {
+			found = debug_map;
+			dev = get_device(debug_map->dev);
+			break;
+		}
 	}
 	mutex_unlock(&regmap_qti_debugfs_lock);
+	/* Match the actual registered release function; it takes the global lock. */
+	if (dev) {
+		devres_release(dev, devm_regmap_qti_debugfs_release,
+			devm_regmap_qti_debugfs_match, found);
+		put_device(dev);
+	}
 }
 EXPORT_SYMBOL(devm_regmap_qti_debugfs_unregister);
 

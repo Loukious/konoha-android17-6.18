@@ -1,0 +1,7 @@
+total 0
+--w------- 1 root root 4096 2026-11-03 15:25 bind
+lrwxrwxrwx 1 root root    0 2026-11-03 15:25 module -> ../../../../module/qcom_cpuss_sleep_stats_v4
+--w------- 1 root root 4096 2026-11-03 15:25 uevent
+--w------- 1 root root 4096 2026-11-03 15:25 unbind
+qcom_cpuss_sleep_stats_v4 20480 0 - Live 0x0000000000000000 (O)
+Enforcing

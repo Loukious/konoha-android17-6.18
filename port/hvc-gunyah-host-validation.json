@@ -1,0 +1,27 @@
+{
+  "status": "PASS",
+  "source": "modules/drivers/tty/hvc/hvc_gunyah.c",
+  "source_sha256": "e8a774fc0476870981934906adf8d9c3f4490d4c8f5e8f2a18806fb1743fa7ca",
+  "baseline_output": "PASS: 94 actual-C driver lifecycle assertions",
+  "mutations": {
+    "read_only_bypassed": {
+      "rejected": true,
+      "returncode": -6
+    },
+    "retire_left_online": {
+      "rejected": true,
+      "returncode": -6
+    },
+    "exit_explicit_close_missing": {
+      "rejected": true,
+      "returncode": -6
+    },
+    "close_keeps_tx_admission": {
+      "rejected": true,
+      "returncode": -6
+    }
+  },
+  "coverage": "All5 allocation failures; notifier registration and batch publish failures; successful init/exit; huge get/put lengths; read_only write rejection; RPC open errors; close work admission; late RX while retired; VM recreation failures; explicit module-GOING close.",
+  "limitation": "Whole actual driver C with deterministic host lock/FIFO/work services. Real workqueue concurrency, firmware RPC behavior, and TTY I/O still require kernel/phone validation.",
+  "publication_scope": "Local actual-C lifecycle evidence for this exact source hash; its external fixture is not a portable CI input."
+}

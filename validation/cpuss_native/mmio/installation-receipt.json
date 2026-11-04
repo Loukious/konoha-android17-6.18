@@ -1,0 +1,172 @@
+{
+  "serial": "5493f3c6",
+  "slot": "a",
+  "timestamp": "2026-11-03T15:48:55.258946+00:00",
+  "image_report": "/home/loukious/Android/konoha-android17-6.18-port-20261031/packaging/experimental-images-cpuss-mmio-20261103T153808728566Z-serial/report.json",
+  "image_report_sha256": "eb5f40e1b4fb3c7856c72c8e92c48184de75220ea69a0f3c56b1734392715016",
+  "backup": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z",
+  "status": "changed candidate images flashed; vendor_boot readback verified; corrected recovery retained; reboot pending",
+  "operations": [
+    {
+      "args": [
+        "getvar",
+        "product"
+      ],
+      "returncode": 0,
+      "output": "product: onyx\nFinished. Total time: 0.000s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "current-slot"
+      ],
+      "returncode": 0,
+      "output": "current-slot: a\nFinished. Total time: 0.000s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "unlocked"
+      ],
+      "returncode": 0,
+      "output": "unlocked: yes\nFinished. Total time: 0.000s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "is-userspace"
+      ],
+      "returncode": 0,
+      "output": "is-userspace: yes\nFinished. Total time: 0.000s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "snapshot-update-status"
+      ],
+      "returncode": 0,
+      "output": "snapshot-update-status: none\nFinished. Total time: 0.002s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:vendor_dlkm_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:vendor_dlkm_a: 0x1F5F000\nFinished. Total time: 0.067s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:dtbo_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:dtbo_a: 0x1800000\nFinished. Total time: 0.006s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:boot_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:boot_a: 0x6000000\nFinished. Total time: 0.006s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:vendor_boot_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:vendor_boot_a: 0x6000000\nFinished. Total time: 0.005s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:system_dlkm_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:system_dlkm_a: 0x72F000\nFinished. Total time: 0.060s\n"
+    },
+    {
+      "args": [
+        "fetch",
+        "vendor_boot_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\preflash-vendor-boot.img"
+      ],
+      "returncode": 0,
+      "output": "Fetching vendor_boot_a (offset=0, size=6000000)    OKAY [  2.222s]\nFinished. Total time: 2.231s\n"
+    },
+    {
+      "args": [
+        "flash",
+        "system_dlkm_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\images\\system_dlkm.img"
+      ],
+      "returncode": 0,
+      "output": "Resizing 'system_dlkm_a'                           OKAY [  0.004s]\nSending 'system_dlkm_a' (7356 KB)                  OKAY [  0.187s]\nWriting 'system_dlkm_a'                            OKAY [  0.135s]\nFinished. Total time: 0.342s\n"
+    },
+    {
+      "args": [
+        "flash",
+        "vendor_dlkm_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\images\\vendor_dlkm.img"
+      ],
+      "returncode": 0,
+      "output": "Resizing 'vendor_dlkm_a'                           OKAY [  0.003s]\nSending 'vendor_dlkm_a' (32124 KB)                 OKAY [  0.813s]\nWriting 'vendor_dlkm_a'                            OKAY [  0.191s]\nFinished. Total time: 1.015s\n"
+    },
+    {
+      "args": [
+        "flash",
+        "vendor_boot_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\images\\vendor_boot.img"
+      ],
+      "returncode": 0,
+      "output": "Sending 'vendor_boot_a' (98304 KB)                 OKAY [  2.490s]\nWriting 'vendor_boot_a'                            OKAY [  0.100s]\nFinished. Total time: 2.598s\n"
+    },
+    {
+      "args": [
+        "flash",
+        "boot_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\images\\boot.img"
+      ],
+      "returncode": 0,
+      "output": "Sending 'boot_a' (98304 KB)                        OKAY [  2.504s]\nWriting 'boot_a'                                   OKAY [  0.105s]\nFinished. Total time: 2.616s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "current-slot"
+      ],
+      "returncode": 0,
+      "output": "current-slot: a\nFinished. Total time: 0.000s\n"
+    },
+    {
+      "args": [
+        "fetch",
+        "vendor_boot_a",
+        "D:\\platform-tools\\onyx-618-cpuss-config-mmio-20261103T153750Z\\vendor-boot-readback-serial.img"
+      ],
+      "returncode": 0,
+      "output": "Fetching vendor_boot_a (offset=0, size=6000000)    OKAY [  2.213s]\nFinished. Total time: 2.217s\n"
+    },
+    {
+      "args": [
+        "getvar",
+        "partition-size:recovery_a"
+      ],
+      "returncode": 0,
+      "output": "partition-size:recovery_a: 0x6400000\nFinished. Total time: 0.005s\n"
+    }
+  ],
+  "preflash_state": [
+    "6.18.38-android17-5-maybe-dirty-4k",
+    "1",
+    "_a",
+    "f2e3caf9-2423-4d93-801e-1f0927f1b27e",
+    "5617.52 41670.70"
+  ],
+  "fresh_backup": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/cpuss-config-mmio-20261103T153750Z/backup-current.json",
+  "metadata_verification": "Native CPUSS HLOS configuration reads selected by one DT boolean; exact production module passed binding, 17 residency counter reads and unload/probe cycles; matched 373-module images; existing platform module bytes and boot command line, bootconfig, loaders and corrected recovery retained; fresh six-partition rollback",
+  "vendor_boot_readback_sha256": "6f507299c7590705fb038b0694f1097da1e2d8b6ec9d60dc48d81cf90539c6e4",
+  "recovery_sha256": "cd4a2ccff5bd02170ac4054780eeb72b7ff9ecacfc2c79f70010d416cc28e5f3"
+}

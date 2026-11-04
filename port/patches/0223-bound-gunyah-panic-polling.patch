@@ -1,0 +1,78 @@
+--- a/drivers/virt/gunyah/gh_proxy_sched.c
++++ b/drivers/virt/gunyah/gh_proxy_sched.c
+@@ -602,36 +602,46 @@
+ 
+ int gh_poll_vcpu_run(gh_vmid_t vmid)
+ {
+-	struct gh_hcall_vcpu_run_resp resp;
++	struct gh_hcall_vcpu_run_resp resp = {0};
+ 	struct gh_proxy_vcpu *vcpu;
+-	struct gh_proxy_vm *vm;
+-	unsigned int vcpu_id;
++	struct gh_proxy_vm *vm = NULL, *table = READ_ONCE(gh_vms);
++	unsigned int vcpu_id, index, attempts;
++	gh_capid_t cap_id;
+ 	int poll_nr_vcpus;
+ 	ktime_t start_ts, yield_ts;
+ 	int ret = -EPERM;
+ 
+-	vm = gh_get_vm(vmid);
+-	if (!vm || !vm->is_active)
++	/* Panic polling must not take the RM name-table lock: another stopped CPU
++	 * may own it. The module owns this fixed VM/vCPU array for its lifetime.
++	 */
++	if (!table || !READ_ONCE(init_done))
+ 		return ret;
+-
+-	poll_nr_vcpus = gh_get_nr_vcpus(vmid);
+-	if (poll_nr_vcpus < 0) {
+-		printk_deferred("Failed to get vcpu count for VM %d ret %d\n",
+-						vmid, nr_vcpus);
+-		ret = poll_nr_vcpus;
++	for (index = 0; index < GH_VM_MAX; index++) {
++		if (READ_ONCE(table[index].id) == vmid &&
++		    READ_ONCE(table[index].is_active) &&
++		    READ_ONCE(table[index].is_vcpu_info_populated)) {
++			vm = &table[index];
++			break;
++		}
++	}
++	if (!vm)
+ 		return ret;
+-	}
++
++	poll_nr_vcpus = READ_ONCE(vm->vcpu_count);
++	if (poll_nr_vcpus <= 0 || poll_nr_vcpus > GH_MAX_VCPUS_PER_VM)
++		return -EINVAL;
+ 
+ 	for (vcpu_id = 0; vcpu_id < poll_nr_vcpus; vcpu_id++) {
+-		if (vm->vcpu[vcpu_id].cap_id == GH_CAPID_INVAL)
++		vcpu = &vm->vcpu[vcpu_id];
++		cap_id = READ_ONCE(vcpu->cap_id);
++		if (cap_id == GH_CAPID_INVAL || !READ_ONCE(vm->is_active))
+ 			return -EPERM;
+-
+-		vcpu = &vm->vcpu[vcpu_id];
++		attempts = 0;
+ 		do {
+ 			start_ts = ktime_get();
+-			ret = gh_hcall_vcpu_run(vcpu->cap_id, 0, 0, 0, &resp);
++			ret = gh_hcall_vcpu_run(cap_id, 0, 0, 0, &resp);
+ 			yield_ts = ktime_get() - start_ts;
+-			trace_gh_hcall_vcpu_run(ret, vcpu->vm->id, vcpu_id, yield_ts,
++			trace_gh_hcall_vcpu_run(ret, vmid, vcpu_id, yield_ts,
+ 						resp.vcpu_state, resp.vcpu_suspend_state);
+ 			if (ret == GH_ERROR_OK) {
+ 				if (resp.vcpu_state > GH_VCPU_STATE_BLOCKED)
+@@ -639,7 +649,11 @@
+ 							resp.vcpu_state, vcpu_id, vmid);
+ 				break;
+ 			}
++			if (++attempts == 20 && ret == GH_ERROR_RETRY)
++				return -EAGAIN;
+ 		} while (ret == GH_ERROR_RETRY);
++		if (ret != GH_ERROR_OK)
++			return ret;
+ 	}
+ 
+ 	return ret;

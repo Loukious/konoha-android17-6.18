@@ -1,0 +1,60 @@
+{
+  "status": "PASS: user reports working audio; native DMA acknowledgements, persistent clients and PLAYING sessions observed",
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/bluetooth-retest-20261103T131322Z",
+  "boot_id": "80a8833e-0b5e-4a25-b841-b38758779a94",
+  "kernel": "6.18.38-android17-5-maybe-dirty-4k",
+  "user_observation": "bt seems working",
+  "dma_config_responses": [
+    {
+      "uptime": 159.444355,
+      "status": 0
+    },
+    {
+      "uptime": 197.075659,
+      "status": 0
+    },
+    {
+      "uptime": 262.918472,
+      "status": 0
+    },
+    {
+      "uptime": 289.816061,
+      "status": 0
+    },
+    {
+      "uptime": 312.827714,
+      "status": 0
+    }
+  ],
+  "playing_events": 3,
+  "persistent_client_pid": 1947,
+  "persistent_devices": [
+    "/dev/bt_cp_ctrl",
+    "/dev/btfmcodec_dev"
+  ],
+  "old_dma_queue_failures": [],
+  "capture_hashes": {
+    "logcat.txt": "e6aa18dc59edcc1d9727256b9e444bed89001b8640f8633ac70e384d87486bfb",
+    "processes.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bluetooth-manager.txt": "67c4f4320810bd83579a07a969a43d55bda01a98b1d0d3e072fbe99922a05439",
+    "bluetooth-fds-4409.txt": "031223be6759915143041a64b04082160ab0baadc73f5c8c8ff5930e569c3193",
+    "processes.txt": "962fa00a10e99e698e77807e1c8391064328963e34ad9588430c67977e599046",
+    "bindings.txt": "a95d1fe48796177e6f81c29c310461b4df5048f4b94afb7c0545ee7d3efa204a",
+    "capture.json": "1f215edd8be3fbded2199f939a35eb7adad76c8b8f7b0910623cf2323fcc80e9",
+    "crash-storage.txt": "98d28e1a6a5cb4d2756516e92c8d5efd1bb6438b6d55d94c6c3f560f3e54ab41",
+    "bluetooth-fds-9785.txt": "20dc0576b5030f7154d143b5fc934954c58b1ee4738d74365dc9738d8c60b2a4",
+    "dmesg.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dmesg.txt": "67fbb63b16f050d3e3ce4add757ad1aa4cdb7a835e3e89be446c5c5e0de032fa",
+    "state.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "crash-storage.txt.stderr": "7b7eddc2d4a10616e9bd1d1cd4801921368945c5bdbe93f16b1e136076751ddf",
+    "bluetooth-fds-1947.txt": "4782929c694236fe07b441ebd7062951359d637b0006a6db9bc51d8fb8451432",
+    "audio.txt": "b3c2d4f4c761b0682bac35caa54825a000be7ec584466d63428a069d9365bdb3",
+    "audio.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "state.txt": "0d9d9c1812cb849309d414ee990f6b2bbbd233969e4a1f13d1194727e5729b0b",
+    "bluetooth-fds-9718.txt": "de707840e71cb185888c339b2fefee3bb9434d2356d6ad9de994fb88b447c0f7",
+    "logcat.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bindings.txt.stderr": "6c763dc6490e6af6bdce84f2b51e3638202cc782c9f2d2e46b2e98a2e7a46a8e",
+    "bluetooth-manager.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "limits": "Observed SBC/44100 Hz A2DP playback and repeated start/stop sessions; does not establish all Bluetooth codecs/profiles or long-duration reliability."
+}

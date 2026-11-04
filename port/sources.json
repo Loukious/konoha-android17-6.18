@@ -53,6 +53,13 @@
       "repo": "LineageOS/android_external_dtc",
       "revision": "c1197f56b8f468effbbf5e79feae353c4280e2ea",
       "upstream": "lineage-24.0"
+    },
+    {
+      "rom_path": "kernel/qcom/sm8850",
+      "workspace_path": "baseline/kernel/qcom/sm8850",
+      "repo": "LineageOS/android_kernel_qcom_sm8850",
+      "revision": "557159b6a0d06f1c6f07ec4c1f22bc9309a113e4",
+      "upstream": "lineage-24.0"
     }
   ]
 }

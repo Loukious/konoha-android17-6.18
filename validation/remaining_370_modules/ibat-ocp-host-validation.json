@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "cases": 157,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "drivers/power/supply/mca/mca_hardware_monitor/inc/mca_ibat_ocp_monitor.h": "d7c33735bee7709457e8dbce24021ec820810c0961ed3b82a272feae9b5668b3",
+    "drivers/power/supply/mca/mca_hardware_monitor/mca_ibat_ocp_monitor.c": "e6f58f3afd176bc69160e82ea8a50ba18890915a815b80f5c6bce24792dcc6f2"
+  },
+  "limits": [
+    "Full-driver provider, DT, sysfs and workqueue stubs verify control flow; no physical overcurrent is injected."
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "status": "PASS",
+  "source_files": 5004,
+  "patch_fuzz": 0,
+  "description": "Fresh full pinned-import and ordered patch replay matches every production source hash."
+}

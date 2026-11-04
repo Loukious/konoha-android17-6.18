@@ -1,0 +1,5 @@
+vendor_ramdisk/lib/modules/modules.load: 18/116 names missing
+vendor_ramdisk/lib/modules/modules.load.recovery: 89/387 names missing
+vendor_dlkm/lib/modules/modules.load: 77/352 names missing
+system_dlkm/lib/modules/modules.load: 3/79 names missing
+First-stage tree: 100 modules; 18 inactive variants omitted with evidence

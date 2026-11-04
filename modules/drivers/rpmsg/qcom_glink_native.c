@@ -1691,6 +1691,7 @@ static int qcom_glink_handle_signals(struct qcom_glink *glink,
 {
 	struct glink_channel *channel;
 	u32 old;
+	unsigned long flags;
 
 	qcom_glink_rx_advance(glink, ALIGN(sizeof(struct glink_msg), 8));
 
@@ -1699,8 +1700,6 @@ static int qcom_glink_handle_signals(struct qcom_glink *glink,
 		dev_err(glink->dev, "signal for non-existing channel\n");
 		return -EINVAL;
 	}
-
-	old = channel->remote_signals;
 
 	/* convert signals from NATIVE to TIOCM */
 	if (signals & NATIVE_DTR_SIG)
@@ -1713,6 +1712,8 @@ static int qcom_glink_handle_signals(struct qcom_glink *glink,
 		signals |= TIOCM_RI;
 	signals &= 0x0fff;
 
+	spin_lock_irqsave(&channel->recv_lock, flags);
+	old = channel->remote_signals;
 	channel->remote_signals = signals;
 
 	CH_INFO(channel, "old:%d new:%d\n", old, channel->remote_signals);
@@ -1720,6 +1721,7 @@ static int qcom_glink_handle_signals(struct qcom_glink *glink,
 		channel->signals_cb(channel->ept.rpdev, channel->ept.priv,
 				    old, channel->remote_signals);
 
+	spin_unlock_irqrestore(&channel->recv_lock, flags);
 	qcom_glink_channel_ref_put(channel);
 	return 0;
 }
@@ -2300,12 +2302,16 @@ int qcom_glink_register_signals_cb(struct rpmsg_endpoint *ept,
 				   int (*cb)(struct rpmsg_device *, void *, u32, u32))
 {
 	struct glink_channel *channel;
+	unsigned long flags;
 
-	if (!ept || !cb)
+	if (!ept)
 		return -EINVAL;
 
 	channel = to_glink_channel(ept);
+	/* NULL detaches synchronously from the atomic callback dispatcher. */
+	spin_lock_irqsave(&channel->recv_lock, flags);
 	channel->signals_cb = cb;
+	spin_unlock_irqrestore(&channel->recv_lock, flags);
 
 	return 0;
 }

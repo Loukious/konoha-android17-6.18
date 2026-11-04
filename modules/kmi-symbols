@@ -2,3 +2,24 @@
   led_trigger_blink
   led_trigger_blink_oneshot
   thermal_device_register
+  configfs_remove_default_groups
+  read_sanitised_ftr_reg
+  coresight_add_out_conn
+  coresight_get_sink
+  coresight_set_cti_ops
+  coresight_remove_cti_ops
+  coresight_add_helper
+  coresight_add_sysfs_link
+  coresight_remove_sysfs_link
+  __cpuhp_remove_state_cpuslocked
+  mul_u64_u64_div_u64
+  coresight_find_csdev_by_fwnode
+  devm_release_action
+  coresight_enable_sysfs
+  coresight_disable_sysfs
+  zap_page_range_single
+  vmf_insert_pfn_prot
+  hvc_backend_alloc
+  hvc_backend_poll
+  hvc_backend_publish
+  hvc_backend_remove

@@ -1,0 +1,3767 @@
+diff --git a/drivers/hwtracing/coresight/coresight-byte-cntr.c b/drivers/hwtracing/coresight/coresight-byte-cntr.c
+--- a/drivers/hwtracing/coresight/coresight-byte-cntr.c
++++ b/drivers/hwtracing/coresight/coresight-byte-cntr.c
+@@ -2,400 +2,303 @@
+ /*
+  * Copyright (c) 2021, 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+  */
+-
++/* Native CSR eight-byte counter, adapted to common ETR buffer ownership.
++ * Included by coresight-tmc-etr.c to use its private buffer operations.
++ */
++#include "coresight-csr.h"
+ #include <linux/interrupt.h>
+-#include <linux/dma-mapping.h>
+-#include <linux/fs.h>
+-#include <linux/of_irq.h>
+-#include <linux/moduleparam.h>
+-#include <linux/delay.h>
++#include <linux/poll.h>
+ #include <linux/uaccess.h>
+-#include <linux/property.h>
+-
+-#include "coresight-priv.h"
+-#include "coresight-byte-cntr.h"
+-#include "coresight-common.h"
+-
+-#define CSR_BYTECNTVAL		(0x06C)
+-
+-static void tmc_etr_read_bytes(struct byte_cntr *byte_cntr_data, long offset,
+-			       size_t bytes, size_t *len, char **bufp)
+-{
+-	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
+-	struct etr_buf *etr_buf = tmcdrvdata->sysfs_buf;
+-	size_t actual;
+-
+-	if (*len >= bytes)
+-		*len = bytes;
+-	else if (((uint32_t)offset % bytes) + *len > bytes)
+-		*len = bytes - ((uint32_t)offset % bytes);
+-
+-	actual = tmc_etr_buf_get_data(etr_buf, offset, *len, bufp);
+-	*len = actual;
+-	if (actual == bytes || (actual + (uint32_t)offset) % bytes == 0)
+-		atomic_dec(&byte_cntr_data->irq_cnt);
+-}
+-
+-
+-static irqreturn_t etr_handler(int irq, void *data)
+-{
+-	struct byte_cntr *byte_cntr_data = data;
+-	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
+-
+-	if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_USB) {
+-		atomic_inc(&byte_cntr_data->irq_cnt);
+-		wake_up(&byte_cntr_data->usb_wait_wq);
+-	} else if (tmcdrvdata->out_mode == TMC_ETR_OUT_MODE_MEM) {
+-		atomic_inc(&byte_cntr_data->irq_cnt);
+-		wake_up(&byte_cntr_data->wq);
+-	}
+-
+-	byte_cntr_data->total_irq++;
+-
++
++#define TMC_STREAM_BLOCK PAGE_SIZE
++struct tmc_stream {
++	struct miscdevice misc;
++	struct tmc_drvdata *drvdata;
++	struct mutex read_lock;
++	wait_queue_head_t wait;
++	struct etr_buf *buf;
++	atomic64_t produced;
++	u64 consumed, final_bytes;
++	unsigned long start_offset;
++	u32 irq_offset;
++	int irq;
++	bool opened, active, stopped;
++};
++
++static bool tmc_stream_is_open(struct tmc_drvdata *d)
++{
++	return d->stream && READ_ONCE(d->stream->opened);
++}
++
++static bool tmc_stream_overrun(u64 produced, u64 consumed, size_t size)
++{
++	/* Leave one block for the device's current, incomplete DMA transaction. */
++	return size < 4 * TMC_STREAM_BLOCK || produced < consumed ||
++	       produced - consumed > size - TMC_STREAM_BLOCK;
++}
++
++static irqreturn_t tmc_stream_irq(int irq, void *data)
++{
++	struct tmc_stream *s = data;
++	unsigned long flags;
++	raw_spin_lock_irqsave(&s->drvdata->spinlock, flags);
++	if (s->active)
++		atomic64_add(TMC_STREAM_BLOCK, &s->produced);
++	raw_spin_unlock_irqrestore(&s->drvdata->spinlock, flags);
++	wake_up_interruptible(&s->wait);
+ 	return IRQ_HANDLED;
+ }
+ 
+-
+-static long tmc_etr_flush_remaining_bytes(struct tmc_drvdata *tmcdrvdata, long offset,
+-			size_t len, char **bufpp)
+-{
+-	long req_size, actual = 0;
+-	struct etr_buf *etr_buf;
+-	struct device *dev;
+-	struct byte_cntr *byte_cntr_data;
+-
+-	if (!tmcdrvdata)
+-		return -EINVAL;
+-
+-	byte_cntr_data = tmcdrvdata->byte_cntr;
+-	if (!byte_cntr_data)
+-		return -EINVAL;
+-
+-	etr_buf = tmcdrvdata->sysfs_buf;
+-	dev = &tmcdrvdata->csdev->dev;
+-
+-	req_size = ((byte_cntr_data->rwp_offset < offset) ? tmcdrvdata->size : 0) +
+-		byte_cntr_data->rwp_offset - offset;
+-
+-	if (req_size > len)
+-		req_size = len;
+-
+-	if (req_size > 0)
+-		actual = tmc_etr_buf_get_data(etr_buf, offset, req_size, bufpp);
+-
+-	return actual;
+-}
+-
+-
+-static ssize_t tmc_etr_byte_cntr_read(struct file *fp, char __user *data,
+-			       size_t len, loff_t *ppos)
+-{
+-	struct byte_cntr *byte_cntr_data = fp->private_data;
+-	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
+-	char *bufp = NULL;
+-	long actual;
+-	int ret = 0;
+-
+-	if (!data)
+-		return -EINVAL;
+-
+-	mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-	if (!byte_cntr_data->read_active) {
+-		actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
+-				byte_cntr_data->offset, len, &bufp);
+-		if (actual > 0) {
+-			len = actual;
+-			goto copy;
+-		} else {
+-			ret = -EINVAL;
+-			goto err0;
++/* Called with the TMC lock held after the formatter has been flushed. */
++static void tmc_stream_stop(struct tmc_drvdata *d)
++{
++	struct tmc_stream *s = d->stream;
++	u64 rwp, position, complete, expected, partial;
++	if (!s || !s->active)
++		return;
++	qcom_csr_set_byte_counter(d->csr, s->irq_offset, 0);
++	rwp = tmc_read_rwp(d);
++	complete = atomic64_read(&s->produced);
++	if (rwp >= s->buf->hwaddr && rwp <= s->buf->hwaddr + s->buf->size) {
++		position = (rwp - s->buf->hwaddr) % s->buf->size;
++		expected = (s->start_offset + complete) % s->buf->size;
++		partial = (position + s->buf->size - expected) % s->buf->size;
++		/* Unaccounted complete blocks mean the IRQ/reader was overrun. */
++		s->final_bytes = partial < TMC_STREAM_BLOCK ? complete + partial : U64_MAX;
++	} else {
++		s->final_bytes = U64_MAX;
++	}
++	s->active = false;
++	smp_store_release(&s->stopped, true);
++	wake_up_interruptible(&s->wait);
++}
++
++static int tmc_stream_open(struct inode *inode, struct file *file)
++{
++	struct tmc_stream *s = container_of(file->private_data, struct tmc_stream, misc);
++	struct tmc_drvdata *d = s->drvdata;
++	struct etr_flat_buf *flat;
++	unsigned long flags;
++	u64 rwp;
++	int ret;
++
++	mutex_lock(&s->read_lock);
++	if (s->opened) {
++		ret = -EBUSY;
++		goto out;
++	}
++	ret = pm_runtime_resume_and_get(d->csdev->dev.parent);
++	if (ret < 0)
++		goto out;
++	ret = pm_runtime_resume_and_get(d->csr->dev.parent);
++	if (ret < 0)
++		goto out_tmc;
++	raw_spin_lock_irqsave(&d->spinlock, flags);
++	if (coresight_get_mode(d->csdev) != CS_MODE_SYSFS || !d->etr_buf || d->reading) {
++		ret = -EBUSY;
++		goto out_spin;
++	}
++	if (d->etr_buf->mode != ETR_MODE_FLAT || d->etr_buf->size < 4 * TMC_STREAM_BLOCK) {
++		ret = -EOPNOTSUPP;
++		goto out_spin;
++	}
++	flat = d->etr_buf->private;
++	if (!flat->coherent) {
++		ret = -EOPNOTSUPP;
++		goto out_spin;
++	}
++	rwp = tmc_read_rwp(d);
++	if (rwp < d->etr_buf->hwaddr || rwp > d->etr_buf->hwaddr + d->etr_buf->size) {
++		ret = -EIO;
++		goto out_spin;
++	}
++	s->buf = d->etr_buf;
++	s->start_offset = (rwp - s->buf->hwaddr) % s->buf->size;
++	s->consumed = s->final_bytes = 0;
++	atomic64_set(&s->produced, 0);
++	s->stopped = false;
++	s->active = true;
++	ret = qcom_csr_set_byte_counter(d->csr, s->irq_offset, TMC_STREAM_BLOCK / 8);
++	if (ret) {
++		s->active = false;
++		s->buf = NULL;
++		goto out_spin;
++	}
++	refcount_inc(&s->buf->refcount);
++	s->opened = true;
++	file->private_data = s;
++	ret = nonseekable_open(inode, file);
++out_spin:
++	raw_spin_unlock_irqrestore(&d->spinlock, flags);
++	if (!ret)
++		goto out;
++	pm_runtime_put(d->csr->dev.parent);
++out_tmc:
++	pm_runtime_put(d->csdev->dev.parent);
++out:
++	mutex_unlock(&s->read_lock);
++	return ret;
++}
++
++static ssize_t tmc_stream_read(struct file *file, char __user *user, size_t len, loff_t *pos)
++{
++	struct tmc_stream *s = file->private_data;
++	u64 produced, available;
++	size_t offset, bytes;
++	char *src, *copy;
++	ssize_t ret;
++
++	if (!len)
++		return 0;
++	ret = mutex_lock_interruptible(&s->read_lock);
++	if (ret)
++		return ret;
++	for (;;) {
++		produced = smp_load_acquire(&s->stopped) ? READ_ONCE(s->final_bytes)
++							 : atomic64_read(&s->produced);
++		if (tmc_stream_overrun(produced, s->consumed, s->buf->size)) {
++			ret = -EOVERFLOW;
++			goto out;
+ 		}
+-	}
+-
+-	if (byte_cntr_data->enable) {
+-		if (!atomic_read(&byte_cntr_data->irq_cnt)) {
+-			mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-			if (wait_event_interruptible(byte_cntr_data->wq,
+-				atomic_read(&byte_cntr_data->irq_cnt) > 0
+-				|| !byte_cntr_data->enable))
+-				return -ERESTARTSYS;
+-			mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-			if (!byte_cntr_data->read_active) {
+-				actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
+-						byte_cntr_data->offset, len, &bufp);
+-				if (actual > 0) {
+-					len = actual;
+-					goto copy;
+-				} else {
+-					ret = -EINVAL;
+-					goto err0;
+-				}
+-			}
++		available = produced - s->consumed;
++		if (available || smp_load_acquire(&s->stopped))
++			break;
++		if (file->f_flags & O_NONBLOCK) {
++			ret = -EAGAIN;
++			goto out;
+ 		}
+-
+-		tmc_etr_read_bytes(byte_cntr_data, byte_cntr_data->offset,
+-				   byte_cntr_data->block_size, &len, &bufp);
+-
+-	} else {
+-		actual = tmc_etr_flush_remaining_bytes(tmcdrvdata,
+-				byte_cntr_data->offset, len, &bufp);
+-		if (actual > 0) {
+-			len = actual;
+-			goto copy;
+-		} else {
+-			ret = -EINVAL;
+-			goto err0;
+-		}
+-	}
+-
+-copy:
+-	if (copy_to_user(data, bufp, len)) {
+-		mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-		dev_dbg(&tmcdrvdata->csdev->dev,
+-			"%s: copy_to_user failed\n", __func__);
+-		return -EFAULT;
+-	}
+-
+-	byte_cntr_data->total_size += len;
+-
+-	if (byte_cntr_data->offset + len >= tmcdrvdata->size)
+-		byte_cntr_data->offset = 0;
++		ret = wait_event_interruptible(s->wait,
++					       smp_load_acquire(&s->stopped) ||
++						   atomic64_read(&s->produced) > s->consumed);
++		if (ret)
++			goto out;
++	}
++	if (!available) {
++		ret = 0;
++		goto out;
++	}
++	offset = (s->start_offset + s->consumed) % s->buf->size;
++	bytes = min_t(u64, min_t(size_t, len, PAGE_SIZE), available);
++	bytes = min_t(size_t, bytes, s->buf->size - offset);
++	copy = kmalloc(bytes, GFP_KERNEL);
++	if (!copy) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	ret = tmc_etr_buf_get_data(s->buf, offset, bytes, &src);
++	if (ret <= 0)
++		goto out_copy;
++	dma_rmb();
++	memcpy(copy, src, ret);
++	produced =
++	    smp_load_acquire(&s->stopped) ? READ_ONCE(s->final_bytes) : atomic64_read(&s->produced);
++	if (tmc_stream_overrun(produced, s->consumed, s->buf->size))
++		ret = -EOVERFLOW;
++	else if (copy_to_user(user, copy, ret))
++		ret = -EFAULT;
+ 	else
+-		byte_cntr_data->offset += len;
+-
+-	goto out;
+-
+-err0:
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
++		s->consumed += ret;
++out_copy:
++	kfree(copy);
++out:
++	mutex_unlock(&s->read_lock);
+ 	return ret;
+-out:
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-	return len;
+-}
+-
+-void tmc_etr_byte_cntr_start(struct byte_cntr *byte_cntr_data)
+-{
+-	if (!byte_cntr_data)
+-		return;
+-
+-	mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-
+-	if (byte_cntr_data->block_size == 0
+-		|| byte_cntr_data->read_active) {
+-		mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-		return;
+-	}
+-
+-	atomic_set(&byte_cntr_data->irq_cnt, 0);
+-	byte_cntr_data->enable = true;
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-}
+-EXPORT_SYMBOL(tmc_etr_byte_cntr_start);
+-
+-void tmc_etr_byte_cntr_stop(struct byte_cntr *byte_cntr_data)
+-{
+-	if (!byte_cntr_data)
+-		return;
+-
+-	mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-	byte_cntr_data->rwp_offset =
+-		tmc_get_rwp_offset(byte_cntr_data->tmcdrvdata);
+-	byte_cntr_data->enable = false;
+-	byte_cntr_data->read_active = false;
+-	atomic_set(&byte_cntr_data->irq_cnt, 0);
+-	wake_up(&byte_cntr_data->wq);
+-	coresight_csr_set_byte_cntr(byte_cntr_data->csr,
+-				byte_cntr_data->irqctrl_offset, 0);
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-
+-}
+-EXPORT_SYMBOL(tmc_etr_byte_cntr_stop);
+-
+-
+-static int tmc_etr_byte_cntr_release(struct inode *in, struct file *fp)
+-{
+-	struct byte_cntr *byte_cntr_data = fp->private_data;
+-	struct device *dev = &byte_cntr_data->tmcdrvdata->csdev->dev;
+-
+-	mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-	byte_cntr_data->read_active = false;
+-
+-	atomic_set(&byte_cntr_data->irq_cnt, 0);
+-
+-	if (byte_cntr_data->enable)
+-		coresight_csr_set_byte_cntr(byte_cntr_data->csr,
+-				byte_cntr_data->irqctrl_offset, 0);
+-
+-	disable_irq_wake(byte_cntr_data->byte_cntr_irq);
+-
+-	dev_dbg(dev, "send data total size: %lld bytes, irq_cnt: %lld, offset: %lu, rwp_offset: %lu\n",
+-		byte_cntr_data->total_size, byte_cntr_data->total_irq,
+-		byte_cntr_data->offset,	byte_cntr_data->rwp_offset);
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-
++}
++
++static __poll_t tmc_stream_poll(struct file *file, poll_table *wait)
++{
++	struct tmc_stream *s = file->private_data;
++	u64 produced, consumed = READ_ONCE(s->consumed);
++	__poll_t mask = 0;
++	poll_wait(file, &s->wait, wait);
++	produced =
++	    smp_load_acquire(&s->stopped) ? READ_ONCE(s->final_bytes) : atomic64_read(&s->produced);
++	if (tmc_stream_overrun(produced, consumed, s->buf->size))
++		mask |= EPOLLERR;
++	else if (produced > consumed)
++		mask |= EPOLLIN | EPOLLRDNORM;
++	if (smp_load_acquire(&s->stopped))
++		mask |= EPOLLHUP;
++	return mask;
++}
++
++static int tmc_stream_release(struct inode *inode, struct file *file)
++{
++	struct tmc_stream *s = file->private_data;
++	struct tmc_drvdata *d = s->drvdata;
++	struct etr_buf *buf;
++	unsigned long flags;
++	mutex_lock(&s->read_lock);
++	raw_spin_lock_irqsave(&d->spinlock, flags);
++	if (s->active)
++		qcom_csr_set_byte_counter(d->csr, s->irq_offset, 0);
++	s->active = false;
++	s->opened = false;
++	buf = s->buf;
++	s->buf = NULL;
++	raw_spin_unlock_irqrestore(&d->spinlock, flags);
++	synchronize_irq(s->irq);
++	tmc_etr_free_sysfs_buf(buf);
++	pm_runtime_put(d->csr->dev.parent);
++	pm_runtime_put(d->csdev->dev.parent);
++	mutex_unlock(&s->read_lock);
+ 	return 0;
+ }
+-
+-static int tmc_etr_byte_cntr_open(struct inode *in, struct file *fp)
+-{
+-	struct byte_cntr *byte_cntr_data =
+-			container_of(in->i_cdev, struct byte_cntr, dev);
+-	struct tmc_drvdata *tmcdrvdata = byte_cntr_data->tmcdrvdata;
+-
+-	mutex_lock(&byte_cntr_data->byte_cntr_lock);
+-
+-	if (byte_cntr_data->read_active) {
+-		mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-		return -EBUSY;
+-	}
+-
+-	if (tmcdrvdata->mode != CS_MODE_SYSFS ||
+-			!byte_cntr_data->block_size) {
+-		mutex_unlock(&byte_cntr_data->byte_cntr_lock);
+-		return -EINVAL;
+-	}
+-
+-	enable_irq_wake(byte_cntr_data->byte_cntr_irq);
+-	/* IRQ is a '8- byte' counter and to observe interrupt at
+-	 * 'block_size' bytes of data
+-	 */
+-
+-	coresight_csr_set_byte_cntr(byte_cntr_data->csr, byte_cntr_data->irqctrl_offset,
+-				(byte_cntr_data->block_size) / 8);
+-
+-	fp->private_data = byte_cntr_data;
+-	nonseekable_open(in, fp);
+-	byte_cntr_data->enable = true;
+-	byte_cntr_data->read_active = true;
+-	byte_cntr_data->total_size = 0;
+-	byte_cntr_data->offset = tmc_get_rwp_offset(tmcdrvdata);
+-	byte_cntr_data->total_irq = 0;
+-	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
++static const struct file_operations tmc_stream_fops = {
++    .owner = THIS_MODULE,
++    .open = tmc_stream_open,
++    .read = tmc_stream_read,
++    .poll = tmc_stream_poll,
++    .release = tmc_stream_release,
++};
++
++int tmc_stream_init(struct tmc_drvdata *d)
++{
++	struct device *dev = d->csdev->dev.parent;
++	struct tmc_stream *s;
++	const char *name;
++	int irq, ret;
++	if (!d->csr)
++		return 0;
++	irq = of_irq_get_byname(dev->of_node, "byte-cntr-irq");
++	if (irq < 0)
++		return irq;
++	s = devm_kzalloc(dev, sizeof(*s), GFP_KERNEL);
++	if (!s)
++		return -ENOMEM;
++	s->drvdata = d;
++	s->irq = irq;
++	mutex_init(&s->read_lock);
++	init_waitqueue_head(&s->wait);
++	atomic64_set(&s->produced, 0);
++	ret = device_property_read_u32(dev, "csr-irqctrl-offset", &s->irq_offset);
++	if (ret)
++		return ret;
++	ret = pm_runtime_resume_and_get(d->csr->dev.parent);
++	if (ret < 0)
++		return ret;
++	ret = qcom_csr_set_byte_counter(d->csr, s->irq_offset, 0);
++	pm_runtime_put(d->csr->dev.parent);
++	if (ret)
++		return ret;
++	ret = devm_request_irq(dev, irq, tmc_stream_irq, 0, dev_name(dev), s);
++	if (ret)
++		return ret;
++	ret = device_property_read_string(dev, "byte-cntr-name", &name);
++	if (ret)
++		return ret;
++	s->misc.name = name;
++	s->misc.minor = MISC_DYNAMIC_MINOR;
++	s->misc.fops = &tmc_stream_fops;
++	s->misc.parent = dev;
++	ret = misc_register(&s->misc);
++	if (ret)
++		return ret;
++	d->stream = s;
+ 	return 0;
+ }
+-
+-static const struct file_operations byte_cntr_fops = {
+-	.owner		= THIS_MODULE,
+-	.open		= tmc_etr_byte_cntr_open,
+-	.read		= tmc_etr_byte_cntr_read,
+-	.release	= tmc_etr_byte_cntr_release,
+-	.llseek		= no_llseek,
+-};
+-
+-static int byte_cntr_register_chardev(struct byte_cntr *byte_cntr_data)
+-{
+-	int ret;
+-	unsigned int baseminor = 0;
+-	unsigned int count = 1;
+-	struct device *device;
+-	dev_t dev;
+-
+-	ret = alloc_chrdev_region(&dev, baseminor, count, byte_cntr_data->name);
+-	if (ret < 0) {
+-		pr_err("alloc_chrdev_region failed %d\n", ret);
+-		return ret;
+-	}
+-	cdev_init(&byte_cntr_data->dev, &byte_cntr_fops);
+-
+-	byte_cntr_data->dev.owner = THIS_MODULE;
+-	byte_cntr_data->dev.ops = &byte_cntr_fops;
+-
+-	ret = cdev_add(&byte_cntr_data->dev, dev, 1);
+-	if (ret)
+-		goto exit_unreg_chrdev_region;
+-
+-	byte_cntr_data->driver_class = class_create(byte_cntr_data->class_name);
+-	if (IS_ERR(byte_cntr_data->driver_class)) {
+-		ret = -ENOMEM;
+-		pr_err("class_create failed %d\n", ret);
+-		goto exit_unreg_chrdev_region;
+-	}
+-
+-	device = device_create(byte_cntr_data->driver_class, NULL,
+-			       byte_cntr_data->dev.dev, byte_cntr_data,
+-			       byte_cntr_data->name);
+-
+-	if (IS_ERR(device)) {
+-		pr_err("class_device_create failed %d\n", ret);
+-		ret = -ENOMEM;
+-		goto exit_destroy_class;
+-	}
+-
+-	return 0;
+-
+-exit_destroy_class:
+-	class_destroy(byte_cntr_data->driver_class);
+-exit_unreg_chrdev_region:
+-	unregister_chrdev_region(byte_cntr_data->dev.dev, 1);
+-	return ret;
+-}
+-
+-struct byte_cntr *byte_cntr_init(struct amba_device *adev,
+-				 struct tmc_drvdata *drvdata)
+-{
+-	struct device *dev = &adev->dev;
+-	struct device_node *np = adev->dev.of_node;
+-	int byte_cntr_irq;
+-	int ret;
+-	struct byte_cntr *byte_cntr_data;
+-
+-	byte_cntr_irq = of_irq_get_byname(np, "byte-cntr-irq");
+-	if (byte_cntr_irq < 0)
+-		return NULL;
+-
+-	byte_cntr_data = devm_kzalloc(dev, sizeof(*byte_cntr_data), GFP_KERNEL);
+-	if (!byte_cntr_data)
+-		return NULL;
+-
+-	ret = devm_request_irq(dev, byte_cntr_irq, etr_handler,
+-			       IRQF_TRIGGER_RISING | IRQF_SHARED,
+-			       dev_name(dev), byte_cntr_data);
+-	if (ret) {
+-		dev_err(dev, "Byte_cntr interrupt registration failed\n");
+-		return NULL;
+-	}
+-
+-	ret = of_property_read_u32(dev->of_node, "csr-irqctrl-offset",
+-				&byte_cntr_data->irqctrl_offset);
+-
+-	if (ret) {
+-		dev_dbg(dev, "Get byte cntr csr irqctrl offset failed\n");
+-		byte_cntr_data->irqctrl_offset = CSR_BYTECNTVAL;
+-	}
+-
+-	ret = device_property_read_string(dev, "byte-cntr-name", &byte_cntr_data->name);
+-	if (ret) {
+-		dev_dbg(dev, "Get byte cntr name failed\n");
+-		byte_cntr_data->name = "byte-cntr";
+-	}
+-
+-	ret = device_property_read_string(dev, "byte-cntr-class-name",
+-				&byte_cntr_data->class_name);
+-	if (ret) {
+-		dev_dbg(dev, "Get byte cntr class name failed\n");
+-		byte_cntr_data->class_name = "coresight-tmc-etr-stream";
+-	}
+-
+-	ret = byte_cntr_register_chardev(byte_cntr_data);
+-	if (ret) {
+-		dev_err(dev, "Byte_cntr char dev registration failed\n");
+-		return NULL;
+-	}
+-
+-	byte_cntr_data->byte_cntr_irq = byte_cntr_irq;
+-	byte_cntr_data->csr = drvdata->csr;
+-	byte_cntr_data->tmcdrvdata = drvdata;
+-	atomic_set(&byte_cntr_data->irq_cnt, 0);
+-	init_waitqueue_head(&byte_cntr_data->wq);
+-	mutex_init(&byte_cntr_data->byte_cntr_lock);
+-
+-	return byte_cntr_data;
+-}
+-
+-void byte_cntr_remove(struct byte_cntr *byte_cntr_data)
+-{
+-	device_destroy(byte_cntr_data->driver_class,
+-				byte_cntr_data->dev.dev);
+-	class_destroy(byte_cntr_data->driver_class);
+-	unregister_chrdev_region(byte_cntr_data->dev.dev, 1);
+-}
++void tmc_stream_remove(struct tmc_drvdata *d)
++{
++	if (d->stream)
++		misc_deregister(&d->stream->misc);
++}
+diff --git a/drivers/hwtracing/coresight/coresight-csr.c b/drivers/hwtracing/coresight/coresight-csr.c
+--- a/drivers/hwtracing/coresight/coresight-csr.c
++++ b/drivers/hwtracing/coresight/coresight-csr.c
+@@ -2,1119 +2,323 @@
+ /*
+  * Copyright (c) 2012-2013, 2015-2017, 2019-2021 The Linux Foundation. All rights reserved.
+  * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
++ *
++ * Qualcomm CSR register layouts from the pinned native provider.
++ * Integrate ATID routing as a common CoreSight helper: one vote per path.
+  */
+-
+-#include <linux/kernel.h>
++#include "coresight-csr.h"
++#include "coresight-priv.h"
++#include "coresight-trace-id.h"
++#include <linux/of.h>
++#include <linux/property.h>
++#include <linux/clk.h>
++#include <linux/io.h>
+ #include <linux/module.h>
+-#include <linux/init.h>
+-#include <linux/device.h>
++#include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+-#include <linux/io.h>
+-#include <linux/err.h>
+-#include <linux/slab.h>
+-#include <linux/of.h>
+-#include <linux/coresight.h>
+-#include <linux/clk.h>
+-#include <linux/mutex.h>
+-
+-#include "coresight-priv.h"
+-#include "coresight-common.h"
+-
+-#define csr_writel(drvdata, val, off)	__raw_writel((val), drvdata->base + off)
+-#define csr_readl(drvdata, off)		__raw_readl(drvdata->base + off)
+-
+-#define CSR_LOCK(drvdata)						\
+-do {									\
+-	mb(); /* ensure configuration take effect before we lock it */	\
+-	csr_writel(drvdata, 0x0, CORESIGHT_LAR);			\
+-} while (0)
+-#define CSR_UNLOCK(drvdata)						\
+-do {									\
+-	csr_writel(drvdata, CORESIGHT_UNLOCK, CORESIGHT_LAR);		\
+-	mb(); /* ensure unlock take effect before we configure */	\
+-} while (0)
+-
+-#define CSR_SWDBGPWRCTRL	(0x000)
+-#define CSR_SWDBGPWRACK		(0x004)
+-#define CSR_SWSPADREG0		(0x008)
+-#define CSR_SWSPADREG1		(0x00C)
+-#define CSR_STMTRANSCTRL	(0x010)
+-#define CSR_STMAWIDCTRL		(0x014)
+-#define CSR_STMCHNOFST0		(0x018)
+-#define CSR_STMCHNOFST1		(0x01C)
+-#define CSR_STMEXTHWCTRL0	(0x020)
+-#define CSR_STMEXTHWCTRL1	(0x024)
+-#define CSR_STMEXTHWCTRL2	(0x028)
+-#define CSR_STMEXTHWCTRL3	(0x02C)
+-#define CSR_USBBAMCTRL		(0x030)
+-#define CSR_USBFLSHCTRL		(0x034)
+-#define CSR_TIMESTAMPCTRL	(0x038)
+-#define CSR_AOTIMEVAL0		(0x03C)
+-#define CSR_AOTIMEVAL1		(0x040)
+-#define CSR_QDSSTIMEVAL0	(0x044)
+-#define CSR_QDSSTIMEVAL1	(0x048)
+-#define CSR_QDSSTIMELOAD0	(0x04C)
+-#define CSR_QDSSTIMELOAD1	(0x050)
+-#define CSR_DAPMSAVAL		(0x054)
+-#define CSR_QDSSCLKVOTE		(0x058)
+-#define CSR_QDSSCLKIPI		(0x05C)
+-#define CSR_QDSSPWRREQIGNORE	(0x060)
+-#define CSR_QDSSSPARE		(0x064)
+-#define CSR_IPCAT		(0x068)
+-#define CSR_BYTECNTVAL		(0x06C)
+-#define CSR_TS_HBEAT_VAL0_LO	(0x084)
+-#define CSR_TS_HBEAT_VAL0_HI	(0x088)
+-#define CSR_TS_HBEAT_VAL1_LO	(0x08c)
+-#define CSR_TS_HBEAT_VAL1_HI	(0x090)
+-#define CSR_TS_HBEAT_MASK0_LO	(0x094)
+-#define CSR_TS_HBEAT_MASK0_HI	(0x098)
+-#define CSR_TS_HBEAT_MASK1_LO	(0x09c)
+-#define CSR_TS_HBEAT_MASK1_HI	(0x0a0)
+-#define CSR_ARADDR_EXT		(0x130)
+-#define CSR_AWADDR_EXT		(0x134)
+-#define MSR_NUM			((drvdata->msr_end - drvdata->msr_start + 1) \
+-				/ sizeof(uint32_t))
+-#define MSR_MAX_NUM		128
+-
+-#define BLKSIZE_256		0
+-#define BLKSIZE_512		1
+-#define BLKSIZE_1024		2
+-#define BLKSIZE_2048		3
+-
+-#define FLUSHPERIOD_1	    0x1
+-#define FLUSHPERIOD_2048	0x800
+-#define PERFLSHEOT_BIT		BIT(18)
+-
+-#define CSR_ATID_REG_OFFSET(atid, atid_offset) \
+-		((atid / 32) * 4 + atid_offset)
+-
+-#define CSR_ATID_REG_BIT(atid)	(atid % 32)
+-#define CSR_MAX_ATID	128
+-#define CSR_ATID_REG_SIZE	0xc
+-
+-#define CSR_ARADDR_EXT_VAL	0x104
+-#define CSR_AWADDR_EXT_VAL	0x104
+-
+-#define CSR_ATID_REG_OFFSET(atid, atid_offset) \
+-		((atid / 32) * 4 + atid_offset)
+-
+-#define CSR_ATID_REG_BIT(atid)	(atid % 32)
+-#define CSR_MAX_ATID	128
+-#define CSR_ATID_REG_SIZE	0xc
++#include <linux/pm_runtime.h>
++
++#define CSR_ATIDS 128
++#define CSR_BANKS 2
++#define CSR_BYTECNT0 0x6c
++#define CSR_BYTECNT1 0x70
++#define CSR_ATID0 0xf8
++#define CSR_ATID1 0x108
++#define CSR_TIMESTAMPCTRL 0x38
++#define CSR_QDSSTIMEVAL0 0x44
++#define CSR_QDSSTIMEVAL1 0x48
+ 
+ struct csr_drvdata {
+-	void __iomem		*base;
+-	phys_addr_t		pbase;
+-	phys_addr_t		msr_start;
+-	phys_addr_t		msr_end;
+-	struct device		*dev;
+-	struct coresight_device	*csdev;
+-	uint32_t		*msr;
+-	atomic_t		*msr_refcnt;
+-	uint32_t		blksize;
+-	uint32_t		flushperiod;
+-	u64			hbeat_val0;
+-	u64			hbeat_val1;
+-	u64			hbeat_mask0;
+-	u64			hbeat_mask1;
+-	struct coresight_csr		csr;
+-	struct clk		*clk;
+-	spinlock_t		spin_lock;
+-	bool			usb_bam_support;
+-	bool			perflsheot_set_support;
+-	bool			hwctrl_set_support;
+-	bool			set_byte_cntr_support;
+-	bool			timestamp_support;
+-	bool			enable_flush;
+-	bool			msr_support;
+-	bool			aodbg_csr_support;
+-	uint32_t		atid_offset;
++	void __iomem *base;
++	size_t size;
++	struct coresight_device *csdev;
++	struct clk *pclk, *atclk;
++	raw_spinlock_t lock;
++	unsigned int refs[CSR_BANKS][CSR_ATIDS];
++	bool original[CSR_BANKS][CSR_ATIDS];
++	unsigned int users;
++	bool byte_counter, timestamp;
+ };
+-
+ DEFINE_CORESIGHT_DEVLIST(csr_devs, "csr");
+ 
+-static LIST_HEAD(csr_list);
+-static DEFINE_SPINLOCK(csr_spinlock);
+-
+-#define to_csr_drvdata(c) container_of(c, struct csr_drvdata, csr)
+-
+-static void msm_qdss_csr_config_flush_period(struct csr_drvdata *drvdata)
+-{
+-	uint32_t usbflshctrl;
+-
+-	CSR_UNLOCK(drvdata);
+-
+-	usbflshctrl = csr_readl(drvdata, CSR_USBFLSHCTRL);
+-	usbflshctrl = (usbflshctrl & ~0x3FFFC) | (drvdata->flushperiod << 2);
+-	csr_writel(drvdata, usbflshctrl, CSR_USBFLSHCTRL);
+-
+-	CSR_LOCK(drvdata);
+-}
+-
+-void msm_qdss_csr_enable_bam_to_usb(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	uint32_t usbbamctrl;
++/* Only the two verified native ETR banks are supported. */
++static int csr_bank(u32 offset, size_t size)
++{
++	if ((offset != CSR_ATID0 && offset != CSR_ATID1) || offset > size || 16 > size - offset)
++		return -EINVAL;
++	return offset == CSR_ATID0 ? 0 : 1;
++}
++
++static int csr_route(struct csr_drvdata *d, u32 offset, unsigned int id, bool enable)
++{
+ 	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support)
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	usbbamctrl = csr_readl(drvdata, CSR_USBBAMCTRL);
+-	usbbamctrl = (usbbamctrl & ~0x3) | drvdata->blksize;
+-	csr_writel(drvdata, usbbamctrl, CSR_USBBAMCTRL);
+-
+-	usbbamctrl |= 0x4;
+-	csr_writel(drvdata, usbbamctrl, CSR_USBBAMCTRL);
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_enable_bam_to_usb);
+-
+-void msm_qdss_csr_enable_flush(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	uint32_t usbflshctrl;
++	u32 reg, mask, val;
++	int bank, ret = 0;
++
++	bank = csr_bank(offset, d->size);
++	if (bank < 0 || !IS_VALID_CS_TRACE_ID(id))
++		return -EINVAL;
++	reg = offset + (id / 32) * 4;
++	mask = BIT(id % 32);
++	raw_spin_lock_irqsave(&d->lock, flags);
++	if (enable) {
++		if (d->refs[bank][id] == UINT_MAX || d->users == UINT_MAX) {
++			ret = -EOVERFLOW;
++			goto out;
++		}
++		if (!d->users) {
++			ret = coresight_claim_device(d->csdev);
++			if (ret)
++				goto out;
++		}
++		if (!d->refs[bank][id]) {
++			CS_UNLOCK(d->base);
++			val = readl_relaxed(d->base + reg);
++			d->original[bank][id] = !!(val & mask);
++			writel_relaxed(val | mask, d->base + reg);
++			CS_LOCK(d->base);
++		}
++		d->refs[bank][id]++;
++		d->users++;
++	} else if (d->refs[bank][id]) {
++		if (!--d->refs[bank][id]) {
++			CS_UNLOCK(d->base);
++			val = readl_relaxed(d->base + reg);
++			val = d->original[bank][id] ? val | mask : val & ~mask;
++			writel_relaxed(val, d->base + reg);
++			CS_LOCK(d->base);
++		}
++		if (!--d->users)
++			coresight_disclaim_device(d->csdev);
++	}
++out:
++	raw_spin_unlock_irqrestore(&d->lock, flags);
++	return ret;
++}
++
++static int csr_path_route(struct coresight_device *csdev, void *data, bool enable)
++{
++	struct csr_drvdata *d = dev_get_drvdata(csdev->dev.parent);
++	struct coresight_path *path = data;
++	struct coresight_device *sink;
++	u32 offset;
++
++	if (!path)
++		return -EINVAL;
++	sink = coresight_get_sink(path);
++	if (!sink || device_property_read_u32(sink->dev.parent, "csr-atid-offset", &offset))
++		return -EINVAL;
++	return csr_route(d, offset, path->trace_id, enable);
++}
++
++static int csr_enable(struct coresight_device *csdev, enum cs_mode mode, void *data)
++{
++	return csr_path_route(csdev, data, true);
++}
++static int csr_disable(struct coresight_device *csdev, void *data)
++{
++	return csr_path_route(csdev, data, false);
++}
++static const struct coresight_ops_helper csr_helper_ops = {
++    .enable = csr_enable,
++    .disable = csr_disable,
++};
++static const struct coresight_ops csr_ops = {.helper_ops = &csr_helper_ops};
++
++int qcom_csr_set_byte_counter(struct coresight_device *csdev, u32 offset, u32 count)
++{
++	struct csr_drvdata *d;
+ 	unsigned long flags;
+ 
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support)
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	msm_qdss_csr_config_flush_period(drvdata);
+-
+-	CSR_UNLOCK(drvdata);
+-
+-	usbflshctrl = csr_readl(drvdata, CSR_USBFLSHCTRL);
+-	usbflshctrl |= 0x2;
+-	if (drvdata->perflsheot_set_support)
+-		usbflshctrl |= PERFLSHEOT_BIT;
+-	csr_writel(drvdata, usbflshctrl, CSR_USBFLSHCTRL);
+-
+-	CSR_LOCK(drvdata);
+-	drvdata->enable_flush = true;
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_enable_flush);
+-
+-
+-void msm_qdss_csr_disable_bam_to_usb(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	uint32_t usbbamctrl;
++	if (!csdev)
++		return -ENODEV;
++	d = dev_get_drvdata(csdev->dev.parent);
++	if (!d->byte_counter)
++		return -EOPNOTSUPP;
++	if ((offset != CSR_BYTECNT0 && offset != CSR_BYTECNT1) || offset > d->size ||
++	    4 > d->size - offset)
++		return -EINVAL;
++	raw_spin_lock_irqsave(&d->lock, flags);
++	CS_UNLOCK(d->base);
++	writel(count, d->base + offset);
++	CS_LOCK(d->base);
++	raw_spin_unlock_irqrestore(&d->lock, flags);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(qcom_csr_set_byte_counter);
++
++/* Resolve the supplier before publishing a sink that depends on its helper. */
++int qcom_csr_attach(struct device *dev, struct coresight_platform_data *pdata,
++		    struct coresight_device **helper)
++{
++	struct device_node *node;
++	struct platform_device *supplier;
++	struct csr_drvdata *d;
++	struct coresight_connection conn = {.src_port = -1, .dest_port = -1};
++	struct coresight_connection *added;
++	u32 offset;
++	int ret = 0;
++
++	if (!device_property_present(dev, "coresight-csr"))
++		return 0;
++	node = of_parse_phandle(dev->of_node, "coresight-csr", 0);
++	if (!node)
++		return -EINVAL;
++	supplier = of_find_device_by_node(node);
++	if (!supplier) {
++		ret = -EPROBE_DEFER;
++		goto out_node;
++	}
++	device_lock(&supplier->dev);
++	d = platform_get_drvdata(supplier);
++	if (!supplier->dev.driver || !d || !d->csdev) {
++		ret = -EPROBE_DEFER;
++		goto out_unlock;
++	}
++	if (device_property_read_u32(dev, "csr-atid-offset", &offset) ||
++	    csr_bank(offset, d->size) < 0) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++	conn.dest_fwnode = of_fwnode_handle(node);
++	added = coresight_add_out_conn(dev, pdata, &conn);
++	if (IS_ERR(added)) {
++		ret = PTR_ERR(added);
++		goto out_unlock;
++	}
++	if (!device_link_add(dev, &supplier->dev,
++			     DL_FLAG_AUTOREMOVE_CONSUMER | DL_FLAG_PM_RUNTIME)) {
++		ret = -ENOMEM;
++		goto out_unlock;
++	}
++	*helper = d->csdev;
++out_unlock:
++	device_unlock(&supplier->dev);
++	put_device(&supplier->dev);
++out_node:
++	of_node_put(node);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(qcom_csr_attach);
++
++static ssize_t timestamp_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct csr_drvdata *d = dev_get_drvdata(dev->parent);
+ 	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support)
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	usbbamctrl = csr_readl(drvdata, CSR_USBBAMCTRL);
+-	usbbamctrl &= (~0x4);
+-	csr_writel(drvdata, usbbamctrl, CSR_USBBAMCTRL);
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_disable_bam_to_usb);
+-
+-void msm_qdss_csr_disable_flush(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	uint32_t usbflshctrl;
+-	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support)
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	usbflshctrl = csr_readl(drvdata, CSR_USBFLSHCTRL);
+-	usbflshctrl &= ~0x2;
+-	if (drvdata->perflsheot_set_support)
+-		usbflshctrl &= ~PERFLSHEOT_BIT;
+-	csr_writel(drvdata, usbflshctrl, CSR_USBFLSHCTRL);
+-
+-	CSR_LOCK(drvdata);
+-	drvdata->enable_flush = false;
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_disable_flush);
+-
+-void msm_qdss_csr_enable_eth(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata))
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, CSR_ARADDR_EXT_VAL, CSR_ARADDR_EXT);
+-	csr_writel(drvdata, CSR_AWADDR_EXT_VAL, CSR_AWADDR_EXT);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_enable_eth);
+-
+-void msm_qdss_csr_disable_eth(struct coresight_csr *csr)
+-{
+-	struct csr_drvdata *drvdata;
+-	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata))
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, 0, CSR_ARADDR_EXT);
+-	csr_writel(drvdata, 0, CSR_AWADDR_EXT);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(msm_qdss_csr_disable_eth);
+-
+-int coresight_csr_hwctrl_set(struct coresight_csr *csr, uint64_t addr,
+-			 uint32_t val)
+-{
+-	struct csr_drvdata *drvdata;
+-	int ret = 0;
+-	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return -EINVAL;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->hwctrl_set_support)
+-		return -EINVAL;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	if (addr == (drvdata->pbase + CSR_STMEXTHWCTRL0))
+-		csr_writel(drvdata, val, CSR_STMEXTHWCTRL0);
+-	else if (addr == (drvdata->pbase + CSR_STMEXTHWCTRL1))
+-		csr_writel(drvdata, val, CSR_STMEXTHWCTRL1);
+-	else if (addr == (drvdata->pbase + CSR_STMEXTHWCTRL2))
+-		csr_writel(drvdata, val, CSR_STMEXTHWCTRL2);
+-	else if (addr == (drvdata->pbase + CSR_STMEXTHWCTRL3))
+-		csr_writel(drvdata, val, CSR_STMEXTHWCTRL3);
+-	else
+-		ret = -EINVAL;
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
++	u32 val, lo, hi;
++	int ret;
++
++	if (!d->timestamp)
++		return -EOPNOTSUPP;
++	ret = pm_runtime_resume_and_get(dev->parent);
++	if (ret < 0)
++		return ret;
++	raw_spin_lock_irqsave(&d->lock, flags);
++	CS_UNLOCK(d->base);
++	val = readl_relaxed(d->base + CSR_TIMESTAMPCTRL);
++	writel_relaxed(val & ~BIT(0), d->base + CSR_TIMESTAMPCTRL);
++	writel(val | BIT(0), d->base + CSR_TIMESTAMPCTRL);
++	lo = readl_relaxed(d->base + CSR_QDSSTIMEVAL0);
++	hi = readl_relaxed(d->base + CSR_QDSSTIMEVAL1);
++	CS_LOCK(d->base);
++	raw_spin_unlock_irqrestore(&d->lock, flags);
++	pm_runtime_put(dev->parent);
++	return sysfs_emit(buf, "%llu\n", ((u64)hi << 32) | lo);
++}
++static DEVICE_ATTR_RO(timestamp);
++static struct attribute *csr_attrs[] = {&dev_attr_timestamp.attr, NULL};
++static const struct attribute_group csr_group = {.attrs = csr_attrs};
++static const struct attribute_group *csr_groups[] = {&csr_group, NULL};
++
++static int csr_runtime_suspend(struct device *dev)
++{
++	struct csr_drvdata *d = dev_get_drvdata(dev);
++	clk_disable_unprepare(d->atclk);
++	clk_disable_unprepare(d->pclk);
++	return 0;
++}
++static int csr_runtime_resume(struct device *dev)
++{
++	struct csr_drvdata *d = dev_get_drvdata(dev);
++	int ret = clk_prepare_enable(d->pclk);
++	if (ret)
++		return ret;
++	ret = clk_prepare_enable(d->atclk);
++	if (ret)
++		clk_disable_unprepare(d->pclk);
+ 	return ret;
+ }
+-EXPORT_SYMBOL(coresight_csr_hwctrl_set);
+-
+-void coresight_csr_set_byte_cntr(struct coresight_csr *csr, int irqctrl_offset, uint32_t count)
+-{
+-	struct csr_drvdata *drvdata;
+-	unsigned long flags;
+-
+-	if (csr == NULL)
+-		return;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->set_byte_cntr_support)
+-		return;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	csr_writel(drvdata, count, irqctrl_offset);
+-
+-	/* make sure byte count value is written */
+-	mb();
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-}
+-EXPORT_SYMBOL(coresight_csr_set_byte_cntr);
+-
+-static int __coresight_csr_set_etr_atid(struct coresight_csr *csr,
+-			uint32_t atid_offset, uint32_t atid,
+-			bool enable)
+-{
+-	struct csr_drvdata *drvdata;
+-	unsigned long flags;
+-	uint32_t reg_offset;
+-	int bit;
+-	uint32_t val;
+-
+-	if (csr == NULL)
+-		return -EINVAL;
+-
+-	drvdata = to_csr_drvdata(csr);
+-	if (IS_ERR_OR_NULL(drvdata))
+-		return -EINVAL;
+-
+-	if (atid < 0 || atid_offset <= 0)
+-		return -EINVAL;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	reg_offset = CSR_ATID_REG_OFFSET(atid, atid_offset);
+-	bit = CSR_ATID_REG_BIT(atid);
+-	if (reg_offset - atid_offset > CSR_ATID_REG_SIZE
+-		|| bit >= CSR_MAX_ATID) {
+-		CSR_LOCK(drvdata);
+-		spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-		return -EINVAL;
+-	}
+-
+-	val = csr_readl(drvdata, reg_offset);
+-	if (enable)
+-		val = val | BIT(bit);
+-	else
+-		val = val & ~BIT(bit);
+-	csr_writel(drvdata, val, reg_offset);
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	return 0;
+-}
+-
+-/*
+- * of_coresight_get_csr_atid_offset: Get the csr atid register offset of a sink device.
+- *
+- * Returns the csr atid offset. If the result is less than zero, it means
+- * failure.
+- */
+-static int of_coresight_get_csr_atid_offset(struct coresight_device *csdev,
+-				u32 *atid_offset)
+-{
+-	return of_property_read_u32(csdev->dev.parent->of_node,
+-					"csr-atid-offset", atid_offset);
+-}
+-
+-int coresight_csr_set_etr_atid(struct coresight_device *csdev, int atid, bool enable,
+-				struct list_head *path)
+-{
+-	struct coresight_device *sink_csdev;
+-	int atid_offset;
+-	struct coresight_csr *csr;
+-	const char *csr_name;
+-
+-	if (!path)
+-		path = coresight_get_path(csdev);
+-
+-	if (!path)
+-		return -EINVAL;
+-
+-	sink_csdev = coresight_get_sink(path);
+-
+-	if (!sink_csdev)
+-		return -EINVAL;
+-
+-	/* if no csr for this sink, indicates this sink is not etr.*/
+-	if (of_get_coresight_csr_name(sink_csdev->dev.parent->of_node, &csr_name))
+-		return 0;
+-
+-	csr = coresight_csr_get(csr_name);
+-
+-	if (of_coresight_get_csr_atid_offset(sink_csdev, &atid_offset))
+-		return -EINVAL;
+-
+-	return __coresight_csr_set_etr_atid(csr, atid_offset, atid, enable);
+-}
+-EXPORT_SYMBOL(coresight_csr_set_etr_atid);
+-
+-struct coresight_csr *coresight_csr_get(const char *name)
+-{
+-	struct coresight_csr *csr;
+-	unsigned long flags;
+-
+-	spin_lock_irqsave(&csr_spinlock, flags);
+-	list_for_each_entry(csr, &csr_list, link) {
+-		if (!strcmp(csr->name, name)) {
+-			spin_unlock_irqrestore(&csr_spinlock, flags);
+-			return csr;
+-		}
+-	}
+-
+-	spin_unlock_irqrestore(&csr_spinlock, flags);
+-	return ERR_PTR(-EINVAL);
+-}
+-EXPORT_SYMBOL(coresight_csr_get);
+-
+-int of_get_coresight_csr_name(struct device_node *node, const char **csr_name)
+-{
++static const struct dev_pm_ops csr_pm_ops = {
++    SET_RUNTIME_PM_OPS(csr_runtime_suspend, csr_runtime_resume, NULL)};
++
++static int csr_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct csr_drvdata *d;
++	struct resource *res;
++	struct coresight_desc desc = {};
+ 	int ret;
+-	struct device_node *csr_node;
+-
+-	csr_node = of_parse_phandle(node, "coresight-csr", 0);
+-	if (!csr_node)
+-		return -EINVAL;
+-
+-	ret = of_property_read_string(csr_node, "coresight-name", csr_name);
+-	of_node_put(csr_node);
+-	return ret;
+-}
+-EXPORT_SYMBOL(of_get_coresight_csr_name);
+-
+-static ssize_t timestamp_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	ssize_t size = 0;
+-	uint64_t time_tick = 0;
+-	uint32_t val, time_val0, time_val1;
+-	int ret;
+-	unsigned long flags;
+-	unsigned long csr_ts_offset = 0;
+-
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support) {
+-		dev_err(dev, "Invalid param\n");
+-		return 0;
+-	}
+-
+-	if (drvdata->aodbg_csr_support)
+-		csr_ts_offset = 0x14;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-
+-	val = csr_readl(drvdata, CSR_TIMESTAMPCTRL - csr_ts_offset);
+-
+-	val  = val & ~BIT(0);
+-	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL - csr_ts_offset);
+-
+-	val  = val | BIT(0);
+-	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL - csr_ts_offset);
+-
+-	time_val0 = csr_readl(drvdata, CSR_QDSSTIMEVAL0 - csr_ts_offset);
+-	time_val1 = csr_readl(drvdata, CSR_QDSSTIMEVAL1 - csr_ts_offset);
+-
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-
+-	clk_disable_unprepare(drvdata->clk);
+-
+-	time_tick |= (uint64_t)time_val1 << 32;
+-	time_tick |= (uint64_t)time_val0;
+-	size = scnprintf(buf, PAGE_SIZE, "%llu\n", time_tick);
+-	dev_dbg(dev, "timestamp : %s\n", buf);
+-	return size;
+-}
+-
+-static DEVICE_ATTR_RO(timestamp);
+-
+-static ssize_t timestamp_ctrl_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	uint32_t val;
+-	int ret;
+-	unsigned long flags;
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support) {
+-		dev_err(dev, "Invalid param\n");
+-		return 0;
+-	}
+-
+-	ret = sscanf(buf, "%x", &val);
+-	if (ret != 1)
+-		return -EINVAL;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-
+-static DEVICE_ATTR_WO(timestamp_ctrl);
+-
+-static ssize_t msr_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	int i;
+-	ssize_t len = 0;
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->msr_support ||
+-			IS_ERR_OR_NULL(drvdata->msr))
+-		return -EINVAL;
+-	for (i = 0; i < MSR_NUM; i++)
+-		len += scnprintf(buf + len, PAGE_SIZE - len, "%d 0x%x\n",
+-			i, drvdata->msr[i]);
+-	return len;
+-}
+-
+-static ssize_t msr_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	uint32_t offset, val, rval;
+-	int nval, ret;
+-	unsigned long flags;
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->msr_support ||
+-			IS_ERR_OR_NULL(drvdata->msr))
+-		return -EINVAL;
+-
+-	nval = sscanf(buf, "%x %x", &offset, &val);
+-	if (nval != 2)
+-		return -EINVAL;
+-	if (offset >= MSR_NUM)
+-		return -EINVAL;
+-
+-	if (atomic_read(drvdata->msr_refcnt) == 0) {
+-		ret = clk_prepare_enable(drvdata->clk);
+-		if (ret)
+-			return ret;
+-		atomic_inc(drvdata->msr_refcnt);
+-	}
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-	rval = csr_readl(drvdata, drvdata->msr_start + offset * 4);
+-	val |= rval;
+-	csr_writel(drvdata, val, drvdata->msr_start + offset * 4);
+-	rval = csr_readl(drvdata, drvdata->msr_start + offset * 4);
+-	drvdata->msr[offset] = rval;
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	return size;
+-}
+-
+-static DEVICE_ATTR_RW(msr);
+-
+-static ssize_t msr_reset_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	unsigned long flags, val;
+-	int i;
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->msr_support ||
+-			IS_ERR_OR_NULL(drvdata->msr))
+-		return -EINVAL;
+-
+-	if (kstrtoul(buf, 0, &val) || val != 1)
+-		return -EINVAL;
+-
+-	if (atomic_read(drvdata->msr_refcnt) == 0)
+-		return -EINVAL;
+-
+-	atomic_set(drvdata->msr_refcnt, 0);
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-	CSR_UNLOCK(drvdata);
+-	for (i = 0; i < MSR_NUM; i++) {
+-		csr_writel(drvdata, 0, drvdata->msr_start + i * 4);
+-		drvdata->msr[i] = 0;
+-	}
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-
+-static DEVICE_ATTR_WO(msr_reset);
+-
+-static ssize_t flushperiod_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support) {
+-		dev_err(dev, "Invalid param\n");
+-		return -EINVAL;
+-	}
+-
+-	return scnprintf(buf, PAGE_SIZE, "%#x\n", drvdata->flushperiod);
+-}
+-
+-static ssize_t flushperiod_store(struct device *dev,
+-				struct device_attribute *attr,
+-				const char *buf,
+-				size_t size)
+-{
+-	unsigned long flags;
+-	unsigned long val;
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->usb_bam_support) {
+-		dev_err(dev, "Invalid param\n");
+-		return -EINVAL;
+-	}
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	if (kstrtoul(buf, 0, &val) || val > 0xffff) {
+-		spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-		return -EINVAL;
+-	}
+-
+-	if (drvdata->flushperiod == val)
+-		goto out;
+-
+-	drvdata->flushperiod = val;
+-
+-	if (drvdata->enable_flush)
+-		msm_qdss_csr_config_flush_period(drvdata);
+-
+-out:
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	return size;
+-}
+-
+-static DEVICE_ATTR_RW(flushperiod);
+-
+-static ssize_t hbeat_val0_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	return scnprintf(buf, PAGE_SIZE, "%llx\n", drvdata->hbeat_val0);
+-}
+-
+-static ssize_t hbeat_val0_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long val, flags;
+-	u32 val_lo, val_hi;
+-	int ret;
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	drvdata->hbeat_val0 = val;
+-	val_lo = val & 0xFFFFFFFF;
+-	val_hi = val >> 32;
+-
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, val_lo, CSR_TS_HBEAT_VAL0_LO);
+-	csr_writel(drvdata, val_hi, CSR_TS_HBEAT_VAL0_HI);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-static DEVICE_ATTR_RW(hbeat_val0);
+-
+-static ssize_t hbeat_val1_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	return scnprintf(buf, PAGE_SIZE, "%llx\n", drvdata->hbeat_val1);
+-}
+-
+-static ssize_t hbeat_val1_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long val, flags;
+-	u32 val_lo, val_hi;
+-	int ret;
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	drvdata->hbeat_val1 = val;
+-	val_lo = val & 0xFFFFFFFF;
+-	val_hi = val >> 32;
+-
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, val_lo, CSR_TS_HBEAT_VAL1_LO);
+-	csr_writel(drvdata, val_hi, CSR_TS_HBEAT_VAL1_HI);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-static DEVICE_ATTR_RW(hbeat_val1);
+-
+-static ssize_t hbeat_mask0_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	return scnprintf(buf, PAGE_SIZE, "%llx\n", drvdata->hbeat_mask0);
+-}
+-
+-static ssize_t hbeat_mask0_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long val, flags;
+-	u32 val_lo, val_hi;
+-	int ret;
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	drvdata->hbeat_mask0 = val;
+-	val_lo = val & 0xFFFFFFFF;
+-	val_hi = val >> 32;
+-
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, val_lo, CSR_TS_HBEAT_MASK0_LO);
+-	csr_writel(drvdata, val_hi, CSR_TS_HBEAT_MASK0_HI);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-static DEVICE_ATTR_RW(hbeat_mask0);
+-
+-static ssize_t hbeat_mask1_show(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	return scnprintf(buf, PAGE_SIZE, "%llx\n", drvdata->hbeat_mask1);
+-}
+-
+-static ssize_t hbeat_mask1_store(struct device *dev,
+-				 struct device_attribute *attr,
+-				 const char *buf,
+-				 size_t size)
+-{
+-	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
+-	unsigned long val, flags;
+-	u32 val_lo, val_hi;
+-	int ret;
+-
+-	if (IS_ERR_OR_NULL(drvdata) || !drvdata->timestamp_support)
+-		return -EINVAL;
+-
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	ret = clk_prepare_enable(drvdata->clk);
+-	if (ret)
+-		return ret;
+-
+-	spin_lock_irqsave(&drvdata->spin_lock, flags);
+-
+-	drvdata->hbeat_mask1 = val;
+-	val_lo = val & 0xFFFFFFFF;
+-	val_hi = val >> 32;
+-
+-	CSR_UNLOCK(drvdata);
+-	csr_writel(drvdata, val_lo, CSR_TS_HBEAT_MASK1_LO);
+-	csr_writel(drvdata, val_hi, CSR_TS_HBEAT_MASK1_HI);
+-	CSR_LOCK(drvdata);
+-	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
+-	clk_disable_unprepare(drvdata->clk);
+-	return size;
+-}
+-static DEVICE_ATTR_RW(hbeat_mask1);
+-
+-static struct attribute *swao_csr_attrs[] = {
+-	&dev_attr_timestamp.attr,
+-	&dev_attr_msr.attr,
+-	&dev_attr_msr_reset.attr,
+-	&dev_attr_hbeat_val0.attr,
+-	&dev_attr_hbeat_val1.attr,
+-	&dev_attr_hbeat_mask0.attr,
+-	&dev_attr_hbeat_mask1.attr,
+-	&dev_attr_timestamp_ctrl.attr,
+-	NULL,
+-};
+-
+-static struct attribute_group swao_csr_attr_grp = {
+-	.attrs = swao_csr_attrs,
+-};
+-
+-static const struct attribute_group *swao_csr_attr_grps[] = {
+-	&swao_csr_attr_grp,
+-	NULL,
+-};
+-
+-static struct attribute *csr_attrs[] = {
+-	&dev_attr_flushperiod.attr,
+-	NULL,
+-};
+-
+-static struct attribute_group csr_attr_grp = {
+-	.attrs = csr_attrs,
+-};
+-
+-static const struct attribute_group *csr_attr_grps[] = {
+-	&csr_attr_grp,
+-	NULL,
+-};
+-
+-static int csr_probe(struct platform_device *pdev)
+-{
+-	int ret;
+-	struct device *dev = &pdev->dev;
+-	struct coresight_platform_data *pdata;
+-	struct csr_drvdata *drvdata;
+-	struct resource *res, *msr_res;
+-	struct coresight_desc desc = { 0 };
+-
++
++	d = devm_kzalloc(dev, sizeof(*d), GFP_KERNEL);
++	if (!d)
++		return -ENOMEM;
++	platform_set_drvdata(pdev, d);
++	raw_spin_lock_init(&d->lock);
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "csr-base");
++	if (!res || resource_size(res) < 0x1000)
++		return -EINVAL;
++	d->size = resource_size(res);
++	d->base = devm_ioremap_resource(dev, res);
++	if (IS_ERR(d->base))
++		return PTR_ERR(d->base);
++	d->byte_counter = device_property_present(dev, "qcom,set-byte-cntr-support");
++	d->timestamp = device_property_present(dev, "qcom,timestamp-support");
++	desc.pdata = coresight_get_platform_data(dev);
++	if (IS_ERR(desc.pdata))
++		return PTR_ERR(desc.pdata);
++	dev->platform_data = desc.pdata;
+ 	desc.name = coresight_alloc_device_name(&csr_devs, dev);
+ 	if (!desc.name)
+ 		return -ENOMEM;
+-	pdata = coresight_get_platform_data(dev);
+-	if (IS_ERR(pdata))
+-		return PTR_ERR(pdata);
+-	pdev->dev.platform_data = pdata;
+-
+-	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+-	if (!drvdata)
+-		return -ENOMEM;
+-	drvdata->dev = &pdev->dev;
+-	platform_set_drvdata(pdev, drvdata);
+-
+-	drvdata->clk = devm_clk_get(dev, "apb_pclk");
+-	if (IS_ERR(drvdata->clk))
+-		dev_dbg(dev, "csr not config clk\n");
+-
+-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "csr-base");
+-	if (!res)
+-		return -ENODEV;
+-	drvdata->pbase = res->start;
+-
+-	drvdata->base = devm_ioremap(dev, res->start, resource_size(res));
+-	if (!drvdata->base)
+-		return -ENOMEM;
+-
+-	ret = of_property_read_u32(pdev->dev.of_node, "qcom,blk-size",
+-			&drvdata->blksize);
+-	if (ret)
+-		drvdata->blksize = BLKSIZE_256;
+-
+-	drvdata->usb_bam_support = of_property_read_bool(pdev->dev.of_node,
+-						"qcom,usb-bam-support");
+-	if (!drvdata->usb_bam_support)
+-		dev_dbg(dev, "usb_bam support handled by other subsystem\n");
+-	else
+-		dev_dbg(dev, "usb_bam operation supported\n");
+-
+-	drvdata->hwctrl_set_support = of_property_read_bool(pdev->dev.of_node,
+-						"qcom,hwctrl-set-support");
+-	if (!drvdata->hwctrl_set_support)
+-		dev_dbg(dev, "hwctrl_set_support handled by other subsystem\n");
+-	else
+-		dev_dbg(dev, "hwctrl_set_support operation supported\n");
+-
+-	drvdata->set_byte_cntr_support = of_property_read_bool(
+-			pdev->dev.of_node, "qcom,set-byte-cntr-support");
+-	if (!drvdata->set_byte_cntr_support)
+-		dev_dbg(dev, "set byte_cntr_support handled by other subsystem\n");
+-	else
+-		dev_dbg(dev, "set_byte_cntr_support operation supported\n");
+-
+-	drvdata->timestamp_support = of_property_read_bool(pdev->dev.of_node,
+-						"qcom,timestamp-support");
+-	if (!drvdata->timestamp_support)
+-		dev_dbg(dev, "timestamp_support handled by other subsystem\n");
+-	else
+-		dev_dbg(dev, "timestamp_support operation supported\n");
+-
+-	drvdata->aodbg_csr_support = of_property_read_bool(pdev->dev.of_node,
+-						"qcom,aodbg-csr-support");
+-	if (!drvdata->aodbg_csr_support)
+-		dev_dbg(dev, "aodbg_csr_support operation not supported\n");
+-	else
+-		dev_dbg(dev, "aodbg_csr_support operation supported\n");
+-
+-	drvdata->perflsheot_set_support = of_property_read_bool(
+-			pdev->dev.of_node, "qcom,perflsheot-set-support");
+-	if (!drvdata->perflsheot_set_support)
+-		dev_dbg(dev, "perflsheot_set_support handled by other subsystem\n");
+-	else
+-		dev_dbg(dev, "perflsheot_set_support operation supported\n");
+-
+-	if (drvdata->usb_bam_support)
+-		drvdata->flushperiod = FLUSHPERIOD_1;
+-	drvdata->msr_support = of_property_read_bool(pdev->dev.of_node,
+-						"qcom,msr-support");
+-	if (!drvdata->msr_support) {
+-		dev_dbg(dev, "msr_support handled by other subsystem\n");
+-	} else {
+-		msr_res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+-				"msr-base");
+-		if (!msr_res || msr_res->start < res->start || msr_res->end
+-		> res->end)
+-			return -ENODEV;
+-		drvdata->msr_start = msr_res->start - res->start;
+-		drvdata->msr_end = msr_res->end - res->start;
+-		drvdata->msr = devm_kzalloc(dev, MSR_NUM * sizeof(uint32_t),
+-						GFP_KERNEL);
+-		if (!drvdata->msr)
+-			return -ENOMEM;
+-
+-		drvdata->msr_refcnt = devm_kzalloc(dev, sizeof(atomic_t),
+-				GFP_KERNEL);
+-		if (!drvdata->msr_refcnt)
+-			return -ENOMEM;
+-		atomic_set(drvdata->msr_refcnt, 0);
+-		dev_dbg(dev, "msr_support operation supported\n");
+-	}
+-
+ 	desc.type = CORESIGHT_DEV_TYPE_HELPER;
+-	desc.pdata = pdev->dev.platform_data;
+-	desc.dev = &pdev->dev;
+-	if (drvdata->timestamp_support || drvdata->msr_support)
+-		desc.groups = swao_csr_attr_grps;
+-	else if (drvdata->usb_bam_support)
+-		desc.groups = csr_attr_grps;
+-
+-	drvdata->csdev = coresight_register(&desc);
+-	if (IS_ERR(drvdata->csdev))
+-		return PTR_ERR(drvdata->csdev);
+-
+-	/* Store the driver data pointer for use in exported functions */
+-	spin_lock_init(&drvdata->spin_lock);
+-	drvdata->csr.name = desc.name;
+-
+-	spin_lock(&csr_spinlock);
+-	list_add_tail(&drvdata->csr.link, &csr_list);
+-	spin_unlock(&csr_spinlock);
+-
+-	dev_info(dev, "CSR initialized: %s\n", drvdata->csr.name);
+-	return 0;
+-}
+-
+-static int csr_remove(struct platform_device *pdev)
+-{
+-	struct csr_drvdata *drvdata = platform_get_drvdata(pdev);
+-
+-	spin_lock(&csr_spinlock);
+-	list_del(&drvdata->csr.link);
+-	spin_unlock(&csr_spinlock);
+-
+-	coresight_unregister(drvdata->csdev);
+-	return 0;
+-}
+-
+-static const struct of_device_id csr_match[] = {
+-	{.compatible = "qcom,coresight-csr"},
+-	{}
++	desc.subtype.helper_subtype = CORESIGHT_DEV_SUBTYPE_HELPER_QCOM_CSR;
++	desc.ops = &csr_ops;
++	desc.dev = dev;
++	desc.access = CSDEV_ACCESS_IOMEM(d->base);
++	desc.groups = csr_groups;
++	ret = coresight_get_enable_clocks(dev, &d->pclk, &d->atclk);
++	if (ret)
++		return ret;
++	pm_runtime_get_noresume(dev);
++	pm_runtime_set_active(dev);
++	pm_runtime_enable(dev);
++	coresight_clear_self_claim_tag(&desc.access);
++	d->csdev = coresight_register(&desc);
++	ret = IS_ERR(d->csdev) ? PTR_ERR(d->csdev) : 0;
++	if (ret)
++		d->csdev = NULL;
++	pm_runtime_put(dev);
++	if (ret)
++		pm_runtime_disable(dev);
++	return ret;
++}
++
++static void csr_remove(struct platform_device *pdev)
++{
++	struct csr_drvdata *d = platform_get_drvdata(pdev);
++	coresight_unregister(d->csdev);
++	pm_runtime_disable(&pdev->dev);
++}
++static const struct of_device_id csr_match[] = {{.compatible = "qcom,coresight-csr"}, {}};
++MODULE_DEVICE_TABLE(of, csr_match);
++static struct platform_driver csr_driver = {
++    .probe = csr_probe,
++    .remove = csr_remove,
++    .driver = {.name = "coresight-csr",
++	       .of_match_table = csr_match,
++	       .pm = &csr_pm_ops,
++	       .suppress_bind_attrs = true},
+ };
+-
+-static struct platform_driver csr_driver = {
+-	.probe          = csr_probe,
+-	.remove         = csr_remove,
+-	.driver         = {
+-		.name   = "coresight-csr",
+-		.of_match_table = csr_match,
+-		.suppress_bind_attrs = true,
+-	},
+-};
+-
+-static int __init csr_init(void)
+-{
+-	return platform_driver_register(&csr_driver);
+-}
+-module_init(csr_init);
+-
+-static void __exit csr_exit(void)
+-{
+-	platform_driver_unregister(&csr_driver);
+-}
+-module_exit(csr_exit);
+-
++module_platform_driver(csr_driver);
+ MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("CoreSight CSR driver");
++MODULE_DESCRIPTION("Qualcomm CoreSight CSR ATID routing and byte counter");
+diff --git a/drivers/hwtracing/coresight/coresight-csr.h b/drivers/hwtracing/coresight/coresight-csr.h
+--- /dev/null
++++ b/drivers/hwtracing/coresight/coresight-csr.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _QCOM_CORESIGHT_CSR_H
++#define _QCOM_CORESIGHT_CSR_H
++#include <linux/coresight.h>
++int qcom_csr_attach(struct device *dev, struct coresight_platform_data *pdata,
++                    struct coresight_device **helper);
++int qcom_csr_set_byte_counter(struct coresight_device *csdev, u32 offset, u32 count);
++#endif
+diff --git a/drivers/hwtracing/coresight/coresight-tmc-core.c b/drivers/hwtracing/coresight/coresight-tmc-core.c
+--- a/drivers/hwtracing/coresight/coresight-tmc-core.c
++++ b/drivers/hwtracing/coresight/coresight-tmc-core.c
+@@ -31,6 +31,7 @@
+ 
+ #include "coresight-priv.h"
+ #include "coresight-tmc.h"
++#include "coresight-csr.h"
+ 
+ DEFINE_CORESIGHT_DEVLIST(etb_devs, "tmc_etb");
+ DEFINE_CORESIGHT_DEVLIST(etf_devs, "tmc_etf");
+@@ -805,12 +806,6 @@
+ 
+ 	devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
+ 	drvdata->config_type = BMVAL(devid, 6, 7);
+-	/* Native ETR requires CSR ATID/IRQ control, which is not ported here. */
+-	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR &&
+-	    device_property_present(dev, "coresight-csr")) {
+-		ret = -EOPNOTSUPP;
+-		goto out;
+-	}
+ 	drvdata->memwidth = tmc_get_memwidth(devid);
+ 	/* This device is not associated with a session */
+ 	drvdata->pid = -1;
+@@ -874,6 +869,11 @@
+ 	}
+ 	dev->platform_data = pdata;
+ 	desc.pdata = pdata;
++	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
++		ret = qcom_csr_attach(dev, pdata, &drvdata->csr);
++		if (ret)
++			goto out;
++	}
+ 
+ 	coresight_clear_self_claim_tag(&desc.access);
+ 	drvdata->csdev = coresight_register(&desc);
+@@ -882,11 +882,20 @@
+ 		goto out;
+ 	}
+ 
++	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
++		ret = tmc_stream_init(drvdata);
++		if (ret) {
++			coresight_unregister(drvdata->csdev);
++			goto out;
++		}
++	}
++
+ 	drvdata->miscdev.name = desc.name;
+ 	drvdata->miscdev.minor = MISC_DYNAMIC_MINOR;
+ 	drvdata->miscdev.fops = &tmc_fops;
+ 	ret = misc_register(&drvdata->miscdev);
+ 	if (ret) {
++		tmc_stream_remove(drvdata);
+ 		coresight_unregister(drvdata->csdev);
+ 		goto out;
+ 	}
+@@ -940,6 +949,7 @@
+ 	 * etb fops in this case, device is there until last file
+ 	 * handler to this device is closed.
+ 	 */
++	tmc_stream_remove(drvdata);
+ 	misc_deregister(&drvdata->miscdev);
+ 	if (drvdata->crashdev.fops)
+ 		misc_deregister(&drvdata->crashdev);
+diff --git a/drivers/hwtracing/coresight/coresight-tmc-etr.c b/drivers/hwtracing/coresight/coresight-tmc-etr.c
+--- a/drivers/hwtracing/coresight/coresight-tmc-etr.c
++++ b/drivers/hwtracing/coresight/coresight-tmc-etr.c
+@@ -18,8 +18,13 @@
+ #include "coresight-etm-perf.h"
+ #include "coresight-priv.h"
+ #include "coresight-tmc.h"
++#include "coresight-csr.h"
++#include <linux/of_irq.h>
++static void tmc_stream_stop(struct tmc_drvdata *d);
++static bool tmc_stream_is_open(struct tmc_drvdata *d);
+ 
+ struct etr_flat_buf {
++	bool coherent;
+ 	struct device	*dev;
+ 	dma_addr_t	daddr;
+ 	void		*vaddr;
+@@ -616,10 +621,14 @@
+ 	if (!flat_buf)
+ 		return -ENOMEM;
+ 
+-	flat_buf->vaddr = dma_alloc_noncoherent(real_dev, etr_buf->size,
+-						&flat_buf->daddr,
+-						DMA_FROM_DEVICE,
+-						GFP_KERNEL | __GFP_NOWARN);
++	flat_buf->coherent = drvdata->csr != NULL;
++	if (flat_buf->coherent)
++		flat_buf->vaddr = dma_alloc_coherent(real_dev, etr_buf->size,
++					&flat_buf->daddr, GFP_KERNEL | __GFP_NOWARN);
++	else
++		flat_buf->vaddr = dma_alloc_noncoherent(real_dev, etr_buf->size,
++						      &flat_buf->daddr, DMA_FROM_DEVICE,
++						      GFP_KERNEL | __GFP_NOWARN);
+ 	if (!flat_buf->vaddr) {
+ 		kfree(flat_buf);
+ 		return -ENOMEM;
+@@ -640,9 +649,11 @@
+ 	if (flat_buf && flat_buf->daddr) {
+ 		struct device *real_dev = flat_buf->dev->parent;
+ 
+-		dma_free_noncoherent(real_dev, etr_buf->size,
+-				     flat_buf->vaddr, flat_buf->daddr,
+-				     DMA_FROM_DEVICE);
++		if (flat_buf->coherent)
++			dma_free_coherent(real_dev, etr_buf->size, flat_buf->vaddr, flat_buf->daddr);
++		else
++			dma_free_noncoherent(real_dev, etr_buf->size,
++					     flat_buf->vaddr, flat_buf->daddr, DMA_FROM_DEVICE);
+ 	}
+ 	kfree(flat_buf);
+ }
+@@ -661,6 +672,11 @@
+ 		etr_buf->len = etr_buf->size;
+ 	else
+ 		etr_buf->len = rwp - rrp;
++
++	if (flat_buf->coherent) {
++		dma_rmb();
++		return;
++	}
+ 
+ 	/*
+ 	 * The driver always starts tracing at the beginning of the buffer,
+@@ -1062,6 +1078,8 @@
+ 	struct etr_buf *etr_buf = drvdata->etr_buf;
+ 	int rc = 0;
+ 
++	if (tmc_stream_is_open(drvdata))
++		return -EBUSY;
+ 	CS_UNLOCK(drvdata->base);
+ 
+ 	/* Wait for TMCSReady bit to be set */
+@@ -1185,9 +1203,11 @@
+ static void
+ tmc_etr_free_sysfs_buf(struct etr_buf *buf)
+ {
+-	if (buf)
++	if (buf && refcount_dec_and_test(&buf->refcount))
+ 		tmc_free_etr_buf(buf);
+ }
++
++#include "coresight-byte-cntr.c"
+ 
+ static void tmc_etr_sync_sysfs_buf(struct tmc_drvdata *drvdata)
+ {
+@@ -1202,7 +1222,7 @@
+ 		 * Insert barrier packets at the beginning, if there was
+ 		 * an overflow.
+ 		 */
+-		if (etr_buf->full)
++		if (etr_buf->full && !tmc_stream_is_open(drvdata))
+ 			tmc_etr_buf_insert_barrier_packet(etr_buf,
+ 							  etr_buf->offset);
+ 	}
+@@ -1213,6 +1233,7 @@
+ 	CS_UNLOCK(drvdata->base);
+ 
+ 	tmc_flush_and_stop(drvdata);
++	tmc_stream_stop(drvdata);
+ 	/*
+ 	 * When operating in sysFS mode the content of the buffer needs to be
+ 	 * read before the TMC is disabled.
+@@ -1940,7 +1961,7 @@
+ 		return -EINVAL;
+ 
+ 	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
+-	if (drvdata->reading) {
++	if (drvdata->reading || tmc_stream_is_open(drvdata)) {
+ 		ret = -EBUSY;
+ 		goto out;
+ 	}
+diff --git a/drivers/hwtracing/coresight/coresight-tmc.h b/drivers/hwtracing/coresight/coresight-tmc.h
+--- a/drivers/hwtracing/coresight/coresight-tmc.h
++++ b/drivers/hwtracing/coresight/coresight-tmc.h
+@@ -244,7 +244,10 @@
+  * @crash_mdata: Reserved memory for storing tmc crash metadata.
+  *		 Used by ETR/ETF.
+  */
++struct tmc_stream;
+ struct tmc_drvdata {
++	struct coresight_device *csr;
++	struct tmc_stream *stream;
+ 	struct clk		*atclk;
+ 	struct clk		*pclk;
+ 	void __iomem		*base;
+@@ -445,4 +448,7 @@
+ 				   enum cs_mode mode, void *data);
+ extern const struct attribute_group coresight_etr_group;
+ 
++int tmc_stream_init(struct tmc_drvdata *d);
++void tmc_stream_remove(struct tmc_drvdata *d);
++
+ #endif
+diff --git a/drivers/hwtracing/coresight/coresight-tpdm-legacy.c b/drivers/hwtracing/coresight/coresight-tpdm-legacy.c
+--- /dev/null
++++ b/drivers/hwtracing/coresight/coresight-tpdm-legacy.c
+@@ -0,0 +1,363 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
++ */
++/* Pinned Qualcomm v1 BC/TC/GPR sequences and bounded configuration. */
++#define tpdm_writel(d, val, off) writel_relaxed(val, (d)->base + (off))
++#define tpdm_readl(d, off) readl_relaxed((d)->base + (off))
++static void __tpdm_config_bc_msr(struct tpdm_drvdata *drvdata)
++{
++	int i;
++
++	if (!drvdata->msr_support)
++		return;
++
++	for (i = 0; i < TPDM_BC_MAX_MSR; i++)
++		tpdm_writel(drvdata, drvdata->bc->msr[i], TPDM_BC_MSR(i));
++}
++static void __tpdm_config_tc_msr(struct tpdm_drvdata *drvdata)
++{
++	int i;
++
++	if (!drvdata->msr_support)
++		return;
++
++	for (i = 0; i < TPDM_TC_MAX_MSR; i++)
++		tpdm_writel(drvdata, drvdata->tc->msr[i], TPDM_TC_MSR(i));
++}
++static void __tpdm_enable_bc(struct tpdm_drvdata *drvdata)
++{
++	int i;
++	uint32_t val;
++
++	if (drvdata->bc->sat_mode)
++		tpdm_writel(drvdata, drvdata->bc->sat_mode, TPDM_BC_SATROLL);
++	else
++		tpdm_writel(drvdata, 0x0, TPDM_BC_SATROLL);
++
++	{
++		tpdm_writel(drvdata, 0xFFFFFFFF, TPDM_BC_CNTENCLR);
++		tpdm_writel(drvdata, drvdata->bc->enable_counters, TPDM_BC_CNTENSET);
++	}
++	if (drvdata->bc->clear_counters)
++		tpdm_writel(drvdata, drvdata->bc->clear_counters, TPDM_BC_CNTENCLR);
++
++	{
++		tpdm_writel(drvdata, 0xFFFFFFFF, TPDM_BC_INTENCLR);
++		tpdm_writel(drvdata, drvdata->bc->enable_irq, TPDM_BC_INTENSET);
++	}
++	if (drvdata->bc->clear_irq)
++		tpdm_writel(drvdata, drvdata->bc->clear_irq, TPDM_BC_INTENCLR);
++
++	if (drvdata->bc_trig_type == TPDM_SUPPORT_TYPE_FULL) {
++		for (i = 0; i < drvdata->bc_counters_avail; i++) {
++			tpdm_writel(drvdata, drvdata->bc->trig_val_lo[i], TPDM_BC_TRIG_LO(i));
++			tpdm_writel(drvdata, drvdata->bc->trig_val_hi[i], TPDM_BC_TRIG_HI(i));
++		}
++	} else if (drvdata->bc_trig_type == TPDM_SUPPORT_TYPE_PARTIAL) {
++		tpdm_writel(drvdata, drvdata->bc->trig_val_lo[0], TPDM_BC_TRIG_LO(0));
++		tpdm_writel(drvdata, drvdata->bc->trig_val_hi[0], TPDM_BC_TRIG_HI(0));
++	}
++
++	if (drvdata->bc_gang_type != TPDM_SUPPORT_TYPE_NO)
++		tpdm_writel(drvdata, drvdata->bc->enable_ganging, TPDM_BC_GANG);
++
++	for (i = 0; i < TPDM_BC_MAX_OVERFLOW; i++)
++		tpdm_writel(drvdata, drvdata->bc->overflow_val[i], TPDM_BC_OVERFLOW(i));
++
++	__tpdm_config_bc_msr(drvdata);
++
++	val = tpdm_readl(drvdata, TPDM_BC_CR);
++	if (drvdata->bc->retrieval_mode == TPDM_MODE_APB)
++		val = val | BIT(2);
++	else
++		val = val & ~BIT(2);
++	tpdm_writel(drvdata, val, TPDM_BC_CR);
++
++	val = tpdm_readl(drvdata, TPDM_BC_CR);
++	/* Set the enable bit */
++	val = val | BIT(0);
++	tpdm_writel(drvdata, val, TPDM_BC_CR);
++}
++static void __tpdm_enable_tc(struct tpdm_drvdata *drvdata)
++{
++	int i;
++	uint32_t val;
++
++	{
++		tpdm_writel(drvdata, 0xF, TPDM_TC_CNTENCLR);
++		tpdm_writel(drvdata, drvdata->tc->enable_counters, TPDM_TC_CNTENSET);
++	}
++	if (drvdata->tc->clear_counters)
++		tpdm_writel(drvdata, drvdata->tc->clear_counters, TPDM_TC_CNTENCLR);
++
++	{
++		tpdm_writel(drvdata, 0xF, TPDM_TC_INTENCLR);
++		tpdm_writel(drvdata, drvdata->tc->enable_irq, TPDM_TC_INTENSET);
++	}
++	if (drvdata->tc->clear_irq)
++		tpdm_writel(drvdata, drvdata->tc->clear_irq, TPDM_TC_INTENCLR);
++
++	if (drvdata->tc_trig_type == TPDM_SUPPORT_TYPE_FULL) {
++		for (i = 0; i < TPDM_TC_MAX_TRIG; i++) {
++			tpdm_writel(drvdata, drvdata->tc->trig_sel[i], TPDM_TC_TRIG_SEL(i));
++			tpdm_writel(drvdata, drvdata->tc->trig_val_lo[i], TPDM_TC_TRIG_LO(i));
++			tpdm_writel(drvdata, drvdata->tc->trig_val_hi[i], TPDM_TC_TRIG_HI(i));
++		}
++	} else if (drvdata->tc_trig_type == TPDM_SUPPORT_TYPE_PARTIAL) {
++		tpdm_writel(drvdata, drvdata->tc->trig_sel[0], TPDM_TC_TRIG_SEL(0));
++		tpdm_writel(drvdata, drvdata->tc->trig_val_lo[0], TPDM_TC_TRIG_LO(0));
++		tpdm_writel(drvdata, drvdata->tc->trig_val_hi[0], TPDM_TC_TRIG_HI(0));
++	}
++
++	__tpdm_config_tc_msr(drvdata);
++
++	val = tpdm_readl(drvdata, TPDM_TC_CR);
++	if (drvdata->tc->sat_mode)
++		val = val | BIT(4);
++	else
++		val = val & ~BIT(4);
++	if (drvdata->tc->retrieval_mode == TPDM_MODE_APB)
++		val = val | BIT(2);
++	else
++		val = val & ~BIT(2);
++	tpdm_writel(drvdata, val, TPDM_TC_CR);
++
++	val = tpdm_readl(drvdata, TPDM_TC_CR);
++	/* Set the enable bit */
++	val = val | BIT(0);
++	tpdm_writel(drvdata, val, TPDM_TC_CR);
++}
++
++static void tpdm_enable_legacy(struct tpdm_drvdata *d)
++{
++	unsigned int i;
++	if (d->bc)
++		__tpdm_enable_bc(d);
++	if (d->tc)
++		__tpdm_enable_tc(d);
++	if (d->gpr)
++		for (i = 0; i < TPDM_GPR_REGS_MAX; i++)
++			if (d->gpr->dirty[i])
++				tpdm_writel(d, d->gpr->gp_regs[i], TPDM_GPR_CR(i));
++}
++static void tpdm_disable_legacy(struct tpdm_drvdata *d)
++{
++	if (d->bc)
++		tpdm_writel(d, tpdm_readl(d, TPDM_BC_CR) & ~BIT(0), TPDM_BC_CR);
++	if (d->tc)
++		tpdm_writel(d, tpdm_readl(d, TPDM_TC_CR) & ~BIT(0), TPDM_TC_CR);
++}
++
++enum legacy_setting {
++	BC_ENABLE,
++	BC_SAT,
++	BC_RETRIEVAL,
++	BC_GANG,
++	BC_TRIGGER_LO,
++	BC_TRIGGER_HI,
++	BC_MSR,
++	TC_ENABLE,
++	TC_SAT,
++	TC_RETRIEVAL,
++	TC_TRIGGER_SEL,
++	TC_TRIGGER_LO,
++	TC_TRIGGER_HI,
++	TC_MSR,
++	GPR_REG,
++};
++struct tpdm_legacy_attribute {
++	struct device_attribute attr;
++	enum legacy_setting setting;
++	bool array;
++};
++
++static u32 *tpdm_legacy_slot(struct tpdm_drvdata *d, enum legacy_setting key, unsigned int index,
++			     u32 *mask)
++{
++	u32 *slot = NULL;
++	unsigned int count = 1;
++	*mask = U32_MAX;
++	if (!d->legacy)
++		return NULL;
++	switch (key) {
++	case BC_ENABLE:
++		if (d->bc) {
++			slot = &d->bc->enable_counters;
++			*mask = U32_MAX >> (32 - d->bc_counters_avail);
++		}
++		break;
++	case BC_SAT:
++		if (d->bc) {
++			slot = &d->bc->sat_mode;
++			*mask = U32_MAX >> (32 - d->bc_counters_avail);
++		}
++		break;
++	case BC_RETRIEVAL:
++		if (d->bc) {
++			slot = &d->bc->retrieval_mode;
++			*mask = 1;
++		}
++		break;
++	case BC_GANG:
++		if (d->bc && d->bc_gang_type != TPDM_SUPPORT_TYPE_NO) {
++			slot = &d->bc->enable_ganging;
++			*mask = U32_MAX >> (32 - d->bc_counters_avail);
++		}
++		break;
++	case BC_TRIGGER_LO:
++	case BC_TRIGGER_HI:
++		if (d->bc && d->bc_trig_type != TPDM_SUPPORT_TYPE_NO) {
++			slot = key == BC_TRIGGER_LO ? d->bc->trig_val_lo : d->bc->trig_val_hi;
++			count =
++			    d->bc_trig_type == TPDM_SUPPORT_TYPE_FULL ? d->bc_counters_avail : 1;
++		}
++		break;
++	case BC_MSR:
++		if (d->bc && d->msr_support) {
++			slot = d->bc->msr;
++			count = TPDM_BC_MAX_MSR;
++		}
++		break;
++	case TC_ENABLE:
++		if (d->tc) {
++			slot = &d->tc->enable_counters;
++			*mask = (1U << d->tc_counters_avail) - 1;
++		}
++		break;
++	case TC_SAT:
++		if (d->tc) {
++			slot = &d->tc->sat_mode;
++			*mask = 1;
++		}
++		break;
++	case TC_RETRIEVAL:
++		if (d->tc) {
++			slot = &d->tc->retrieval_mode;
++			*mask = 1;
++		}
++		break;
++	case TC_TRIGGER_SEL:
++	case TC_TRIGGER_LO:
++	case TC_TRIGGER_HI:
++		if (d->tc && d->tc_trig_type != TPDM_SUPPORT_TYPE_NO) {
++			slot = key == TC_TRIGGER_SEL  ? d->tc->trig_sel
++			       : key == TC_TRIGGER_LO ? d->tc->trig_val_lo
++						      : d->tc->trig_val_hi;
++			count = d->tc_trig_type == TPDM_SUPPORT_TYPE_FULL ? TPDM_TC_MAX_TRIG : 1;
++			/* Native selector is a raw u32 register, not a counter-enable mask. */
++		}
++		break;
++	case TC_MSR:
++		if (d->tc && d->msr_support) {
++			slot = d->tc->msr;
++			count = TPDM_TC_MAX_MSR;
++		}
++		break;
++	case GPR_REG:
++		if (d->gpr) {
++			slot = d->gpr->gp_regs;
++			count = TPDM_GPR_REGS_MAX;
++		}
++		break;
++	}
++	return slot && index < count ? slot + index : NULL;
++}
++
++static ssize_t tpdm_legacy_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct tpdm_drvdata *d = dev_get_drvdata(dev->parent);
++	struct tpdm_legacy_attribute *a = container_of(attr, struct tpdm_legacy_attribute, attr);
++	u32 *slot, mask;
++	unsigned int i;
++	ssize_t len = 0;
++	guard(spinlock)(&d->spinlock);
++	for (i = 0; (slot = tpdm_legacy_slot(d, a->setting, i, &mask)); i++) {
++		if (a->array)
++			len += sysfs_emit_at(buf, len, "%u 0x%08x\n", i, *slot);
++		else {
++			len = sysfs_emit(buf, "0x%x\n", *slot);
++			break;
++		}
++	}
++	return len ? len : -EOPNOTSUPP;
++}
++static ssize_t tpdm_legacy_store(struct device *dev, struct device_attribute *attr, const char *buf,
++				 size_t size)
++{
++	struct tpdm_drvdata *d = dev_get_drvdata(dev->parent);
++	struct tpdm_legacy_attribute *a = container_of(attr, struct tpdm_legacy_attribute, attr);
++	unsigned int index = 0;
++	u32 value, mask, *slot;
++	char extra, index_text[20], value_text[20];
++	if (a->array) {
++		if (sscanf(buf, "%19s %19s %c", index_text, value_text, &extra) != 2 ||
++		    kstrtou32(index_text, 10, &index) || kstrtou32(value_text, 16, &value))
++			return -EINVAL;
++	} else if (kstrtou32(buf, 0, &value))
++		return -EINVAL;
++	guard(spinlock)(&d->spinlock);
++	if (d->enable)
++		return -EBUSY;
++	slot = tpdm_legacy_slot(d, a->setting, index, &mask);
++	if (!slot)
++		return -EOPNOTSUPP;
++	if (value & ~mask)
++		return -ERANGE;
++	*slot = value;
++	if (a->setting == GPR_REG)
++		d->gpr->dirty[index] = true;
++	return size;
++}
++#define LEGACY_ATTR(name, key, indexed)                                                            \
++	static struct tpdm_legacy_attribute legacy_##name = {                                      \
++	    .attr = __ATTR(name, 0644, tpdm_legacy_show, tpdm_legacy_store),                       \
++	    .setting = key,                                                                        \
++	    .array = indexed}
++LEGACY_ATTR(bc_enable_counters, BC_ENABLE, false);
++LEGACY_ATTR(bc_sat_mode, BC_SAT, false);
++LEGACY_ATTR(bc_retrieval_mode, BC_RETRIEVAL, false);
++LEGACY_ATTR(bc_enable_ganging, BC_GANG, false);
++LEGACY_ATTR(bc_trig_val_lo, BC_TRIGGER_LO, true);
++LEGACY_ATTR(bc_trig_val_hi, BC_TRIGGER_HI, true);
++LEGACY_ATTR(bc_msr, BC_MSR, true);
++LEGACY_ATTR(tc_enable_counters, TC_ENABLE, false);
++LEGACY_ATTR(tc_sat_mode, TC_SAT, false);
++LEGACY_ATTR(tc_retrieval_mode, TC_RETRIEVAL, false);
++LEGACY_ATTR(tc_trig_sel, TC_TRIGGER_SEL, true);
++LEGACY_ATTR(tc_trig_val_lo, TC_TRIGGER_LO, true);
++LEGACY_ATTR(tc_trig_val_hi, TC_TRIGGER_HI, true);
++LEGACY_ATTR(tc_msr, TC_MSR, true);
++LEGACY_ATTR(gp_regs, GPR_REG, true);
++static struct attribute *tpdm_legacy_attrs[] = {
++    &legacy_bc_enable_counters.attr.attr,
++    &legacy_bc_sat_mode.attr.attr,
++    &legacy_bc_retrieval_mode.attr.attr,
++    &legacy_bc_enable_ganging.attr.attr,
++    &legacy_bc_trig_val_lo.attr.attr,
++    &legacy_bc_trig_val_hi.attr.attr,
++    &legacy_bc_msr.attr.attr,
++    &legacy_tc_enable_counters.attr.attr,
++    &legacy_tc_sat_mode.attr.attr,
++    &legacy_tc_retrieval_mode.attr.attr,
++    &legacy_tc_trig_sel.attr.attr,
++    &legacy_tc_trig_val_lo.attr.attr,
++    &legacy_tc_trig_val_hi.attr.attr,
++    &legacy_tc_msr.attr.attr,
++    &legacy_gp_regs.attr.attr,
++    NULL,
++};
++static umode_t tpdm_legacy_visible(struct kobject *kobj, struct attribute *attr, int n)
++{
++	struct device *dev = kobj_to_dev(kobj);
++	struct tpdm_drvdata *d = dev_get_drvdata(dev->parent);
++	struct tpdm_legacy_attribute *a =
++	    container_of(attr, struct tpdm_legacy_attribute, attr.attr);
++	u32 mask;
++	return tpdm_legacy_slot(d, a->setting, 0, &mask) ? attr->mode : 0;
++}
++static const struct attribute_group tpdm_legacy_grp = {
++    .attrs = tpdm_legacy_attrs,
++    .is_visible = tpdm_legacy_visible,
++};
+diff --git a/drivers/hwtracing/coresight/coresight-tpdm.c b/drivers/hwtracing/coresight/coresight-tpdm.c
+--- a/drivers/hwtracing/coresight/coresight-tpdm.c
++++ b/drivers/hwtracing/coresight/coresight-tpdm.c
+@@ -275,6 +275,12 @@
+ 
+ 	if (drvdata->cmb)
+ 		memset(drvdata->cmb, 0, sizeof(struct cmb_dataset));
++	if (drvdata->bc)
++		memset(drvdata->bc, 0, sizeof(*drvdata->bc));
++	if (drvdata->tc)
++		memset(drvdata->tc, 0, sizeof(*drvdata->tc));
++	if (drvdata->gpr)
++		memset(drvdata->gpr, 0, sizeof(*drvdata->gpr));
+ }
+ 
+ static void set_dsb_mode(struct tpdm_drvdata *drvdata, u32 *val)
+@@ -475,10 +481,13 @@
+  * Bit(DSB). This function will initialize the configuration according
+  * to the dataset type supported by the TPDM.
+  */
++#include "coresight-tpdm-legacy.c"
++
+ static void __tpdm_enable(struct tpdm_drvdata *drvdata)
+ {
+ 	CS_UNLOCK(drvdata->base);
+ 
++	tpdm_enable_legacy(drvdata);
+ 	tpdm_enable_dsb(drvdata);
+ 	tpdm_enable_cmb(drvdata);
+ 
+@@ -541,6 +550,7 @@
+ {
+ 	CS_UNLOCK(drvdata->base);
+ 
++	tpdm_disable_legacy(drvdata);
+ 	tpdm_disable_dsb(drvdata);
+ 	tpdm_disable_cmb(drvdata);
+ 
+@@ -582,21 +592,44 @@
+ 	/*  Get the datasets present on the TPDM. */
+ 	pidr = readl_relaxed(drvdata->base + CORESIGHT_PERIPHIDR0);
+ 	drvdata->datasets |= pidr & GENMASK(TPDM_DATASETS - 1, 0);
+-	/* This provider implements DSB/CMB/MCMB, not legacy BC/TC/GPR. */
+-	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB |
+-				  TPDM_PIDR0_DS_MCMB)))
++	if (!(drvdata->datasets & (TPDM_PIDR0_DS_DSB | TPDM_PIDR0_DS_CMB | TPDM_PIDR0_DS_MCMB)) &&
++	    !(drvdata->legacy &&
++	      (drvdata->datasets & (TPDM_PIDR0_DS_BC | TPDM_PIDR0_DS_TC | TPDM_PIDR0_DS_GPR))))
+ 		return -EOPNOTSUPP;
++	if (drvdata->legacy) {
++		u32 devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
++		drvdata->bc_counters_avail = FIELD_GET(GENMASK(10, 6), devid) + 1;
++		drvdata->tc_counters_avail = FIELD_GET(GENMASK(5, 4), devid) + 1;
++		drvdata->bc_trig_type = FIELD_GET(GENMASK(26, 25), devid);
++		drvdata->tc_trig_type = FIELD_GET(GENMASK(28, 27), devid);
++		drvdata->bc_gang_type = FIELD_GET(GENMASK(24, 23), devid);
++		if (((drvdata->datasets & TPDM_PIDR0_DS_BC) &&
++		     (drvdata->bc_trig_type > TPDM_SUPPORT_TYPE_NO ||
++		      drvdata->bc_gang_type > TPDM_SUPPORT_TYPE_NO)) ||
++		    ((drvdata->datasets & TPDM_PIDR0_DS_TC) &&
++		     drvdata->tc_trig_type > TPDM_SUPPORT_TYPE_NO))
++			return -EINVAL;
++		drvdata->msr_support = device_property_present(drvdata->dev, "qcom,msr-support");
++#define ALLOC_LEGACY(member, bit)                                                                  \
++	if (drvdata->datasets & bit) {                                                             \
++		drvdata->member =                                                                  \
++		    devm_kzalloc(drvdata->dev, sizeof(*drvdata->member), GFP_KERNEL);              \
++		if (!drvdata->member)                                                              \
++			return -ENOMEM;                                                            \
++	}
++		ALLOC_LEGACY(bc, TPDM_PIDR0_DS_BC);
++		ALLOC_LEGACY(tc, TPDM_PIDR0_DS_TC);
++		ALLOC_LEGACY(gpr, TPDM_PIDR0_DS_GPR);
++#undef ALLOC_LEGACY
++	}
+ 
+ 	if (tpdm_has_dsb_dataset(drvdata) && (!drvdata->dsb)) {
+-		drvdata->dsb = devm_kzalloc(drvdata->dev,
+-						sizeof(*drvdata->dsb), GFP_KERNEL);
++		drvdata->dsb = devm_kzalloc(drvdata->dev, sizeof(*drvdata->dsb), GFP_KERNEL);
+ 		if (!drvdata->dsb)
+ 			return -ENOMEM;
+ 	}
+-	if ((tpdm_has_cmb_dataset(drvdata) || tpdm_has_mcmb_dataset(drvdata))
+-			&& (!drvdata->cmb)) {
+-		drvdata->cmb = devm_kzalloc(drvdata->dev,
+-						sizeof(*drvdata->cmb), GFP_KERNEL);
++	if ((tpdm_has_cmb_dataset(drvdata) || tpdm_has_mcmb_dataset(drvdata)) && (!drvdata->cmb)) {
++		drvdata->cmb = devm_kzalloc(drvdata->dev, sizeof(*drvdata->cmb), GFP_KERNEL);
+ 		if (!drvdata->cmb)
+ 			return -ENOMEM;
+ 	}
+@@ -620,6 +653,10 @@
+ 		return -EINVAL;
+ 
+ 	spin_lock(&drvdata->spinlock);
++	if (drvdata->enable) {
++		spin_unlock(&drvdata->spinlock);
++		return -EBUSY;
++	}
+ 	tpdm_reset_datasets(drvdata);
+ 	spin_unlock(&drvdata->spinlock);
+ 
+@@ -647,6 +684,7 @@
+ 	if (val != 1 && val != 2)
+ 		return -EINVAL;
+ 
++	guard(spinlock)(&drvdata->spinlock);
+ 	if (!drvdata->enable)
+ 		return -EINVAL;
+ 
+@@ -1356,6 +1394,7 @@
+ 	&tpdm_cmb_patt_grp,
+ 	&tpdm_cmb_msr_grp,
+ 	&tpdm_mcmb_attr_grp,
++	&tpdm_legacy_grp,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/hwtracing/coresight/coresight-tpdm.h b/drivers/hwtracing/coresight/coresight-tpdm.h
+--- a/drivers/hwtracing/coresight/coresight-tpdm.h
++++ b/drivers/hwtracing/coresight/coresight-tpdm.h
+@@ -9,6 +9,96 @@
+ /* The max number of the datasets that TPDM supports */
+ #define TPDM_DATASETS       7
+ 
++/* GPR Registers */
++#define TPDM_GPR_CR(n)		(0x0 + (n * 4))
++
++/* BC Subunit Registers */
++#define TPDM_BC_CR		(0x280)
++#define TPDM_BC_SATROLL		(0x284)
++#define TPDM_BC_CNTENSET	(0x288)
++#define TPDM_BC_CNTENCLR	(0x28C)
++#define TPDM_BC_INTENSET	(0x290)
++#define TPDM_BC_INTENCLR	(0x294)
++#define TPDM_BC_TRIG_LO(n)	(0x298 + (n * 4))
++#define TPDM_BC_TRIG_HI(n)	(0x318 + (n * 4))
++#define TPDM_BC_GANG		(0x398)
++#define TPDM_BC_OVERFLOW(n)	(0x39C + (n * 4))
++#define TPDM_BC_OVSR		(0x3C0)
++#define TPDM_BC_SELR		(0x3C4)
++#define TPDM_BC_CNTR_LO		(0x3C8)
++#define TPDM_BC_CNTR_HI		(0x3CC)
++#define TPDM_BC_SHADOW_LO(n)	(0x3D0 + (n * 4))
++#define TPDM_BC_SHADOW_HI(n)	(0x450 + (n * 4))
++#define TPDM_BC_SWINC		(0x4D0)
++#define TPDM_BC_MSR(n)		(0x4F0 + (n * 4))
++
++/* TC Subunit Registers */
++#define TPDM_TC_CR		(0x500)
++#define TPDM_TC_CNTENSET	(0x504)
++#define TPDM_TC_CNTENCLR	(0x508)
++#define TPDM_TC_INTENSET	(0x50C)
++#define TPDM_TC_INTENCLR	(0x510)
++#define TPDM_TC_TRIG_SEL(n)	(0x514 + (n * 4))
++#define TPDM_TC_TRIG_LO(n)	(0x534 + (n * 4))
++#define TPDM_TC_TRIG_HI(n)	(0x554 + (n * 4))
++#define TPDM_TC_OVSR_GP		(0x580)
++#define TPDM_TC_OVSR_IMPL	(0x584)
++#define TPDM_TC_SELR		(0x588)
++#define TPDM_TC_CNTR_LO		(0x58C)
++#define TPDM_TC_CNTR_HI		(0x590)
++#define TPDM_TC_SHADOW_LO(n)	(0x594 + (n * 4))
++#define TPDM_TC_SHADOW_HI(n)	(0x644 + (n * 4))
++#define TPDM_TC_SWINC		(0x700)
++#define TPDM_TC_MSR(n)		(0x768 + (n * 4))
++
++#define TPDM_PIDR0_DS_TC BIT(3)
++#define TPDM_PIDR0_DS_BC BIT(4)
++#define TPDM_PIDR0_DS_GPR BIT(5)
++#define TPDM_BC_MAX_COUNTERS 32
++#define TPDM_BC_MAX_OVERFLOW 6
++#define TPDM_BC_MAX_MSR 4
++#define TPDM_TC_MAX_COUNTERS 44
++#define TPDM_TC_MAX_TRIG 8
++#define TPDM_TC_MAX_MSR 6
++#define TPDM_GPR_REGS_MAX 160
++#define TPDM_MODE_ATB 0
++#define TPDM_MODE_APB 1
++#define TPDM_SUPPORT_TYPE_FULL 0
++#define TPDM_SUPPORT_TYPE_PARTIAL 1
++#define TPDM_SUPPORT_TYPE_NO 2
++struct bc_dataset {
++	u32		capture_mode;
++	u32		retrieval_mode;
++	uint32_t		sat_mode;
++	uint32_t		enable_counters;
++	uint32_t		clear_counters;
++	uint32_t		enable_irq;
++	uint32_t		clear_irq;
++	uint32_t		trig_val_lo[TPDM_BC_MAX_COUNTERS];
++	uint32_t		trig_val_hi[TPDM_BC_MAX_COUNTERS];
++	uint32_t		enable_ganging;
++	uint32_t		overflow_val[TPDM_BC_MAX_OVERFLOW];
++	uint32_t		msr[TPDM_BC_MAX_MSR];
++};
++
++struct tc_dataset {
++	u32		capture_mode;
++	u32		retrieval_mode;
++	u32			sat_mode;
++	uint32_t		enable_counters;
++	uint32_t		clear_counters;
++	uint32_t		enable_irq;
++	uint32_t		clear_irq;
++	uint32_t		trig_sel[TPDM_TC_MAX_TRIG];
++	uint32_t		trig_val_lo[TPDM_TC_MAX_TRIG];
++	uint32_t		trig_val_hi[TPDM_TC_MAX_TRIG];
++	uint32_t		msr[TPDM_TC_MAX_MSR];
++};
++
++struct gpr_dataset {
++ bool dirty[TPDM_GPR_REGS_MAX];
++ u32 gp_regs[TPDM_GPR_REGS_MAX];
++};
+ /* CMB/MCMB Subunit Registers */
+ #define TPDM_CMB_CR		(0xA00)
+ /* CMB subunit timestamp insertion enable register */
+@@ -303,6 +393,12 @@
+  */
+ 
+ struct tpdm_drvdata {
++	struct bc_dataset *bc;
++	struct tc_dataset *tc;
++	struct gpr_dataset *gpr;
++	u32 bc_counters_avail, tc_counters_avail;
++	u32 bc_trig_type, tc_trig_type, bc_gang_type;
++	bool msr_support;
+ 	void __iomem		*base;
+ 	struct device		*dev;
+ 	struct coresight_device	*csdev;
+diff --git a/drivers/hwtracing/coresight/coresight-trace-noc.c b/drivers/hwtracing/coresight/coresight-trace-noc.c
+--- a/drivers/hwtracing/coresight/coresight-trace-noc.c
++++ b/drivers/hwtracing/coresight/coresight-trace-noc.c
+@@ -3,35 +3,34 @@
+  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+  */
+ 
++#include <linux/amba/bus.h>
++#include <linux/coresight.h>
++#include <linux/device.h>
++#include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+-#include <linux/device.h>
++#include <linux/of.h>
+ #include <linux/platform_device.h>
+-#include <linux/amba/bus.h>
+-#include <linux/io.h>
+-#include <linux/coresight.h>
+-#include <linux/of.h>
+ 
+ #include "coresight-priv.h"
+-#include "coresight-common.h"
++
++#include "coresight-trace-id.h"
+ #include "coresight-trace-noc.h"
+-#include "coresight-trace-id.h"
+-
+-static ssize_t flush_req_store(struct device *dev,
+-					    struct device_attribute *attr,
+-					    const char *buf,
+-					    size_t size)
+-{
++
++static ssize_t flush_req_store(struct device *dev, struct device_attribute *attr, const char *buf,
++			       size_t size)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	unsigned long val;
+ 	u32 reg;
+ 
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
++	if (kstrtoul(buf, 16, &val) || val > 1)
++		return -EINVAL;
++
++	spin_lock_irqsave(&drvdata->spinlock, flags);
+ 	if (!drvdata->enable) {
+-		spin_unlock(&drvdata->spinlock);
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 		return -EPERM;
+ 	}
+ 
+@@ -40,138 +39,139 @@
+ 		reg = reg | TRACE_NOC_CTRL_FLUSHREQ;
+ 		writel_relaxed(reg, drvdata->base + TRACE_NOC_CTRL);
+ 	}
+-	spin_unlock(&drvdata->spinlock);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 
+ 	return size;
+ }
+ static DEVICE_ATTR_WO(flush_req);
+ 
+-static ssize_t flush_status_show(struct device *dev,
+-					     struct device_attribute *attr,
+-					     char *buf)
+-{
++static ssize_t flush_status_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	u32 val;
+ 
+-	spin_lock(&drvdata->spinlock);
++	spin_lock_irqsave(&drvdata->spinlock, flags);
+ 	if (!drvdata->enable) {
+-		spin_unlock(&drvdata->spinlock);
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 		return -EPERM;
+ 	}
+ 
+ 	val = readl_relaxed(drvdata->base + TRACE_NOC_CTRL);
+-	spin_unlock(&drvdata->spinlock);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 	return scnprintf(buf, PAGE_SIZE, "%lx\n", BMVAL(val, 2, 2));
+ }
+ static DEVICE_ATTR_RO(flush_status);
+ 
+-static ssize_t flag_type_show(struct device *dev,
+-				       struct device_attribute *attr,
+-				       char *buf)
++static ssize_t flag_type_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 
+ 	return scnprintf(buf, PAGE_SIZE, "%x\n", drvdata->flagType);
+ }
+ 
+-static ssize_t flag_type_store(struct device *dev,
+-					struct device_attribute *attr,
+-					const char *buf,
+-					size_t size)
+-{
++static ssize_t flag_type_store(struct device *dev, struct device_attribute *attr, const char *buf,
++			       size_t size)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	unsigned long val;
+ 
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
++	if (kstrtoul(buf, 16, &val) || val > 1)
++		return -EINVAL;
++
++	spin_lock_irqsave(&drvdata->spinlock, flags);
++	if (drvdata->enable) {
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
++		return -EBUSY;
++	}
+ 	if (val)
+ 		drvdata->flagType = FLAG_TS;
+ 	else
+ 		drvdata->flagType = FLAG;
+-	spin_unlock(&drvdata->spinlock);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 
+ 	return size;
+ }
+ static DEVICE_ATTR_RW(flag_type);
+ 
+-static ssize_t freq_type_show(struct device *dev,
+-				    struct device_attribute *attr,
+-				    char *buf)
++static ssize_t freq_type_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 
+ 	return scnprintf(buf, PAGE_SIZE, "%x\n", drvdata->freqType);
+ }
+ 
+-static ssize_t freq_type_store(struct device *dev,
+-				    struct device_attribute *attr,
+-				    const char *buf,
+-				    size_t size)
+-{
++static ssize_t freq_type_store(struct device *dev, struct device_attribute *attr, const char *buf,
++			       size_t size)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	unsigned long val;
+ 
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
++	if (kstrtoul(buf, 16, &val) || val > 1)
++		return -EINVAL;
++
++	spin_lock_irqsave(&drvdata->spinlock, flags);
++	if (drvdata->enable) {
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
++		return -EBUSY;
++	}
+ 	if (val)
+ 		drvdata->freqType = FREQ_TS;
+ 	else
+ 		drvdata->freqType = FREQ;
+-	spin_unlock(&drvdata->spinlock);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 
+ 	return size;
+ }
+ static DEVICE_ATTR_RW(freq_type);
+ 
+-static ssize_t freq_req_val_show(struct device *dev,
+-					    struct device_attribute *attr,
+-					    char *buf)
++static ssize_t freq_req_val_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 
+ 	return scnprintf(buf, PAGE_SIZE, "%x\n", drvdata->freq_req_val);
+ }
+ 
+-static ssize_t freq_req_val_store(struct device *dev,
+-					struct device_attribute *attr,
+-					const char *buf,
+-					size_t size)
+-{
++static ssize_t freq_req_val_store(struct device *dev, struct device_attribute *attr,
++				  const char *buf, size_t size)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	unsigned long val;
+ 
+-	if (kstrtoul(buf, 0, &val))
++	if (kstrtoul(buf, 0, &val) || val > U32_MAX)
+ 		return -EINVAL;
+ 
+ 	if (val) {
+-		spin_lock(&drvdata->spinlock);
++		spin_lock_irqsave(&drvdata->spinlock, flags);
++		if (drvdata->enable) {
++			spin_unlock_irqrestore(&drvdata->spinlock, flags);
++			return -EBUSY;
++		}
+ 		drvdata->freq_req_val = val;
+-		spin_unlock(&drvdata->spinlock);
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 	}
+ 
+ 	return size;
+ }
+ static DEVICE_ATTR_RW(freq_req_val);
+ 
+-static ssize_t freq_ts_req_store(struct device *dev,
+-					  struct device_attribute *attr,
+-					const char *buf,
+-					size_t size)
+-{
++static ssize_t freq_ts_req_store(struct device *dev, struct device_attribute *attr, const char *buf,
++				 size_t size)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+ 	unsigned long val;
+ 	u32 reg;
+ 
+-	if (kstrtoul(buf, 16, &val))
+-		return -EINVAL;
+-
+-	spin_lock(&drvdata->spinlock);
++	if (kstrtoul(buf, 16, &val) || val > 1)
++		return -EINVAL;
++
++	spin_lock_irqsave(&drvdata->spinlock, flags);
+ 	if (!drvdata->enable) {
+-		spin_unlock(&drvdata->spinlock);
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 		return -EPERM;
+ 	}
+ 
+@@ -183,89 +183,60 @@
+ 			reg = reg | TRACE_NOC_CTRL_FREQTSREQ;
+ 		writel_relaxed(reg, drvdata->base + TRACE_NOC_CTRL);
+ 	}
+-	spin_unlock(&drvdata->spinlock);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 
+ 	return size;
+ }
+ static DEVICE_ATTR_WO(freq_ts_req);
+ 
+ static struct attribute *trace_noc_attrs[] = {
+-	&dev_attr_flush_req.attr,
+-	&dev_attr_flush_status.attr,
+-	&dev_attr_flag_type.attr,
+-	&dev_attr_freq_type.attr,
+-	&dev_attr_freq_req_val.attr,
+-	&dev_attr_freq_ts_req.attr,
+-	NULL,
++    &dev_attr_flush_req.attr,
++    &dev_attr_flush_status.attr,
++    &dev_attr_flag_type.attr,
++    &dev_attr_freq_type.attr,
++    &dev_attr_freq_req_val.attr,
++    &dev_attr_freq_ts_req.attr,
++    NULL,
+ };
+ 
+ static struct attribute_group trace_noc_attr_grp = {
+-	.attrs = trace_noc_attrs,
++    .attrs = trace_noc_attrs,
+ };
+ 
+ static const struct attribute_group *trace_noc_attr_grps[] = {
+-	&trace_noc_attr_grp,
+-	NULL,
+-};
+-
+-static int trace_noc_alloc_trace_id(struct coresight_device *csdev)
++    &trace_noc_attr_grp,
++    NULL,
++};
++
++static int trace_noc_trace_id(struct coresight_device *csdev, enum cs_mode mode,
++			      struct coresight_device *sink)
+ {
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+-	int trace_id;
+-	int i, nr_conns;
+-
+-	nr_conns = csdev->pdata->nr_inconns;
+-
+-	for (i = 0; i < nr_conns; i++)
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0)
+-			return 0;
+-
+-	trace_id = coresight_trace_id_get_system_id();
+-	if (trace_id < 0)
+-		return trace_id;
+-
+-	drvdata->atid = trace_id;
+-
+-	return 0;
+-}
+-
+-static void trace_noc_release_trace_id(struct coresight_device *csdev)
+-{
+-	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+-	int i, nr_conns;
+-
+-	nr_conns = csdev->pdata->nr_inconns;
+-
+-	for (i = 0; i < nr_conns; i++)
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0)
+-			return;
+-
+-	coresight_trace_id_put_system_id(drvdata->atid);
+-
+-	drvdata->atid = 0;
++	return drvdata->atid;
+ }
+ 
+ static int trace_noc_enable(struct coresight_device *csdev, struct coresight_connection *inport,
+-							struct coresight_connection *outport)
+-{
++			    struct coresight_connection *outport)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+ 	int ret;
+ 	u32 val;
+ 	int i, nr_conns;
+ 
+-	spin_lock(&drvdata->spinlock);
++	spin_lock_irqsave(&drvdata->spinlock, flags);
+ 
+ 	nr_conns = csdev->pdata->nr_inconns;
+ 	for (i = 0; i < nr_conns; i++) {
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0) {
+-			atomic_inc(&inport->dest_refcnt);
+-			spin_unlock(&drvdata->spinlock);
++		if (csdev->pdata->in_conns[i]->dest_refcnt != 0) {
++			inport->dest_refcnt++;
++			spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 			return 0;
+ 		}
+ 	}
+-	ret = trace_noc_alloc_trace_id(csdev);
++	ret = coresight_claim_device(csdev);
+ 	if (ret < 0) {
+-		spin_unlock(&drvdata->spinlock);
++		spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 		return ret;
+ 	}
+ 	/* Set ATID */
+@@ -276,8 +247,7 @@
+ 
+ 	/* Set frequency value */
+ 	if (drvdata->freq_req_val)
+-		writel_relaxed(drvdata->freq_req_val,
+-				drvdata->base + TRACE_NOC_FREQVAL);
++		writel_relaxed(drvdata->freq_req_val, drvdata->base + TRACE_NOC_FREQVAL);
+ 
+ 	/* Set Ctrl register */
+ 	val = readl_relaxed(drvdata->base + TRACE_NOC_CTRL);
+@@ -303,60 +273,64 @@
+ 
+ 	val = val | TRACE_NOC_CTRL_PORTEN;
+ 	writel_relaxed(val, drvdata->base + TRACE_NOC_CTRL);
+-	atomic_inc(&inport->dest_refcnt);
++	inport->dest_refcnt++;
+ 	drvdata->enable = true;
+-	spin_unlock(&drvdata->spinlock);
+-
+-	dev_info(drvdata->dev, "Trace NOC is enabled\n");
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
++
++	dev_dbg(drvdata->dev, "Trace NOC is enabled\n");
+ 	return 0;
+ }
+ 
+ static void trace_noc_disable(struct coresight_device *csdev, struct coresight_connection *inport,
+-							struct coresight_connection *outport)
+-{
++			      struct coresight_connection *outport)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+ 	int i, nr_conns;
+ 
+-	spin_lock(&drvdata->spinlock);
+-	atomic_dec(&inport->dest_refcnt);
++	spin_lock_irqsave(&drvdata->spinlock, flags);
++	inport->dest_refcnt--;
+ 
+ 	nr_conns = csdev->pdata->nr_inconns;
+ 	for (i = 0; i < nr_conns; i++) {
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0) {
+-			spin_unlock(&drvdata->spinlock);
++		if (csdev->pdata->in_conns[i]->dest_refcnt != 0) {
++			spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 			return;
+ 		}
+ 	}
+ 
+ 	writel_relaxed(0x0, drvdata->base + TRACE_NOC_CTRL);
+ 	drvdata->enable = false;
+-	trace_noc_release_trace_id(csdev);
+-	spin_unlock(&drvdata->spinlock);
+-	dev_info(drvdata->dev, "Trace NOC is disabled\n");
++	coresight_disclaim_device(csdev);
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
++	dev_dbg(drvdata->dev, "Trace NOC is disabled\n");
+ }
+ 
+ static const struct coresight_ops_link trace_noc_link_ops = {
+-	.enable		= trace_noc_enable,
+-	.disable	= trace_noc_disable,
++    .enable = trace_noc_enable,
++    .disable = trace_noc_disable,
+ };
+ 
+ static const struct coresight_ops trace_noc_cs_ops = {
+-	.link_ops	= &trace_noc_link_ops,
++    .trace_id = trace_noc_trace_id,
++    .link_ops = &trace_noc_link_ops,
+ };
+ 
+ static int interconnect_trace_noc_enable(struct coresight_device *csdev,
+-		struct coresight_connection *inport, struct coresight_connection *outport)
+-{
++					 struct coresight_connection *inport,
++					 struct coresight_connection *outport)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+ 	u32 val;
+ 	int i, nr_conns;
+ 
+-	spin_lock(&drvdata->spinlock);
++	spin_lock_irqsave(&drvdata->spinlock, flags);
+ 	nr_conns = csdev->pdata->nr_inconns;
+ 	for (i = 0; i < nr_conns; i++) {
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0) {
+-			atomic_inc(&inport->dest_refcnt);
+-			spin_unlock(&drvdata->spinlock);
++		if (csdev->pdata->in_conns[i]->dest_refcnt != 0) {
++			inport->dest_refcnt++;
++			spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 			return 0;
+ 		}
+ 	}
+@@ -366,44 +340,45 @@
+ 	writel_relaxed(val, drvdata->base + TRACE_NOC_CTRL);
+ 
+ 	drvdata->enable = true;
+-	atomic_inc(&inport->dest_refcnt);
+-	spin_unlock(&drvdata->spinlock);
+-
+-	dev_info(drvdata->dev, "Trace NOC is enabled\n");
++	inport->dest_refcnt++;
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
++
++	dev_dbg(drvdata->dev, "Trace NOC is enabled\n");
+ 	return 0;
+ }
+ 
+ static void interconnect_trace_noc_disable(struct coresight_device *csdev,
+-		struct coresight_connection *inport, struct coresight_connection *outport)
+-{
++					   struct coresight_connection *inport,
++					   struct coresight_connection *outport)
++{
++	unsigned long flags;
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+ 	int i, nr_conns;
+ 
+-	spin_lock(&drvdata->spinlock);
+-	atomic_dec(&inport->dest_refcnt);
++	spin_lock_irqsave(&drvdata->spinlock, flags);
++	inport->dest_refcnt--;
+ 
+ 	nr_conns = csdev->pdata->nr_inconns;
+ 	for (i = 0; i < nr_conns; i++) {
+-		if (atomic_read(&csdev->pdata->in_conns[i]->dest_refcnt) != 0) {
+-			spin_unlock(&drvdata->spinlock);
++		if (csdev->pdata->in_conns[i]->dest_refcnt != 0) {
++			spin_unlock_irqrestore(&drvdata->spinlock, flags);
+ 			return;
+ 		}
+ 	}
+ 	writel_relaxed(0x0, drvdata->base + TRACE_NOC_CTRL);
+ 	drvdata->enable = false;
+-	spin_unlock(&drvdata->spinlock);
+-	dev_info(drvdata->dev, "Trace NOC is disabled\n");
++	spin_unlock_irqrestore(&drvdata->spinlock, flags);
++	dev_dbg(drvdata->dev, "Trace NOC is disabled\n");
+ }
+ 
+ static const struct coresight_ops_link interconnect_trace_noc_link_ops = {
+-	.enable		= interconnect_trace_noc_enable,
+-	.disable	= interconnect_trace_noc_disable,
++    .enable = interconnect_trace_noc_enable,
++    .disable = interconnect_trace_noc_disable,
+ };
+ 
+ static const struct coresight_ops interconnect_trace_noc_cs_ops = {
+-	.link_ops	= &interconnect_trace_noc_link_ops,
+-};
+-
++    .link_ops = &interconnect_trace_noc_link_ops,
++};
+ 
+ static void trace_noc_init_default_data(struct trace_noc_drvdata *drvdata)
+ {
+@@ -416,7 +391,7 @@
+ 	struct device *dev = &adev->dev;
+ 	struct coresight_platform_data *pdata;
+ 	struct trace_noc_drvdata *drvdata;
+-	struct coresight_desc desc = { 0 };
++	struct coresight_desc desc = {0};
+ 
+ 	desc.name = coresight_alloc_device_name(&trace_noc_devs, dev);
+ 	if (!desc.name)
+@@ -434,8 +409,11 @@
+ 	dev_set_drvdata(dev, drvdata);
+ 
+ 	drvdata->base = devm_ioremap_resource(dev, &adev->res);
+-	if (!drvdata->base)
+-		return -ENOMEM;
++	if (IS_ERR(drvdata->base))
++		return PTR_ERR(drvdata->base);
++	if (resource_size(&adev->res) < 0x1000)
++		return -EINVAL;
++	spin_lock_init(&drvdata->spinlock);
+ 
+ 	if (of_property_read_bool(dev->of_node, "qcom,trace-noc-v2"))
+ 		drvdata->version = TRACE_NOC_VERSION_V2;
+@@ -445,6 +423,9 @@
+ 		desc.ops = &interconnect_trace_noc_cs_ops;
+ 	} else {
+ 		trace_noc_init_default_data(drvdata);
++		drvdata->atid = coresight_trace_id_get_system_id();
++		if ((int)drvdata->atid < 0)
++			return (int)drvdata->atid;
+ 		desc.ops = &trace_noc_cs_ops;
+ 		desc.groups = trace_noc_attr_grps;
+ 	}
+@@ -453,43 +434,48 @@
+ 	desc.subtype.link_subtype = CORESIGHT_DEV_SUBTYPE_LINK_MERG;
+ 	desc.pdata = adev->dev.platform_data;
+ 	desc.dev = &adev->dev;
++	desc.access = CSDEV_ACCESS_IOMEM(drvdata->base);
+ 	drvdata->csdev = coresight_register(&desc);
+-	if (IS_ERR(drvdata->csdev))
++	if (IS_ERR(drvdata->csdev)) {
++		if (drvdata->atid)
++			coresight_trace_id_put_system_id(drvdata->atid);
+ 		return PTR_ERR(drvdata->csdev);
++	}
+ 
+ 	pm_runtime_put_sync(&adev->dev);
+-
+-	spin_lock_init(&drvdata->spinlock);
+ 
+ 	dev_dbg(drvdata->dev, "Trace Noc initialized\n");
+ 	return 0;
+ }
+ 
+-static void __exit trace_noc_remove(struct amba_device *adev)
++static void trace_noc_remove(struct amba_device *adev)
+ {
+ 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(&adev->dev);
+ 
+ 	coresight_unregister(drvdata->csdev);
++	if (drvdata->atid)
++		coresight_trace_id_put_system_id(drvdata->atid);
+ }
+ 
+ static struct amba_id trace_noc_ids[] = {
++    {
++	.id = 0x000f0c00,
++	.mask = 0x000fff00,
++    },
++    {0, 0},
++};
++MODULE_DEVICE_TABLE(amba, trace_noc_ids);
++
++static struct amba_driver trace_noc_driver = {
++    .drv =
+ 	{
+-		.id     = 0x000f0c00,
+-		.mask   = 0x000fff00,
++	    .name = "coresight-trace-noc",
++	    .owner = THIS_MODULE,
++	    .suppress_bind_attrs = true,
+ 	},
+-	{ 0, 0},
+-};
+-MODULE_DEVICE_TABLE(amba, trace_noc_ids);
+-
+-static struct amba_driver trace_noc_driver = {
+-	.drv = {
+-		.name   = "coresight-trace-noc",
+-		.owner	= THIS_MODULE,
+-		.suppress_bind_attrs = true,
+-	},
+-	.probe          = trace_noc_probe,
+-	.remove		= trace_noc_remove,
+-	.id_table	= trace_noc_ids,
++    .probe = trace_noc_probe,
++    .remove = trace_noc_remove,
++    .id_table = trace_noc_ids,
+ };
+ 
+ module_amba_driver(trace_noc_driver);
+diff --git a/drivers/hwtracing/coresight/coresight-trace-noc.h b/drivers/hwtracing/coresight/coresight-trace-noc.h
+diff --git a/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c b/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c
+--- a/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c
++++ b/drivers/power/supply/mca/mca_strategy/strategy_charger/mca_strategy_buckchg.c
+@@ -3121,6 +3121,8 @@
+ 	}
+ }
+ 
++static int strategy_buckchg_set_reverse_gear(struct strategy_buckchg_dev *info, int gear);
++
+ static void
+ strategy_source_status_monitor_workfunc_locked(struct work_struct *work)
+ {
+@@ -3135,7 +3137,12 @@
+ 	char buf[128];
+ 	struct mca_event_notify_data n;
+ 
+-	strategy_buckchg_check_reverse_quick_charge(info, &eligible);
++	ret = strategy_buckchg_check_reverse_quick_charge(info, &eligible);
++	if (ret) {
++		/* Invalid sensor/OTG data must request the safe gear. */
++		eligible = 0;
++		goto commit;
++	}
+ 
+ 	if (info->support_revchg_screenon) {
+ 		if (info->src_monitor_flag) {
+@@ -3149,7 +3156,11 @@
+ 				goto reschedule;
+ 			eligible = 2;
+ 		}
+-		strategy_class_fg_ops_get_current(&info->src_monitor_cur);
++		ret = strategy_class_fg_ops_get_current(&info->src_monitor_cur);
++		if (ret) {
++			eligible = 0;
++			goto commit;
++		}
+ 		mca_log_info("source monitor current: %d\n",
+ 			     info->src_monitor_cur);
+ 		if (info->src_monitor_cur > 3000031)
+@@ -3164,23 +3175,26 @@
+ 
+ 	if (!info->support_revchg_screenon) {
+ 		mca_log_err("source boost status: %d\n", eligible);
+-		info->source_boost_status = eligible;
+-		protocol_class_pd_set_gear_shift(TYPEC_PORT_0,
+-						 info->source_boost_status);
++		ret = strategy_buckchg_set_reverse_gear(info, eligible);
++		if (!ret)
++			info->source_boost_status = eligible;
+ 		goto reschedule;
+ 	}
+ 
+ 	if (info->src_gear_last != eligible) {
+ 		mca_log_err("set gear shift: %d\n", eligible);
+-		protocol_class_pd_set_gear_shift(TYPEC_PORT_0, eligible);
+-		info->src_gear_last = eligible;
++		ret = strategy_buckchg_set_reverse_gear(info, eligible);
++		if (ret)
++			goto reschedule;
+ 	}
+ 
+ 	if (eligible == 2 && info->source_boost_status == 1) {
+ 		info->src_monitor_byte = 0;
+ 		retry = 5;
+ 		do {
+-			platform_class_cp_enable_adc(CP_ROLE_MASTER, true);
++			ret = platform_class_cp_enable_adc(CP_ROLE_MASTER, true);
++			if (ret)
++				goto reschedule;
+ 			for (i = 0; i < 20; i++)
+ 				udelay(1000);
+ 			ret = platform_class_cp_get_bus_current(CP_ROLE_MASTER,
+@@ -3639,6 +3653,16 @@
+ 	strategy_buckchg_soc_limit_stepper_workfunc_locked(work);
+ }
+ 
++/* Record accepted hardware gears only. Caller holds policy_lock. */
++static int strategy_buckchg_set_reverse_gear(struct strategy_buckchg_dev *info, int gear)
++{
++	int ret = protocol_class_pd_set_gear_shift(TYPEC_PORT_0, gear);
++
++	if (!ret)
++		info->src_gear_last = gear;
++	return ret;
++}
++
+ /* A user request changes the existing wired PD gear, never peer authentication. */
+ static int strategy_buckchg_request_reverse(struct strategy_buckchg_dev *info,
+                                            int value)
+@@ -3662,7 +3686,7 @@
+ 			goto restore;
+ 		}
+ 	}
+-	ret = protocol_class_pd_set_gear_shift(TYPEC_PORT_0, eligible);
++	ret = strategy_buckchg_set_reverse_gear(info, eligible);
+ 	if (ret)
+ 		goto restore;
+ 	info->source_boost_status = eligible;
+diff --git a/drivers/soc/qcom/qcom_stats.c b/drivers/soc/qcom/qcom_stats.c
+--- a/drivers/soc/qcom/qcom_stats.c
++++ b/drivers/soc/qcom/qcom_stats.c
+@@ -541,7 +541,8 @@
+ 		/* Items are allocated lazily, so lookup pointer each time */
+ 		temp = qcom_stats_smem_get(subsystem->pid, subsystem->smem_item, sizeof(struct sleep_stats));
+ 		if (IS_ERR(temp)) {
+-			ret = -EIO;
++			/* Missing optional firmware items are not transport failures. */
++			ret = PTR_ERR(temp);
+ 			goto exit;
+ 		}
+ 
+diff --git a/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/cam_ife_hw_mgr.c b/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/cam_ife_hw_mgr.c
+--- a/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/cam_ife_hw_mgr.c
++++ b/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/cam_ife_hw_mgr.c
+@@ -19089,7 +19089,7 @@
+ 		}
+ 	}
+ 	if (!j)
+-		CAM_ERR(CAM_ISP, "no valid SFE HW devices");
++		CAM_DBG(CAM_ISP, "No optional SFE HW devices present");
+ 
+ 	cam_ife_hw_mgr_sort_dev_with_caps(&g_ife_hw_mgr);
+ 
+diff --git a/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c b/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c
+--- a/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c
++++ b/qcom/opensource/camera-kernel/drivers/cam_isp/isp_hw_mgr/isp_hw/vfe_hw/cam_vfe_dev.c
+@@ -276,15 +276,15 @@
+ int cam_vfe_hw_init(struct cam_isp_hw_intf_data **vfe_hw_intf,
+ 	uint32_t hw_idx)
+ {
+-	int rc = 0;
+-
++	if (!vfe_hw_intf || hw_idx >= ARRAY_SIZE(cam_vfe_hw_list))
++		return -EINVAL;
++
++	/* The manager enumerates all possible slots, including unfitted VFEs. */
+ 	if (cam_vfe_hw_list[hw_idx].hw_intf) {
+ 		*vfe_hw_intf = &cam_vfe_hw_list[hw_idx];
+-		rc = 0;
++		return 0;
+ 	} else {
+-		CAM_ERR(CAM_ISP, "inval param");
+ 		*vfe_hw_intf = NULL;
+-		rc = -ENODEV;
+-	}
+-	return rc;
+-}
++		return -ENODEV;
++	}
++}
+diff --git a/qcom/opensource/camera-kernel/drivers/cam_sensor_module/cam_cci/cam_cci_soc.c b/qcom/opensource/camera-kernel/drivers/cam_sensor_module/cam_cci/cam_cci_soc.c
+--- a/qcom/opensource/camera-kernel/drivers/cam_sensor_module/cam_cci/cam_cci_soc.c
++++ b/qcom/opensource/camera-kernel/drivers/cam_sensor_module/cam_cci/cam_cci_soc.c
+@@ -405,9 +405,6 @@
+ 		&new_cci_dev->soc_info;
+ 	void *irq_data[CAM_SOC_MAX_IRQ_LINES_PER_DEV] = {0};
+ 	int32_t  num_irq = 0;
+-	struct task_struct  *task = NULL;
+-	struct irq_desc     *desc = NULL;
+-	struct sched_param param = {0};
+ 
+ 
+ 	rc = cam_soc_util_get_dt_properties(soc_info);
+@@ -446,23 +443,10 @@
+ 			return -EINVAL;
+ 		}
+ 		disable_irq(soc_info->irq_num[i]);
+-		desc = irq_to_desc(soc_info->irq_num[i]);
+-		if (!desc) {
+-			CAM_WARN(CAM_CCI,
+-				"Unable to locate Descriptor for irq_num: %d",
+-				soc_info->irq_num[i]);
+-		} else {
+-			task = desc->action->thread;
+-			param.sched_priority = MAX_RT_PRIO - 1;
+-			if (task) {
+-				rc = sched_setscheduler(task, SCHED_FIFO, &param);
+-				if (rc) {
+-					CAM_ERR(CAM_CCI,
+-						"non-fatal: Failed to set Scheduler Priority: %d",
+-						rc);
+-				}
+-			}
+-		}
++		/* The IRQ core supplies FIFO priority for its thread. Keep that
++		 * policy rather than applying userspace scheduler permission checks
++		 * to a kernel worker in the module loader's security context.
++		 */
+ 	}
+ 
+ 	new_cci_dev->v4l2_dev_str.pdev = pdev;
+diff --git a/qcom/opensource/camera-kernel/drivers/cam_utils/cam_dump_util.c b/qcom/opensource/camera-kernel/drivers/cam_utils/cam_dump_util.c
+--- a/qcom/opensource/camera-kernel/drivers/cam_utils/cam_dump_util.c
++++ b/qcom/opensource/camera-kernel/drivers/cam_utils/cam_dump_util.c
+@@ -689,13 +689,13 @@
+ 		return;
+ 	}
+ 
+-	CAM_ERR(CAM_UTIL, "io_record_size:%d",
++	CAM_DBG(CAM_UTIL, "io_record_size:%zu",
+ 		sizeof(struct cam_io_data_record));
+ 	cam_key_buffer =
+ 		vmalloc(sizeof(struct cam_debug_record_key_message_buffer));
+ 	cam_io_record_buffer = vmalloc(sizeof(struct cam_io_data_record));
+ 	cam_power_record_buffer = vmalloc(sizeof(struct cam_power_info_record));
+-	CAM_ERR(CAM_UTIL, "cam_debug_record_key_message_buffer:%d",
++	CAM_DBG(CAM_UTIL, "cam_debug_record_key_message_buffer:%zu",
+ 		sizeof(struct cam_debug_record_key_message_buffer));
+ 
+ 	if (!cam_key_buffer || !cam_io_record_buffer ||
+@@ -796,4 +796,4 @@
+ 			cam_io_record_buffer->sensor_setting_data[i].end_ts_ms,
+ 			cam_io_record_buffer->sensor_setting_data[i].req_id);
+ 	}
+-}
+\ No newline at end of file
++}

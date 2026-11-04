@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "cases": 12,
+  "sanitizers": "ASan+UBSan",
+  "source_sha256": {
+    "qcacld-3.0/core/hdd/inc/wlan_hdd_main.h": "354d4e5b32678e338dc4db01e0095b955f036fdfb3754065896ad4263123154c",
+    "qcacld-3.0/core/hdd/src/wlan_hdd_hostapd.c": "6f5962550357de5e31c0596d1093ef226c10e9503389ce783fdffdf5affc5c5e",
+    "qcacld-3.0/core/hdd/src/wlan_hdd_regulatory.c": "35e7fbadf091c5bbed434ca80c00837d1ef5568e4ece50cb599a0e95060a8906"
+  },
+  "limits": [
+    "Lock primitives are host stubs; channel notification callers are audited, not executed.",
+    "Device hotspot startup and channel switching require runtime validation."
+  ],
+  "old_helper_regression": "Old helper executes and aborts on null wiphy in kernel 6.7 branch",
+  "patch_replay": "Forward/reverse --fuzz=0 passed"
+}

@@ -1,0 +1,32 @@
+{
+  "status": "PASS",
+  "cases": 4159,
+  "source_sha256": "42545aae31f4c24153ccbad8c56d9e822cabc4a55b34161791344419df9bb15a",
+  "header_sha256": "3464e23d582f066dacc133c17dda60d32d2343ffaf733a486a297f9ae7a33611",
+  "harness_sha256": "afb6759ab5aac31cc718ef47751be99b7938877f75ed6ce7569b88975179dfe0",
+  "functions": [
+    "qcom_llcc_setup_registers",
+    "qcom_llcc_restore_setup",
+    "qcom_llcc_core_setup",
+    "qcom_llcc_clear_error_status",
+    "get_reg_offsets",
+    "dump_syn_reg_values",
+    "dump_syn_reg",
+    "llcc_ecc_irq_handler",
+    "llcc_ecc_check",
+    "qcom_llcc_edac_probe",
+    "qcom_llcc_edac_remove"
+  ],
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "sequential-bank-clear": "REJECTED by actual-C assertions",
+    "free-before-IRQ-drain": "REJECTED by actual-C assertions"
+  },
+  "limits": [
+    "Actual C with simulated regmap/EDAC/IRQ framework and pthread remove barrier.",
+    "No live ECC injection. Hardware register access and native polling/IRQ operation remain to be tested."
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T135741329740Z",
+  "changed_platform_modules": [
+    "qca_cld3_wcn7750.ko"
+  ],
+  "kernel_build_id": "2d97afecef7f0f1ca73725d4f5368c0ac0b387de",
+  "wlan_build_id": "6156508deb8c7a7c2ca5a780a8494dc936933d56",
+  "worker_lock_calls": 2,
+  "worker_unlock_calls": 2,
+  "argument": "Both paths load dev->ieee80211_ptr->wiphy into x0 before mutex calls; no NULL literal",
+  "disassembly_sha256": "26cae7a367330c9db1eb64390211cb7745bcc1eb37c156eef3a9b5fc09e3ee11"
+}

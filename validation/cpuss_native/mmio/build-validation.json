@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "artifact": "/home/loukious/Android/konoha-android17-6.18-port-20261031/artifacts/20261103T153808728566Z",
+  "platform_modules": 373,
+  "imported_crcs": 22685,
+  "artifact_hashes": 2285,
+  "source_hashes": 5004,
+  "host_cases": {
+    "mi_thermal_host_validation": 50,
+    "device_services_host_validation": {
+      "adsp_lifecycle": {
+        "cases": 9,
+        "probe_failure_cleanup_checked": true,
+        "timer_worker_shutdown_checked": true,
+        "source_sha256": "92beec4e064d98231be410f74d47da70db823bdf1a0ae4ae80f9f9cfd9228bca",
+        "harness_sha256": "312df97de2c81e837d9b8e9b596bd570791712e0fd69106dcdbd977e4116af83"
+      },
+      "ir_spi": {
+        "cases": 16,
+        "waveform_checked": true,
+        "fault_cleanup_checked": true,
+        "source_sha256": "00ce04ef7f6a0c0dad31745414cf73c23fbfaafab3cbc891f72f97eb6021de00",
+        "harness_sha256": "979f68d4104c679413631d2380318e95ab75ea92738cb232ed40ef0bb2eda0ec"
+      },
+      "usb_audio_qmi": {
+        "cases": 20,
+        "request_bounds_checked": true,
+        "service_intervals_checked": true,
+        "source_sha256": "ac87db6b4ffcd33582349a7228864f06f33a77a95dbc029d0af0639d05257297",
+        "harness_sha256": "24a53c03904c16e0dbfe3b4ffe33c66ef47e4e8654878c89e529f8264a5cb2d3"
+      },
+      "memshare": {
+        "cases": 12,
+        "secure_reclaim_checked": true,
+        "guard_size_checked": true,
+        "source_sha256": "7bc149b65738e08e0ba3b2ee3b7f4ae4315427600377ca0319a5c44fa9bbe569",
+        "harness_sha256": "d93a92086a62a5ef638d4b233d9cbf81ab1c9ebbb111d2a4f7138136198cbc0b"
+      }
+    },
+    "platform_providers_host_validation": 1120,
+    "vbat_ovp_host_validation": 834,
+    "cti_assoc_host_validation": 3,
+    "qcom_sysfs_host_validation": 744,
+    "coresight_cti_host_validation": 26417,
+    "memlat_host_validation": 89,
+    "boot_diagnostics_host_validation": 16,
+    "business_misc_host_validation": 119,
+    "ibat_ocp_host_validation": 157,
+    "scmi_stats_host_validation": 42,
+    "coresight_qmi_host_validation": 774,
+    "coresight_tgu_host_validation": 2016,
+    "cpucp_log_host_validation": 41,
+    "scmi_controls_host_validation": 63,
+    "cpucp_fast_host_validation": 19,
+    "coresight_sources_host_validation": 341,
+    "glink_pkt_host_validation": 235135120,
+    "wlan_wiphy_lock_host_validation": 12,
+    "cpuss_v4_host_validation": 371,
+    "cpuss_native_host_validation": 5024
+  },
+  "devicetrees": {
+    "overlay_engines_agree": true,
+    "bootloader_ids_preserved": true,
+    "dtbo_table_verified": true,
+    "dtc_warnings": 1097,
+    "report": "devicetrees/report.json"
+  },
+  "limits": [
+    "Build and imported-symbol CRC checks only; no device boot or hardware validation.",
+    "Build archive only; assemble and verify matched boot and DLKM images before flashing.",
+    "Gunyah secure-VM loading, proxy scheduling, memory assignment, and QRTR host transport are compiled together but have not been exercised with device firmware. Guest-power drivers are disabled, matching the Onyx HLOS baseline.",
+    "The default Kleaf build uses the maybe-dirty suffix without stamping; input revisions are recorded separately."
+  ]
+}

@@ -1,0 +1,112 @@
+--- a/drivers/soc/qcom/qti_battery_debug.c
++++ b/drivers/soc/qcom/qti_battery_debug.c
+@@ -103,6 +103,7 @@
+ 	bool pending, stopping, link_up;
+ 	u32 pending_opcode, pending_id;
+ 	int response_error;
++	int votables_error;
+ 	struct qbg_context_resp_msg	qbg_dump;
+ 	struct dentry			*debugfs_dir;
+ 	struct debugfs_blob_wrapper	qbg_blob;
+@@ -215,7 +216,7 @@
+ 	struct all_votables_data all;
+ 	struct votable_data vote;
+ 	unsigned long flags;
+-	bool accepted = false;
++	bool completed = false;
+ 	int rc = 0, i;
+ 
+ 	if (!data || len < sizeof(hdr))
+@@ -273,8 +274,8 @@
+ 	/* The requested ID remains authoritative after timeout/link loss too. */
+ 	if (!rc && hdr.opcode == BD_GET_VOTABLE_REQ && vote.votable_id != bd->pending_id)
+ 		rc = -EPROTO;
+-	if (!rc && !bd->stopping && bd->pending && bd->pending_opcode == hdr.opcode) {
+-		{
++	if (!bd->stopping && bd->pending && bd->pending_opcode == hdr.opcode) {
++		if (!rc) {
+ 			if (hdr.opcode == BD_GET_AGGREGATOR_INFO_REQ) {
+ 				bd->all_data = all;
+ 				bd->override_voter_id = MAX_NUM_VOTERS;
+@@ -291,17 +292,20 @@
+ 				memcpy(bd->qbg_dump.buf, response->buf, response->length);
+ 				bd->qbg_blob.size = response->length;
+ 			}
+-			bd->pending = false;
+-			bd->response_error = 0;
+-			accepted = true;
+ 		}
++		/* A malformed matching reply is a protocol error, not silence.
++		 * Keep the transport fence, but finish this waiting operation.
++		 */
++		bd->pending = false;
++		bd->response_error = rc;
++		completed = true;
+ 	}
+ 	spin_unlock_irqrestore(&bd->response_lock, flags);
+ 	if (rc)
+ 		pmic_glink_request_reject(bd->client, hdr.opcode);
+ 	else
+ 		pmic_glink_request_end(bd->client, hdr.opcode);
+-	if (accepted)
++	if (completed)
+ 		complete(&bd->ack);
+ 	return rc;
+ }
+@@ -814,8 +818,28 @@
+ 
+ static DEVICE_ATTR_RW(battery_cell_id);
+ 
++static ssize_t votables_status_show(struct device *dev,
++				   struct device_attribute *attr, char *buf)
++{
++	struct battery_dbg_dev *bd = dev_get_drvdata(dev);
++	ssize_t rc;
++
++	mutex_lock(&bd->lock);
++	if (!bd->votables_error)
++		rc = sysfs_emit(buf, "ready\n");
++	else if (bd->votables_error == -EINPROGRESS)
++		rc = sysfs_emit(buf, "initializing\n");
++	else
++		rc = sysfs_emit(buf, "unavailable (%d)\n", bd->votables_error);
++	mutex_unlock(&bd->lock);
++	return rc;
++}
++
++static DEVICE_ATTR_RO(votables_status);
++
+ static struct attribute *battery_dbg_attrs[] = {
+ 	&dev_attr_battery_cell_id.attr,
++	&dev_attr_votables_status.attr,
+ 	NULL,
+ };
+ 
+@@ -856,6 +880,7 @@
+ 	bd->dev = &pdev->dev;
+ 	bd->link_up = true;
+ 	bd->override_voter_id = MAX_NUM_VOTERS;
++	bd->votables_error = -EINPROGRESS;
+ 	mutex_init(&bd->lock);
+ 	spin_lock_init(&bd->response_lock);
+ 	init_completion(&bd->ack);
+@@ -872,8 +897,19 @@
+ 	if (rc)
+ 		goto unregister;
+ 	rc = battery_dbg_add_debugfs(bd);
++	mutex_lock(&bd->lock);
++	bd->votables_error = IS_ENABLED(CONFIG_DEBUG_FS) ? rc : -EOPNOTSUPP;
++	mutex_unlock(&bd->lock);
+ 	if (!rc)
+ 		return 0;
++	/* QBG uses an independent native command and remains useful on firmware
++	 * that does not answer aggregator queries. Do not retry an unanswered
++	 * query: its transport-owned fence remains authoritative.
++	 */
++	if (rc == -ETIMEDOUT || rc == -EAGAIN || rc == -EPROTO || rc == -ENOTCONN) {
++		dev_warn(bd->dev, "Votables unavailable (%d); QBG interface retained\n", rc);
++		return 0;
++	}
+ 	sysfs_remove_group(&bd->dev->kobj, &battery_dbg_group);
+ unregister:
+ 	pmic_glink_unregister_client(bd->client);

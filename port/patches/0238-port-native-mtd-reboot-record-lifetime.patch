@@ -1,0 +1,1433 @@
+--- a/drivers/mtd/mtdoops.c
++++ b/drivers/mtd/mtdoops.c
+@@ -1,754 +1,745 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * MTD Oops/Panic logger
++ * MTD reboot/poweroff/long-power-key logger, including Xiaomi pmsg records.
++ * Copyright (C) 2007 Nokia Corporation
++ * Author: Richard Purdie <rpurdie@openedhand.com>
+  *
+- * Copyright © 2007 Nokia Corporation. All rights reserved.
+- *
+- * Author: Richard Purdie <rpurdie@openedhand.com>
++ * Native Xiaomi event policy is intentional: the registered panic/oops
++ * callback is a no-op. Sleepable shutdown and threaded power-key callbacks
++ * archive synchronously, before UFS shutdown can make queued writes fail.
+  */
+-
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
++#include <linux/atomic.h>
++#include <linux/bitmap.h>
++#include <linux/io.h>
+ #include <linux/kernel.h>
++#include <linux/kmsg_dump.h>
++#include <linux/mm.h>
+ #include <linux/module.h>
+-#include <linux/console.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mutex.h>
++#include <linux/of_address.h>
++#include <linux/of_reserved_mem.h>
++#include <linux/overflow.h>
++#include <linux/platform_device.h>
++#include <linux/reboot.h>
++#include <linux/slab.h>
++#include <linux/timekeeping.h>
+ #include <linux/vmalloc.h>
+-#include <linux/workqueue.h>
+-#include <linux/sched.h>
+-#include <linux/wait.h>
+-#include <linux/delay.h>
+-#include <linux/interrupt.h>
+-#include <linux/timekeeping.h>
+-#include <linux/mtd/mtd.h>
+-#include <linux/kmsg_dump.h>
+-#include <linux/reboot.h>
+-#include <linux/platform_device.h>
+-
+-/* Maximum MTD partition size */
++
+ #define MTDOOPS_MAX_MTD_SIZE (16 * 1024 * 1024)
+-
++#define MTDOOPS_KERNMSG_MAGIC_v1 0x5d005d00
++#define MTDOOPS_KERNMSG_MAGIC_v2 0x5d005e00
++#define MTDOOPS_PMSG_SIG 0x43474244
++#define MAX_CMDLINE_PARAM_LEN 256
++
++/* The provider serializes these with threaded raw-notifier dispatch. */
++extern int pwrkey_register_irq_notifier(struct notifier_block *nb);
++extern int pwrkey_unregister_irq_notifier(struct notifier_block *nb);
++
++static DEFINE_MUTEX(mtdoops_lock);
+ static unsigned long record_size = 4096;
+ module_param(record_size, ulong, 0400);
+-MODULE_PARM_DESC(record_size,
+-		"record size for MTD OOPS pages in bytes (default 4096)");
+-
++MODULE_PARM_DESC(record_size, "record size in bytes (default 4096)");
+ static char mtddev[80];
+-module_param_string(mtddev, mtddev, 80, 0400);
+-MODULE_PARM_DESC(mtddev,
+-		"name or index number of the MTD device to use");
+-
++module_param_string(mtddev, mtddev, sizeof(mtddev), 0400);
++MODULE_PARM_DESC(mtddev, "name or index of the MTD device");
+ static int dump_oops = 1;
+ module_param(dump_oops, int, 0600);
+-MODULE_PARM_DESC(dump_oops,
+-		"set to 1 to dump oopses, 0 to only dump panics (default 1)");
+-
++MODULE_PARM_DESC(dump_oops, "native oops policy parameter (default 1)");
+ static unsigned long lkmsg_record_size = 512 * 1024;
+-extern struct raw_notifier_head pwrkey_irq_notifier_list;
+-
+-#define MAX_CMDLINE_PARAM_LEN 256
+-static char build_fingerprint[MAX_CMDLINE_PARAM_LEN] = { 0 };
+-module_param_string(fingerprint, build_fingerprint, MAX_CMDLINE_PARAM_LEN,
+-		    0644);
+-
+-static int boot_mode = 0;
+-module_param(boot_mode, int, 0600);
+-MODULE_PARM_DESC(boot_mode, "boot_mode (default 0)");
+-
+-static int boot_index = 0;
+-module_param(boot_index, int, 0600);
+-MODULE_PARM_DESC(boot_index, "boot_index (default 0)");
+-
+-#define MTDOOPS_KERNMSG_MAGIC_v1 0x5d005d00  /* Original */
+-#define MTDOOPS_KERNMSG_MAGIC_v2 0x5d005e00  /* Adds the timestamp */
+-#define MTDOOPS_HEADER_SIZE 8
++static char build_fingerprint[MAX_CMDLINE_PARAM_LEN];
++static int boot_mode;
++static int boot_index;
++
++/* Keep native writable metadata parameters without racing archival. */
++static int mtdoops_set_int(const char *value, const struct kernel_param *kp)
++{
++	int ret;
++
++	mutex_lock(&mtdoops_lock);
++	ret = param_set_int(value, kp);
++	mutex_unlock(&mtdoops_lock);
++	return ret;
++}
++
++static int mtdoops_get_int(char *value, const struct kernel_param *kp)
++{
++	int ret;
++
++	mutex_lock(&mtdoops_lock);
++	ret = param_get_int(value, kp);
++	mutex_unlock(&mtdoops_lock);
++	return ret;
++}
++
++static int mtdoops_set_fingerprint(const char *value,
++				 const struct kernel_param *kp)
++{
++	int ret;
++
++	mutex_lock(&mtdoops_lock);
++	ret = param_set_copystring(value, kp);
++	mutex_unlock(&mtdoops_lock);
++	return ret;
++}
++
++static int mtdoops_get_fingerprint(char *value, const struct kernel_param *kp)
++{
++	int ret;
++
++	mutex_lock(&mtdoops_lock);
++	ret = param_get_string(value, kp);
++	mutex_unlock(&mtdoops_lock);
++	return ret;
++}
++
++static const struct kernel_param_ops mtdoops_int_ops = {
++	.set = mtdoops_set_int, .get = mtdoops_get_int,
++};
++static const struct kernel_param_ops mtdoops_fingerprint_ops = {
++	.set = mtdoops_set_fingerprint, .get = mtdoops_get_fingerprint,
++};
++static struct kparam_string fingerprint_param = {
++	.maxlen = sizeof(build_fingerprint), .string = build_fingerprint,
++};
++module_param_cb(boot_mode, &mtdoops_int_ops, &boot_mode, 0600);
++module_param_cb(boot_index, &mtdoops_int_ops, &boot_index, 0600);
++module_param_cb(fingerprint, &mtdoops_fingerprint_ops, &fingerprint_param, 0644);
+ 
+ enum mtd_dump_reason {
+-	MTD_DUMP_UNDEF,
+-	MTD_DUMP_PANIC,
+-	MTD_DUMP_OOPS,
+-	MTD_DUMP_EMERG,
+-	MTD_DUMP_SHUTDOWN,
+-	MTD_DUMP_RESTART,
+-	MTD_DUMP_POWEROFF,
+-	MTD_DUMP_LONG_PRESS,
+-	MTD_DUMP_MAX
+-};
+-
+-static char *kdump_reason[8] = { "Unknown",  "Kernel Panic", "Oops!",
+-				 "Emerg",    "Shut Down",    "Restart",
+-				 "PowerOff", "Long Press" };
+-
+-enum mtdoops_log_type {
+-	MTDOOPS_TYPE_UNDEF,
+-	MTDOOPS_TYPE_DMESG,
+-	MTDOOPS_TYPE_PMSG,
+-};
+-
+-static char *log_type[4] = { "Unknown", "LAST KMSG", "LAST LOGCAT" };
+-
+-struct pmsg_buffer_hdr {
+-	uint32_t sig;
+-	atomic_t start;
+-	atomic_t size;
+-	uint8_t data[0];
+-};
+-
++	MTD_DUMP_UNDEF, MTD_DUMP_PANIC, MTD_DUMP_OOPS, MTD_DUMP_EMERG,
++	MTD_DUMP_SHUTDOWN, MTD_DUMP_RESTART, MTD_DUMP_POWEROFF,
++	MTD_DUMP_LONG_PRESS, MTD_DUMP_MAX,
++};
++
++static const char * const kdump_reason[] = {
++	"Unknown", "Kernel Panic", "Oops!", "Emerg", "Shut Down",
++	"Restart", "PowerOff", "Long Press",
++};
++
++/* Standard v2 ABI: payload starts after all 16 bytes, never at byte 8. */
+ struct mtdoops_hdr {
+ 	u32 seq;
+ 	u32 magic;
+ 	ktime_t timestamp;
+ } __packed;
+ 
+-struct pmsg_platform_data {
+-	unsigned long mem_size;
+-	phys_addr_t mem_address;
+-	unsigned long console_size;
+-	unsigned long pmsg_size;
+-};
+-
+-static struct mtdoops_context {
++struct pmsg_buffer_hdr {
++	u32 sig;
++	atomic_t start;
++	atomic_t size;
++	u8 data[];
++};
++
++struct mtdoops_context {
+ 	struct kmsg_dumper dump;
+ 	struct notifier_block reboot_nb;
+-	struct notifier_block pwrkey_long_press_nb;
+-	struct pmsg_platform_data pmsg_data;
+-
++	struct notifier_block pwrkey_nb;
++	struct mtd_info *mtd;
+ 	int mtd_index;
+-	struct work_struct work_erase;
+-	struct work_struct work_write;
+-	struct mtd_info *mtd;
+-	int oops_pages;
+-	int nextpage;
+-	int nextcount;
+-	unsigned long *oops_page_used;
+-
+-	unsigned long oops_buf_busy;
+-	void *oops_buf;
+-} oops_cxt;
+-
+-static void mark_page_used(struct mtdoops_context *cxt, int page)
+-{
+-	set_bit(page, cxt->oops_page_used);
+-}
+-
+-static void mark_page_unused(struct mtdoops_context *cxt, int page)
+-{
+-	clear_bit(page, cxt->oops_page_used);
+-}
+-
+-static int page_is_used(struct mtdoops_context *cxt, int page)
+-{
+-	return test_bit(page, cxt->oops_page_used);
+-}
+-
+-static int mtdoops_erase_block(struct mtdoops_context *cxt, int offset)
+-{
+-	struct mtd_info *mtd = cxt->mtd;
+-	u32 start_page_offset = mtd_div_by_eb(offset, mtd) * mtd->erasesize;
+-	u32 start_page = start_page_offset / record_size;
+-	u32 erase_pages = mtd->erasesize / record_size;
+-	struct erase_info erase;
++	unsigned int oops_pages;
++	unsigned int nextpage;
++	u32 nextcount;
++	/* Dirtiness is conservative; it does not mean a write committed. */
++	unsigned long *dirty;
++	u8 *oops_buf;
++	struct platform_device *pmsg_dev;
++	void *pmsg_vaddr;
++	struct pmsg_buffer_hdr *pmsg;
++	size_t pmsg_capacity;
++	bool stopping;
++};
++
++static struct mtdoops_context oops_cxt;
++
++static u32 mtdoops_next_seq(u32 seq)
++{
++	seq++;
++	return seq == U32_MAX ? 0 : seq;
++}
++
++static bool mtdoops_seq_after(u32 seq, u32 previous)
++{
++	return (s32)(seq - previous) > 0;
++}
++
++static bool mtdoops_record_size_valid(unsigned long size)
++{
++	return size >= 4096 && !(size & 4095) &&
++	       size <= MTDOOPS_MAX_MTD_SIZE / 2;
++}
++
++static bool mtdoops_geometry_valid(struct mtd_info *mtd)
++{
++	return mtdoops_record_size_valid(record_size) && mtd->erasesize &&
++	       mtd->writesize && mtd->writesize <= sizeof(u32) &&
++	       !(sizeof(u32) % mtd->writesize) && !mtd->numeraseregions &&
++	       (mtd->flags & MTD_WRITEABLE) &&
++	       mtd->size <= MTDOOPS_MAX_MTD_SIZE &&
++	       mtd->size >= (u64)mtd->erasesize * 2 &&
++	       mtd->erasesize >= record_size &&
++	       !(mtd->erasesize % record_size) &&
++	       !(mtd->size % mtd->erasesize) &&
++	       !(record_size % mtd->writesize);
++}
++
++/* Read-only attach, including dirty records with an erased-looking header. */
++static int mtdoops_find_next(struct mtdoops_context *cxt)
++{
++	bool found = false;
++	u32 newest = 0;
++	unsigned int newest_page = 0, page;
++	struct mtdoops_hdr hdr;
++	size_t retlen;
+ 	int ret;
+-	int page;
+-
+-	erase.addr = offset;
+-	erase.len = mtd->erasesize;
+-
+-	ret = mtd_erase(mtd, &erase);
+-	if (ret) {
+-		pr_warn("erase of region [0x%llx, 0x%llx] on \"%s\" failed\n",
+-			(unsigned long long)erase.addr,
+-			(unsigned long long)erase.len, mtddev);
+-		return ret;
+-	}
+-
+-	/* Mark pages as unused */
+-	for (page = start_page; page < start_page + erase_pages; page++)
+-		mark_page_unused(cxt, page);
+-
+-	return 0;
+-}
+-
+-static void mtdoops_erase(struct mtdoops_context *cxt)
+-{
+-	struct mtd_info *mtd = cxt->mtd;
+-	int i = 0, j, ret, mod;
+-
+-	/* We were unregistered */
+-	if (!mtd)
+-		return;
+-
+-	mod = (cxt->nextpage * record_size) % mtd->erasesize;
+-	if (mod != 0) {
+-		cxt->nextpage = cxt->nextpage + ((mtd->erasesize - mod) / record_size);
+-		if (cxt->nextpage >= cxt->oops_pages)
+-			cxt->nextpage = 0;
+-	}
+-
+-	while ((ret = mtd_block_isbad(mtd, cxt->nextpage * record_size)) > 0) {
+-badblock:
+-		pr_warn("bad block at %08lx\n",
+-			cxt->nextpage * record_size);
+-		i++;
+-		cxt->nextpage = cxt->nextpage + (mtd->erasesize / record_size);
+-		if (cxt->nextpage >= cxt->oops_pages)
+-			cxt->nextpage = 0;
+-		if (i == cxt->oops_pages / (mtd->erasesize / record_size)) {
+-			pr_err("all blocks bad!\n");
+-			return;
+-		}
+-	}
+-
+-	if (ret < 0) {
+-		pr_err("mtd_block_isbad failed, aborting\n");
+-		return;
+-	}
+-
+-	for (j = 0, ret = -1; (j < 3) && (ret < 0); j++)
+-		ret = mtdoops_erase_block(cxt, cxt->nextpage * record_size);
+-
+-	if (ret >= 0) {
+-		pr_debug("ready %d, %d\n",
+-			 cxt->nextpage, cxt->nextcount);
+-		return;
+-	}
+-
+-	if (ret == -EIO) {
+-		ret = mtd_block_markbad(mtd, cxt->nextpage * record_size);
+-		if (ret < 0 && ret != -EOPNOTSUPP) {
+-			pr_err("block_markbad failed, aborting\n");
+-			return;
+-		}
+-	}
+-	goto badblock;
+-}
+-
+-/* Scheduled work - when we can't proceed without erasing a block */
+-static void mtdoops_workfunc_erase(struct work_struct *work)
+-{
+-	struct mtdoops_context *cxt =
+-			container_of(work, struct mtdoops_context, work_erase);
+-	mtdoops_erase(cxt);
+-}
+-
+-static void mtdoops_inc_counter(struct mtdoops_context *cxt, int panic)
+-{
+-	cxt->nextpage++;
+-	if (cxt->nextpage >= cxt->oops_pages)
+-		cxt->nextpage = 0;
+-	cxt->nextcount++;
+-	if (cxt->nextcount == 0xffffffff)
+-		cxt->nextcount = 0;
+-
+-	if (page_is_used(cxt, cxt->nextpage)) {
+-		pr_debug("not ready %d, %d (erase %s)\n",
+-			 cxt->nextpage, cxt->nextcount,
+-			 panic ? "immediately" : "scheduled");
+-		if (panic) {
+-			/* In case of panic, erase immediately */
+-			mtdoops_erase(cxt);
+-		} else {
+-			/* Otherwise, schedule work to erase it "nicely" */
+-			schedule_work(&cxt->work_erase);
+-		}
+-	} else {
+-		pr_debug("ready %d, %d (no erase)\n",
+-			 cxt->nextpage, cxt->nextcount);
+-	}
+-}
+-
+-static void mtdoops_write(struct mtdoops_context *cxt, int panic)
+-{
+-	struct mtd_info *mtd = cxt->mtd;
+-	size_t retlen;
+-	struct mtdoops_hdr *hdr;
+-	int ret;
+-
+-	if (test_and_set_bit(0, &cxt->oops_buf_busy))
+-		return;
+-
+-	/* Add mtdoops header to the buffer */
+-	hdr = (struct mtdoops_hdr *)cxt->oops_buf;
+-	hdr->seq = cxt->nextcount;
+-	hdr->magic = MTDOOPS_KERNMSG_MAGIC_v2;
+-	hdr->timestamp = ktime_get_real();
+-
+-	if (panic) {
+-		ret = mtd_panic_write(mtd, cxt->nextpage * record_size,
+-				      record_size, &retlen, cxt->oops_buf);
+-		if (ret == -EOPNOTSUPP) {
+-			pr_err("Cannot write from panic without panic_write\n");
+-			goto out;
+-		}
+-	} else
+-		ret = mtd_write(mtd, cxt->nextpage * record_size,
+-				record_size, &retlen, cxt->oops_buf);
+-
+-	if (retlen != record_size || ret < 0)
+-		pr_err("write failure at %ld (%td of %ld written), error %d\n",
+-		       cxt->nextpage * record_size, retlen, record_size, ret);
+-	mark_page_used(cxt, cxt->nextpage);
+-out:
+-	clear_bit(0, &cxt->oops_buf_busy);
+-}
+-
+-static void mtdoops_workfunc_write(struct work_struct *work)
+-{
+-	struct mtdoops_context *cxt =
+-			container_of(work, struct mtdoops_context, work_write);
+-
+-	mtdoops_write(cxt, 0);
+-}
+-
+-static void find_next_position(struct mtdoops_context *cxt)
+-{
+-	struct mtd_info *mtd = cxt->mtd;
+-	struct mtdoops_hdr hdr;
+-	int ret, page, maxpos = 0;
+-	u32 maxcount = 0xffffffff;
+-	size_t retlen;
+ 
+ 	for (page = 0; page < cxt->oops_pages; page++) {
+-		if (mtd_block_isbad(mtd, page * record_size))
++		set_bit(page, cxt->dirty);
++		ret = mtd_block_isbad(cxt->mtd, (u64)page * record_size);
++		if (ret < 0)
++			return ret;
++		if (ret)
+ 			continue;
+-		/* Assume the page is used */
+-		mark_page_used(cxt, page);
+-		ret = mtd_read(mtd, page * record_size, sizeof(hdr),
+-			       &retlen, (u_char *)&hdr);
+-		if (retlen != sizeof(hdr) ||
+-				(ret < 0 && !mtd_is_bitflip(ret))) {
+-			pr_err("read failure at %ld (%zu of %zu read), err %d\n",
+-			       page * record_size, retlen, sizeof(hdr), ret);
+-			continue;
+-		}
+-
+-		if (hdr.seq == 0xffffffff && hdr.magic == 0xffffffff)
+-			mark_page_unused(cxt, page);
+-		if (hdr.seq == 0xffffffff ||
++		retlen = 0;
++		ret = mtd_read(cxt->mtd, (u64)page * record_size,
++			       record_size, &retlen, cxt->oops_buf);
++		if (retlen != record_size || (ret < 0 && !mtd_is_bitflip(ret)))
++			return ret < 0 ? ret : -EIO;
++		if (!memchr_inv(cxt->oops_buf, 0xff, record_size))
++			clear_bit(page, cxt->dirty);
++		memcpy(&hdr, cxt->oops_buf, sizeof(hdr));
++		if (hdr.seq == U32_MAX ||
+ 		    (hdr.magic != MTDOOPS_KERNMSG_MAGIC_v1 &&
+ 		     hdr.magic != MTDOOPS_KERNMSG_MAGIC_v2))
+ 			continue;
+-		if (maxcount == 0xffffffff) {
+-			maxcount = hdr.seq;
+-			maxpos = page;
+-		} else if (hdr.seq < 0x40000000 && maxcount > 0xc0000000) {
+-			maxcount = hdr.seq;
+-			maxpos = page;
+-		} else if (hdr.seq > maxcount && hdr.seq < 0xc0000000) {
+-			maxcount = hdr.seq;
+-			maxpos = page;
+-		} else if (hdr.seq > maxcount && hdr.seq > 0xc0000000
+-					&& maxcount > 0x80000000) {
+-			maxcount = hdr.seq;
+-			maxpos = page;
++		if (!found || mtdoops_seq_after(hdr.seq, newest)) {
++			found = true;
++			newest = hdr.seq;
++			newest_page = page;
+ 		}
+ 	}
+-	if (maxcount == 0xffffffff) {
+-		cxt->nextpage = cxt->oops_pages - 1;
+-		cxt->nextcount = 0;
+-	}
+-	else {
+-		cxt->nextpage = maxpos;
+-		cxt->nextcount = maxcount;
+-	}
+-
+-	mtdoops_inc_counter(cxt, 0);
+-}
+-
+-static void mtdoops_add_reason(char *oops_buf, int reason,
+-			       enum mtdoops_log_type type, int index,
+-			       int nextpage)
+-{
+-	char str_buf[512] = { 0 };
+-	int ret_len = 0;
++	cxt->nextpage = found ? (newest_page + 1) % cxt->oops_pages : 0;
++	cxt->nextcount = found ? mtdoops_next_seq(newest) : 1;
++	return 0;
++}
++
++/* Called only for an actual archival event, with the logger mutex held. */
++static int mtdoops_prepare_slot(struct mtdoops_context *cxt)
++{
++	unsigned int per_block = cxt->mtd->erasesize / record_size;
++	unsigned int blocks = cxt->oops_pages / per_block;
++	unsigned int tried = 0, page, i;
++	struct erase_info erase = { 0 };
++	int ret, retry;
++
++	while (tried++ <= blocks) {
++		page = cxt->nextpage;
++		ret = mtd_block_isbad(cxt->mtd, (u64)page * record_size);
++		if (ret < 0)
++			return ret;
++		if (ret || (test_bit(page, cxt->dirty) && page % per_block)) {
++			cxt->nextpage = ((page / per_block + 1) * per_block) %
++					cxt->oops_pages;
++			continue;
++		}
++		if (!test_bit(page, cxt->dirty))
++			return 0;
++		erase.addr = (u64)page * record_size;
++		erase.len = cxt->mtd->erasesize;
++		for (retry = 0; retry < 3; retry++) {
++			ret = mtd_erase(cxt->mtd, &erase);
++			if (!ret)
++				break;
++		}
++		if (ret)
++			return ret;
++		for (i = page; i < page + per_block; i++)
++			clear_bit(i, cxt->dirty);
++		return 0;
++	}
++	return -ENOSPC;
++}
++
++static size_t mtdoops_add_reason(char *dst, size_t capacity,
++			       enum mtd_dump_reason reason, u32 seq)
++{
+ 	struct timespec64 now;
+ 	struct tm ts;
+-	char temp_buf[32] = { 0 };
+-	int temp_len = 0;
+-	char BootMode[20] = { 0 };
+-	unsigned long local_time;
+-
++	const char *mode = "unknown";
++
++	if ((unsigned int)reason >= ARRAY_SIZE(kdump_reason))
++		reason = MTD_DUMP_UNDEF;
++	if (boot_mode == 0)
++		mode = "normal";
++	else if (boot_mode == 1)
++		mode = "recovery";
++	else if (boot_mode == 2)
++		mode = "poweroff_charger";
+ 	ktime_get_coarse_real_ts64(&now);
+-	/*set title time to UTC+8*/
+-	local_time = (unsigned long)(now.tv_sec + 8 * 60 * 60);
+-	time64_to_tm(local_time, 0, &ts);
+-	if (boot_mode == 0) {
+-		strcpy(BootMode, "normal");
+-	} else if (boot_mode == 1) {
+-		strcpy(BootMode, "recovery");
+-	} else if (boot_mode == 2) {
+-		strcpy(BootMode, "poweroff_charger");
+-	}
+-
+-	temp_len = snprintf(temp_buf, 32, "\n ---mtdoops report start--- \n");
+-	memcpy(oops_buf, temp_buf, temp_len);
+-
+-	ret_len = snprintf(
+-		str_buf, 200,
+-		"\n```\n## Boot_Index: %d\n## Oops_Index: %d\n### Build: %s\n## REASON: %s\n#### LOG TYPE:%s\n## BOOT MODE:%s\n##### %04ld-%02d-%02d %02d:%02d:%02d\n```c\n",
+-		boot_index, index, build_fingerprint, kdump_reason[reason],
+-		log_type[type], BootMode, ts.tm_year + 1900, ts.tm_mon + 1,
+-		ts.tm_mday, ts.tm_hour, ts.tm_min, ts.tm_sec);
+-
+-	if (ret_len >= sizeof(str_buf))
+-		ret_len = sizeof(str_buf);
+-
+-	memcpy(oops_buf + temp_len, str_buf, ret_len);
+-}
+-
+-static void mtdoops_add_pmsg_head(char *oops_buf, enum mtdoops_log_type type)
+-{
+-	char str_buf[80] = { 0 };
+-	int ret_len = 0;
++	time64_to_tm(now.tv_sec, 8 * 60 * 60, &ts);
++	return scnprintf(dst, capacity,
++		"\n ---mtdoops report start--- \n\n```\n## Boot_Index: %d\n"
++		"## Oops_Index: %u\n### Build: %s\n## REASON: %s\n"
++		"#### LOG TYPE:LAST KMSG\n## BOOT MODE:%s\n"
++		"##### %04ld-%02d-%02d %02d:%02d:%02d\n```c\n",
++		boot_index, seq, build_fingerprint, kdump_reason[reason], mode,
++		ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour,
++		ts.tm_min, ts.tm_sec);
++}
++
++static size_t mtdoops_add_pmsg_head(char *dst, size_t capacity)
++{
+ 	struct timespec64 now;
+ 	struct tm ts;
+-	unsigned long local_time;
+ 
+ 	ktime_get_coarse_real_ts64(&now);
+-	local_time = (unsigned long)(now.tv_sec + 8 * 60 * 60);
+-	time64_to_tm(local_time, 0, &ts);
+-
+-	ret_len = snprintf(
+-		str_buf, 80,
+-		"\n```\n#### LOG TYPE:%s\n#####%04ld-%02d-%02d %02d:%02d:%02d\n```\n",
+-		log_type[type], ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday,
+-		ts.tm_hour, ts.tm_min, ts.tm_sec);
+-
+-	memcpy(oops_buf, str_buf, ret_len);
+-}
+-
+-static void mtdoops_do_dump(struct kmsg_dumper *dumper,
+-			    enum mtd_dump_reason reason)
+-{
+-	struct mtdoops_context *cxt = container_of(dumper,
+-			struct mtdoops_context, dump);
++	time64_to_tm(now.tv_sec, 8 * 60 * 60, &ts);
++	return scnprintf(dst, capacity,
++		"\n```\n#### LOG TYPE:LAST LOGCAT\n"
++		"#####%04ld-%02d-%02d %02d:%02d:%02d\n```\n",
++		ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour,
++		ts.tm_min, ts.tm_sec);
++}
++
++/*
++ * The producer's start is the next write position. A partially filled ring
++ * must have start == size; a full ring may have any start below capacity.
++ * Return the newest suffix in chronological order, never parity/header bytes.
++ */
++static int mtdoops_pmsg_range(u32 sig, int start, int size, size_t capacity,
++			     size_t limit, size_t *first, size_t *length,
++			     size_t *first_length)
++{
++	size_t end, count;
++
++	if (sig != MTDOOPS_PMSG_SIG || !capacity || capacity > INT_MAX ||
++	    start < 0 || size < 0 || (size_t)size > capacity ||
++	    (size_t)start > (size_t)size ||
++	    ((size_t)size < capacity && start != size) ||
++	    ((size_t)size == capacity && (size_t)start >= capacity))
++		return -EINVAL;
++	count = min_t(size_t, size, limit);
++	end = (size_t)start % capacity;
++	*first = end >= count ? end - count : capacity - (count - end);
++	*length = count;
++	*first_length = min(count, capacity - *first);
++	return 0;
++}
++
++static size_t mtdoops_copy_pmsg(struct mtdoops_context *cxt, u8 *dst,
++			      size_t capacity)
++{
++	struct pmsg_buffer_hdr *hdr = cxt->pmsg;
++	size_t first, count, first_count;
++	u32 sig;
++	int start, size, attempt;
++
++	if (!hdr || !capacity)
++		return 0;
++	for (attempt = 0; attempt < 3; attempt++) {
++		sig = READ_ONCE(hdr->sig);
++		start = atomic_read(&hdr->start);
++		size = atomic_read(&hdr->size);
++		if (mtdoops_pmsg_range(sig, start, size, cxt->pmsg_capacity,
++				       capacity, &first, &count, &first_count))
++			return 0;
++		memcpy(dst, hdr->data + first, first_count);
++		memcpy(dst + first_count, hdr->data, count - first_count);
++		/* Header stability is best effort, not a coherent payload guarantee. */
++		smp_rmb();
++		if (sig == READ_ONCE(hdr->sig) &&
++		    start == atomic_read(&hdr->start) &&
++		    size == atomic_read(&hdr->size))
++			return count;
++	}
++	/* A failed snapshot must not expose bytes from an earlier attempt. */
++	memset(dst, 0xff, capacity);
++	return 0;
++}
++
++static void mtdoops_do_dump(enum mtd_dump_reason reason)
++{
++	struct mtdoops_context *cxt = &oops_cxt;
++	struct mtdoops_hdr hdr;
+ 	struct kmsg_dump_iter iter;
+-	size_t ret_len = 0;
+-	void *pmsg_buffer_start = NULL;
+-	struct pmsg_buffer_hdr *p_hdr = NULL;
+-	int j = 0;
+-	int ret = 0;
+-	static int do_dump_count = 0;
+-
+-	if (cxt->mtd == NULL)
++	u32 magic = MTDOOPS_KERNMSG_MAGIC_v2;
++	u64 record_offset;
++	size_t offset, limit, len = 0, retlen = 0, pmsg_head, pmsg_len;
++	int ret;
++
++	if (reason != MTD_DUMP_RESTART && reason != MTD_DUMP_POWEROFF &&
++	    reason != MTD_DUMP_LONG_PRESS)
+ 		return;
+-
+-	if (reason == MTD_DUMP_SHUTDOWN || reason == MTD_DUMP_EMERG)
++	mutex_lock(&mtdoops_lock);
++	if (cxt->stopping || !cxt->mtd)
++		goto out;
++	ret = mtdoops_prepare_slot(cxt);
++	if (ret) {
++		pr_err("cannot prepare archival slot: %d\n", ret);
++		goto out;
++	}
++	memset(cxt->oops_buf, 0xff, record_size);
++	hdr.seq = cxt->nextcount;
++	/* Publish magic separately: a partial payload must remain uncommitted. */
++	hdr.magic = U32_MAX;
++	hdr.timestamp = ktime_get_real();
++	memcpy(cxt->oops_buf, &hdr, sizeof(hdr));
++	offset = sizeof(hdr);
++	offset += mtdoops_add_reason((char *)cxt->oops_buf + offset,
++				    record_size - offset, reason, hdr.seq);
++	limit = min_t(size_t, record_size, lkmsg_record_size);
++	if (offset < limit) {
++		kmsg_dump_rewind(&iter);
++		kmsg_dump_get_buffer(&iter, true, (char *)cxt->oops_buf + offset,
++				     limit - offset, &len);
++		/* Treat an impossible producer length as failure, never an offset. */
++		if (len > limit - offset)
++			len = 0;
++		offset += len;
++	}
++	if (cxt->pmsg && offset < record_size) {
++		pmsg_head = mtdoops_add_pmsg_head((char *)cxt->oops_buf + offset,
++						record_size - offset);
++		pmsg_len = mtdoops_copy_pmsg(cxt, cxt->oops_buf + offset + pmsg_head,
++					   record_size - offset - pmsg_head);
++		if (!pmsg_len)
++			memset(cxt->oops_buf + offset, 0xff, record_size - offset);
++	}
++	record_offset = (u64)cxt->nextpage * record_size;
++	ret = mtd_write(cxt->mtd, record_offset,
++			record_size, &retlen, cxt->oops_buf);
++	set_bit(cxt->nextpage, cxt->dirty);
++	if (ret || retlen != record_size) {
++		pr_err("archival write failed at page %u (%zu/%lu): %d\n",
++		       cxt->nextpage, retlen, record_size, ret);
++		goto out;
++	}
++	mtd_sync(cxt->mtd);
++	retlen = 0;
++	ret = mtd_write(cxt->mtd,
++			record_offset + offsetof(struct mtdoops_hdr, magic),
++			sizeof(magic), &retlen, (const u8 *)&magic);
++	if (ret || retlen != sizeof(magic)) {
++		pr_err("archival commit failed at page %u (%zu/%zu): %d\n",
++		       cxt->nextpage, retlen, sizeof(magic), ret);
++		goto out;
++	}
++	mtd_sync(cxt->mtd);
++	pr_info("archived %s, sequence %u, page %u\n",
++		kdump_reason[reason], cxt->nextcount, cxt->nextpage);
++	/* Each successful event gets a record; failures never commit sequence. */
++	cxt->nextpage = (cxt->nextpage + 1) % cxt->oops_pages;
++	cxt->nextcount = mtdoops_next_seq(cxt->nextcount);
++out:
++	mutex_unlock(&mtdoops_lock);
++}
++
++static int mtdoops_reboot(struct notifier_block *nb, unsigned long event,
++			  void *ptr)
++{
++	if (event == SYS_RESTART)
++		mtdoops_do_dump(MTD_DUMP_RESTART);
++	else if (event == SYS_POWER_OFF)
++		mtdoops_do_dump(MTD_DUMP_POWEROFF);
++	return NOTIFY_OK;
++}
++
++static int mtdoops_long_press(struct notifier_block *nb, unsigned long event,
++			    void *ptr)
++{
++	mtdoops_do_dump(MTD_DUMP_LONG_PRESS);
++	return NOTIFY_DONE;
++}
++
++static void mtdoops_do_null(struct kmsg_dumper *dumper,
++			    struct kmsg_dump_detail *detail)
++{
++	/* Preserve the native registered panic/oops callback's no-op policy. */
++}
++
++/*
++ * MTD notification holds mtd_table_mutex. Lifetime is bounded by notification:
++ * removal cannot finish while a synchronous operation holds mtdoops_lock.
++ * Do not take get/put_mtd_device (or unregister event callbacks) here: those
++ * paths can invert table/notifier/logger lock order and deadlock removal.
++ */
++static void mtdoops_notify_add(struct mtd_info *mtd)
++{
++	struct mtdoops_context *cxt = &oops_cxt;
++	int ret;
++
++	if ((cxt->mtd_index < 0 && strcmp(mtd->name, mtddev)) ||
++	    (cxt->mtd_index >= 0 && mtd->index != cxt->mtd_index))
+ 		return;
+-
+-	/* Only dump oopses if dump_oops is set */
+-	if (reason == MTD_DUMP_OOPS && !dump_oops)
+-		return;
+-
+-	do_dump_count++;
+-	pr_err("%s start , count = %d , page = %d, reason = %d, dump_count = %d\n",
+-	       __func__, cxt->nextcount, cxt->nextpage, reason, do_dump_count);
+-
+-	if (do_dump_count > 1) {
+-		for (j = 0, ret = -1; (j < 3) && (ret < 0); j++)
+-			ret = mtdoops_erase_block(cxt,
+-						  cxt->nextpage * record_size);
+-	}
+-	kmsg_dump_rewind(&iter);
+-
+-	if (test_and_set_bit(0, &cxt->oops_buf_busy))
+-		return;
+-	kmsg_dump_get_buffer(&iter, true, cxt->oops_buf + MTDOOPS_HEADER_SIZE,
+-			     lkmsg_record_size - MTDOOPS_HEADER_SIZE, &ret_len);
+-	clear_bit(0, &cxt->oops_buf_busy);
+-
+-	mtdoops_add_reason(cxt->oops_buf + MTDOOPS_HEADER_SIZE, reason,
+-			   MTDOOPS_TYPE_DMESG, cxt->nextcount, cxt->nextpage);
+-
+-	pmsg_buffer_start = phys_to_virt(
+-		(cxt->pmsg_data.mem_address + cxt->pmsg_data.mem_size) -
+-		cxt->pmsg_data.pmsg_size);
+-
+-	p_hdr = (struct pmsg_buffer_hdr *)pmsg_buffer_start;
+-	pr_err("mtdoops_do_dump pmsg paddr = 0x%p \n", pmsg_buffer_start);
+-
+-	if (p_hdr->sig == 0x43474244) {
+-		void *oopsbuf = cxt->oops_buf + (MTDOOPS_HEADER_SIZE + ret_len);
+-		uint8_t *p_buff_end =
+-			(uint8_t *)p_hdr->data + atomic_read(&p_hdr->size);
+-		int pmsg_cp_size = 0;
+-		int pstart = p_hdr->start.counter;
+-		int psize = p_hdr->size.counter;
+-
+-		pmsg_cp_size = (record_size - (ret_len + MTDOOPS_HEADER_SIZE));
+-		if (psize <= pmsg_cp_size)
+-			pmsg_cp_size = psize;
+-
+-		if (pstart >= pmsg_cp_size) {
+-			memcpy(oopsbuf, p_hdr->data, pmsg_cp_size);
+-		} else {
+-			memcpy(oopsbuf, p_buff_end - (pmsg_cp_size - pstart),
+-			       pmsg_cp_size - pstart);
+-			memcpy(oopsbuf + (pmsg_cp_size - pstart), p_hdr->data,
+-			       pstart);
+-		}
+-
+-		mtdoops_add_pmsg_head(cxt->oops_buf +
+-					      (MTDOOPS_HEADER_SIZE + ret_len),
+-				      MTDOOPS_TYPE_PMSG);
+-	} else
+-		pr_err("mtdoops: read pmsg failed sig = 0x%x \n", p_hdr->sig);
+-
+-	if (reason == MTD_DUMP_OOPS || reason == MTD_DUMP_PANIC) {
+-		/* Panics must be written immediately */
+-		mtdoops_write(cxt, 1);
+-	} else {
+-		/*we should write log immediately , if use work to write,
+-		 *ufs will shutdown before write log finish
+-		*/
+-		mtdoops_write(cxt, 0);
+-	}
+-
+-	pr_err("mtdoops_do_dump() finish \n");
+-}
+-
+-static int mtdoops_reboot_nb_handle(struct notifier_block *this,
+-				    unsigned long event, void *ptr)
+-{
+-	enum mtd_dump_reason reason;
++	mutex_lock(&mtdoops_lock);
++	if (cxt->stopping || cxt->mtd)
++		goto out;
++	if (!mtdoops_geometry_valid(mtd)) {
++		pr_err("mtd%d has unsupported archival geometry\n", mtd->index);
++		goto out;
++	}
++	cxt->oops_pages = div_u64(mtd->size, record_size);
++	cxt->dirty = bitmap_zalloc(cxt->oops_pages, GFP_KERNEL);
++	if (!cxt->dirty)
++		goto out;
++	cxt->mtd = mtd;
++	ret = mtdoops_find_next(cxt);
++	if (ret) {
++		pr_err("cannot scan mtd%d: %d\n", mtd->index, ret);
++		cxt->mtd = NULL;
++		bitmap_free(cxt->dirty);
++		cxt->dirty = NULL;
++		goto out;
++	}
++	pr_info("attached to mtd%d, %u records of %lu bytes (read-only scan)\n",
++		mtd->index, cxt->oops_pages, record_size);
++out:
++	mutex_unlock(&mtdoops_lock);
++}
++
++static void mtdoops_notify_remove(struct mtd_info *mtd)
++{
+ 	struct mtdoops_context *cxt = &oops_cxt;
+ 
+-	if (event == SYS_RESTART)
+-		reason = MTD_DUMP_RESTART;
+-	else if (event == SYS_POWER_OFF)
+-		reason = MTD_DUMP_POWEROFF;
+-	else
+-		return NOTIFY_OK;
+-
+-	mtdoops_do_dump(&cxt->dump, reason);
+-
+-	return NOTIFY_OK;
+-}
+-
+-static int pwrkey_long_press_irq_event(struct notifier_block *this,
+-				       unsigned long event, void *ptr)
++	mutex_lock(&mtdoops_lock);
++	if (cxt->mtd == mtd) {
++		cxt->mtd = NULL;
++		bitmap_free(cxt->dirty);
++		cxt->dirty = NULL;
++		cxt->oops_pages = 0;
++	}
++	mutex_unlock(&mtdoops_lock);
++}
++
++static struct mtd_notifier mtdoops_notifier = {
++	.add = mtdoops_notify_add, .remove = mtdoops_notify_remove,
++};
++
++static int mtdoops_read_u32(struct device_node *np, const char *name, u32 *value)
++{
++	*value = 0;
++	if (!of_find_property(np, name, NULL))
++		return 0;
++	return of_property_read_u32(np, name, value);
++}
++
++/* Match the actual reserved ramoops producer, including cache type and ECC. */
++static struct device_node *mtdoops_find_ramoops(struct resource *res)
++{
++	struct device_node *np;
++	struct reserved_mem *rmem;
++
++	for_each_compatible_node(np, NULL, "ramoops") {
++		rmem = of_reserved_mem_lookup(np);
++		if (of_device_is_available(np) && rmem &&
++		    rmem->base == res->start && rmem->size == resource_size(res) &&
++		    !of_property_read_bool(np, "reusable") &&
++		    !of_property_read_bool(np, "no-map"))
++			return np;
++	}
++	return NULL;
++}
++
++static int mtdoops_pmsg_probe(struct platform_device *pdev)
+ {
+ 	struct mtdoops_context *cxt = &oops_cxt;
+-
+-	mtdoops_do_dump(&cxt->dump, MTD_DUMP_LONG_PRESS);
+-	return NOTIFY_DONE;
+-}
+-
+-static void mtdoops_do_null(struct kmsg_dumper *dumper,
+-			    enum kmsg_dump_reason reason)
+-{
+-	return;
+-}
+-
+-static void mtdoops_notify_add(struct mtd_info *mtd)
++	struct resource *res;
++	struct device_node *producer;
++	struct page **pages;
++	phys_addr_t start;
++	void *mapping;
++	size_t page_count, capacity, raw_capacity, ecc_blocks, ecc_total;
++	u32 console, pmsg, producer_pmsg, producer_console, ftrace, ecc, memtype;
++	unsigned int i;
++	pgprot_t prot;
++	int ret;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res || res->end < res->start)
++		return -EINVAL;
++	if (mtdoops_read_u32(pdev->dev.of_node, "console-size", &console) ||
++	    mtdoops_read_u32(pdev->dev.of_node, "pmsg-size", &pmsg) ||
++	    pmsg <= sizeof(struct pmsg_buffer_hdr) || pmsg > MTDOOPS_MAX_MTD_SIZE ||
++	    pmsg > resource_size(res) || console > resource_size(res) - pmsg)
++		return -EINVAL;
++	producer = mtdoops_find_ramoops(res);
++	if (!producer)
++		return -EINVAL;
++	ret = -EINVAL;
++	if (mtdoops_read_u32(producer, "pmsg-size", &producer_pmsg) ||
++	    mtdoops_read_u32(producer, "console-size", &producer_console) ||
++	    mtdoops_read_u32(producer, "ftrace-size", &ftrace) ||
++	    mtdoops_read_u32(producer, "ecc-size", &ecc) ||
++	    producer_pmsg != pmsg || producer_console != console || ftrace ||
++	    !is_power_of_2(pmsg))
++		goto put_node;
++	memtype = of_property_read_bool(producer, "unbuffered") ? 1 : 0;
++	if (of_find_property(producer, "mem-type", NULL) &&
++	    of_property_read_u32(producer, "mem-type", &memtype))
++		goto put_node;
++	switch (memtype) {
++	case 0:
++		prot = pgprot_writecombine(PAGE_KERNEL);
++		break;
++	case 1:
++		prot = pgprot_noncached(PAGE_KERNEL);
++		break;
++	case 2:
++		prot = PAGE_KERNEL;
++		break;
++	default:
++		goto put_node;
++	}
++	raw_capacity = pmsg - sizeof(struct pmsg_buffer_hdr);
++	capacity = raw_capacity;
++	/* Match persistent_ram_init_ecc's default 128-byte data blocks. */
++	if (ecc) {
++		if (ecc > INT_MAX || ecc >= raw_capacity)
++			goto put_node;
++		ecc_blocks = DIV_ROUND_UP(raw_capacity - ecc, 128 + (size_t)ecc);
++		if (check_mul_overflow(ecc_blocks + 1, (size_t)ecc, &ecc_total) ||
++		    ecc_total >= raw_capacity)
++			goto put_node;
++		capacity -= ecc_total;
++	}
++	if (check_add_overflow((phys_addr_t)res->start,
++			       (phys_addr_t)(resource_size(res) - pmsg), &start) ||
++	    !IS_ALIGNED(start, PAGE_SIZE) || !IS_ALIGNED(pmsg, PAGE_SIZE))
++		goto put_node;
++	page_count = pmsg / PAGE_SIZE;
++	pages = kmalloc_array(page_count, sizeof(*pages), GFP_KERNEL);
++	if (!pages) {
++		ret = -ENOMEM;
++		goto put_node;
++	}
++	for (i = 0; i < page_count; i++) {
++		unsigned long pfn = PHYS_PFN(start) + i;
++
++		if (!pfn_valid(pfn) || !PageReserved(pfn_to_page(pfn)))
++			goto free_pages;
++		pages[i] = pfn_to_page(pfn);
++	}
++	mapping = vmap(pages, page_count, VM_MAP | VM_IOREMAP, prot);
++	if (!mapping) {
++		ret = -ENOMEM;
++		goto free_pages;
++	}
++	mutex_lock(&mtdoops_lock);
++	if (cxt->stopping || cxt->pmsg_dev) {
++		mutex_unlock(&mtdoops_lock);
++		vunmap(mapping);
++		ret = -EBUSY;
++		goto free_pages;
++	}
++	cxt->pmsg_dev = pdev;
++	cxt->pmsg_vaddr = mapping;
++	cxt->pmsg = mapping;
++	cxt->pmsg_capacity = capacity;
++	mutex_unlock(&mtdoops_lock);
++	ret = 0;
++	pr_info("mapped verified reserved pmsg (%zu data bytes, ecc=%u)\n",
++		capacity, ecc);
++free_pages:
++	kfree(pages);
++put_node:
++	of_node_put(producer);
++	return ret;
++}
++
++static void mtdoops_pmsg_remove(struct platform_device *pdev)
+ {
+ 	struct mtdoops_context *cxt = &oops_cxt;
+-	u64 mtdoops_pages = div_u64(mtd->size, record_size);
+-	int err;
+-
+-	if (!strcmp(mtd->name, mtddev))
+-		cxt->mtd_index = mtd->index;
+-
+-	if (mtd->index != cxt->mtd_index || cxt->mtd_index < 0)
+-		return;
+-
+-	if (mtd->size < mtd->erasesize * 2) {
+-		pr_err("MTD partition %d not big enough for mtdoops\n",
+-		       mtd->index);
+-		return;
+-	}
+-	if (mtd->erasesize < record_size) {
+-		pr_err("eraseblock size of MTD partition %d too small\n",
+-		       mtd->index);
+-		return;
+-	}
+-	if (mtd->size > MTDOOPS_MAX_MTD_SIZE) {
+-		pr_err("mtd%d is too large (limit is %d MiB)\n",
+-		       mtd->index, MTDOOPS_MAX_MTD_SIZE / 1024 / 1024);
+-		return;
+-	}
+-
+-	/* oops_page_used is a bit field */
+-	cxt->oops_page_used =
+-		vmalloc(array_size(sizeof(unsigned long),
+-				   DIV_ROUND_UP(mtdoops_pages,
+-						BITS_PER_LONG)));
+-	if (!cxt->oops_page_used) {
+-		pr_err("could not allocate page array\n");
+-		return;
+-	}
+-
++
++	mutex_lock(&mtdoops_lock);
++	if (cxt->pmsg_dev == pdev) {
++		cxt->pmsg = NULL;
++		cxt->pmsg_dev = NULL;
++		cxt->pmsg_capacity = 0;
++		vunmap(cxt->pmsg_vaddr);
++		cxt->pmsg_vaddr = NULL;
++	}
++	mutex_unlock(&mtdoops_lock);
++}
++
++static const struct of_device_id mtdoops_dt_match[] = {
++	{ .compatible = "xiaomi,mtdoops_pmsg" }, {},
++};
++MODULE_DEVICE_TABLE(of, mtdoops_dt_match);
++
++static struct platform_driver mtdoops_pmsg_driver = {
++	.probe = mtdoops_pmsg_probe, .remove = mtdoops_pmsg_remove,
++	.driver = { .name = "mtdoops_pmsg", .of_match_table = mtdoops_dt_match },
++};
++
++static int __init mtdoops_init(void)
++{
++	struct mtdoops_context *cxt = &oops_cxt;
++	int ret, index;
++
++	BUILD_BUG_ON(sizeof(struct mtdoops_hdr) != 16);
++	BUILD_BUG_ON(sizeof(struct pmsg_buffer_hdr) != 12);
++	if (!mtddev[0] || !mtdoops_record_size_valid(record_size))
++		return -EINVAL;
++	cxt->mtd_index = -1;
++	if (!kstrtoint(mtddev, 0, &index) && index >= 0)
++		cxt->mtd_index = index;
++	cxt->stopping = false;
++	cxt->oops_buf = kvmalloc(record_size, GFP_KERNEL);
++	if (!cxt->oops_buf)
++		return -ENOMEM;
++	ret = platform_driver_register(&mtdoops_pmsg_driver);
++	if (ret)
++		goto free_buffer;
+ 	cxt->dump.max_reason = KMSG_DUMP_MAX;
+ 	cxt->dump.dump = mtdoops_do_null;
+-	err = kmsg_dump_register(&cxt->dump);
+-	if (err) {
+-		pr_err("registering kmsg dumper failed, error %d\n", err);
+-		vfree(cxt->oops_page_used);
+-		cxt->oops_page_used = NULL;
+-		return;
+-	}
+-	/*for restart and power off*/
+-	cxt->reboot_nb.notifier_call = mtdoops_reboot_nb_handle;
++	ret = kmsg_dump_register(&cxt->dump);
++	if (ret)
++		goto unregister_platform;
++	cxt->reboot_nb.notifier_call = mtdoops_reboot;
+ 	cxt->reboot_nb.priority = 255;
+-	register_reboot_notifier(&cxt->reboot_nb);
+-
+-	cxt->pwrkey_long_press_nb.notifier_call = pwrkey_long_press_irq_event;
+-	cxt->pwrkey_long_press_nb.priority = 255;
+-	raw_notifier_chain_register(&pwrkey_irq_notifier_list,
+-				    &cxt->pwrkey_long_press_nb);
+-
+-	cxt->mtd = mtd;
+-	cxt->oops_pages = (int)mtd->size / record_size;
+-	find_next_position(cxt);
+-	pr_info("Attached to MTD device %d\n", mtd->index);
+-}
+-
+-static void mtdoops_notify_remove(struct mtd_info *mtd)
+-{
+-	struct mtdoops_context *cxt = &oops_cxt;
+-
+-	if (mtd->index != cxt->mtd_index || cxt->mtd_index < 0)
+-		return;
+-
+-	if (kmsg_dump_unregister(&cxt->dump) < 0)
+-		pr_warn("could not unregister kmsg_dumper\n");
+-
+-	unregister_reboot_notifier(&cxt->reboot_nb);
+-	cxt->mtd = NULL;
+-	flush_work(&cxt->work_erase);
+-	flush_work(&cxt->work_write);
+-}
+-
+-
+-static struct mtd_notifier mtdoops_notifier = {
+-	.add	= mtdoops_notify_add,
+-	.remove	= mtdoops_notify_remove,
+-};
+-
+-static int mtdoops_parse_dt_u32(struct platform_device *pdev,
+-				const char *propname, u32 default_value,
+-				u32 *value)
+-{
+-	u32 val32 = 0;
+-	int ret;
+-
+-	ret = of_property_read_u32(pdev->dev.of_node, propname, &val32);
+-	if (ret == -EINVAL) {
+-		/* field is missing, use default value. */
+-		val32 = default_value;
+-	} else if (ret < 0) {
+-		pr_err("failed to parse property %s: %d\n", propname, ret);
+-		return ret;
+-	}
+-	/* Sanity check our results. */
+-	if (val32 > INT_MAX) {
+-		pr_err("%s %u > INT_MAX\n", propname, val32);
+-		return -EOVERFLOW;
+-	}
+-	*value = val32;
+-	return 0;
+-}
+-
+-static int mtdoops_pmsg_probe(struct platform_device *pdev)
+-{
+-	struct mtdoops_context *cxt = &oops_cxt;
+-	struct resource *res;
+-	u32 value;
+-	int ret;
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-	if (!res) {
+-		pr_err("failed to locate DT /reserved-memory resource\n");
+-		return -EINVAL;
+-	}
+-	cxt->pmsg_data.mem_size = resource_size(res);
+-	cxt->pmsg_data.mem_address = res->start;
+-
+-#define parse_u32(name, field, default_value)                                  \
+-	{                                                                      \
+-		ret = mtdoops_parse_dt_u32(pdev, name, default_value, &value); \
+-		if (ret < 0)                                                   \
+-			return ret;                                            \
+-		field = value;                                                 \
+-	}
+-
+-	parse_u32("console-size", cxt->pmsg_data.console_size, 0);
+-	parse_u32("pmsg-size", cxt->pmsg_data.pmsg_size, 0);
+-
+-#undef parse_u32
+-
+-	pr_err("pares mtd_dt, mem_address =0x%llx, mem_size =0x%lx \n",
+-	       cxt->pmsg_data.mem_address, cxt->pmsg_data.mem_size);
+-	pr_err("pares mtd_dt, pmsg_size =0x%lx, console-size =0x%lx \n",
+-	       cxt->pmsg_data.pmsg_size, cxt->pmsg_data.console_size);
+-
+-	return 0;
+-}
+-
+-static const struct of_device_id dt_match[] = {
+-	{ .compatible = "xiaomi,mtdoops_pmsg" },
+-	{}
+-};
+-
+-static struct platform_driver mtdoops_pmsg_driver = {
+-	.probe		= mtdoops_pmsg_probe,
+-	.driver		= {
+-		.name		= "mtdoops_pmsg",
+-		.of_match_table	= dt_match,
+-	},
+-};
+-
+-static int __init mtdoops_init(void)
+-{
+-	struct mtdoops_context *cxt = &oops_cxt;
+-	int mtd_index;
+-	char *endp;
+-
+-	if (strlen(mtddev) == 0) {
+-		pr_err("mtd device (mtddev=name/number) must be supplied\n");
+-		return -EINVAL;
+-	}
+-	if ((record_size & 4095) != 0) {
+-		pr_err("record_size must be a multiple of 4096\n");
+-		return -EINVAL;
+-	}
+-	if (record_size < 4096) {
+-		pr_err("record_size must be over 4096 bytes\n");
+-		return -EINVAL;
+-	}
+-
+-	/* Setup the MTD device to use */
+-	cxt->mtd_index = -1;
+-	mtd_index = simple_strtoul(mtddev, &endp, 0);
+-	if (*endp == '\0')
+-		cxt->mtd_index = mtd_index;
+-
+-	cxt->oops_buf = kmalloc(record_size, GFP_KERNEL);
+-	if (!cxt->oops_buf)
+-		return -ENOMEM;
+-	memset(cxt->oops_buf, 0xff, record_size);
+-	cxt->oops_buf_busy = 0;
+-
+-	INIT_WORK(&cxt->work_erase, mtdoops_workfunc_erase);
+-	INIT_WORK(&cxt->work_write, mtdoops_workfunc_write);
+-
+-	platform_driver_register(&mtdoops_pmsg_driver);
++	ret = register_reboot_notifier(&cxt->reboot_nb);
++	if (ret)
++		goto unregister_dump;
++	cxt->pwrkey_nb.notifier_call = mtdoops_long_press;
++	cxt->pwrkey_nb.priority = 255;
++	ret = pwrkey_register_irq_notifier(&cxt->pwrkey_nb);
++	if (ret)
++		goto unregister_reboot;
+ 	register_mtd_user(&mtdoops_notifier);
+ 	return 0;
++unregister_reboot:
++	unregister_reboot_notifier(&cxt->reboot_nb);
++unregister_dump:
++	kmsg_dump_unregister(&cxt->dump);
++unregister_platform:
++	platform_driver_unregister(&mtdoops_pmsg_driver);
++free_buffer:
++	kvfree(cxt->oops_buf);
++	cxt->oops_buf = NULL;
++	return ret;
+ }
+ 
+ static void __exit mtdoops_exit(void)
+ {
+ 	struct mtdoops_context *cxt = &oops_cxt;
+ 
++	mutex_lock(&mtdoops_lock);
++	cxt->stopping = true;
++	mutex_unlock(&mtdoops_lock);
++	/* Drain callbacks outside both the logger and MTD table mutexes. */
++	pwrkey_unregister_irq_notifier(&cxt->pwrkey_nb);
++	unregister_reboot_notifier(&cxt->reboot_nb);
++	kmsg_dump_unregister(&cxt->dump);
+ 	unregister_mtd_user(&mtdoops_notifier);
+-	kfree(cxt->oops_buf);
+-	vfree(cxt->oops_page_used);
+-}
+-
++	platform_driver_unregister(&mtdoops_pmsg_driver);
++	kvfree(cxt->oops_buf);
++	cxt->oops_buf = NULL;
++}
+ 
+ module_init(mtdoops_init);
+ module_exit(mtdoops_exit);
+-
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Richard Purdie <rpurdie@openedhand.com>");
+-MODULE_DESCRIPTION("MTD Oops/Panic console logger/driver");
++MODULE_DESCRIPTION("Xiaomi MTD synchronous shutdown and power-key archival");

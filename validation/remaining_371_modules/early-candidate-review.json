@@ -1,0 +1,5 @@
+{
+  "artifact": "20261103T123613919755Z",
+  "status": "not accepted for installation",
+  "reason": "Final actual-write tests rejected bypassing native empty RPMSG packets. Host skb alignment was corrected to match the 8-byte kernel cb alignment, and UBSan recovery was disabled. Use the final artifact whose source hashes match the corrected source and exhaustive page-offset tests."
+}

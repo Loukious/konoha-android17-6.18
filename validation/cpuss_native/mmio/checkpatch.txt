@@ -1,0 +1,3 @@
+total: 0 errors, 0 warnings, 0 checks, 99 lines checked
+
+port/patches/0215-use-dt-selected-cpuss-config-mmio.patch has no obvious style problems and is ready for submission.

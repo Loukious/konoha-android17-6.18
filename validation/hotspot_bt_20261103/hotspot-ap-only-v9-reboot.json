@@ -1,0 +1,15 @@
+{
+  "status": "REPRODUCED with Wi-Fi disabled and non-DFS2.4GHz AP",
+  "original_boot": "295cec69-93ef-4072-bda2-14330600c0b9",
+  "new_boot": "af491299-17fe-4c5b-9d44-1018b8769840",
+  "wifi_restore_returncode": 0,
+  "capture": "/home/loukious/Android/konoha-android17-6.18-port-20261031/device-backups/5493f3c6-20261101T160034Z/logging-investigation/bluetooth-glink-371-20261103T130225Z/hotspot-ap-only-v9/capture-20261103T134606Z",
+  "actual_ap_command": "[   22.485321] [schedu][0x1fbe631c][13:45:05.895864] wcn7750: [5222:I:WMI] send_vdev_start_cmd_tlv: vdev_id 0 freq 2457 chanmode 21 ch_info: 0x15 is_dfs 0 beacon interval 100 dtim 0 center_chan 2457 center_freq2 0 reg_info_1: 0x140000 reg_info_2: 0x1400, req->max_txpow: 0x14 Tx SS 2, Rx SS 2, ldpc_rx: 0, cac 0, regd 1, HE ops: 0req->dis_hw_ack: 0 target_tsf_us_lo 0l target_tsf_us_hi 0l",
+  "wifi_disabled_before_start": "Wifi is disabled",
+  "wifi_restored": true,
+  "limits": [
+    "Recorder terminated when turn was interrupted; manual followup captured new boot and restored original Wi-Fi state.",
+    "No panic captured; exact crash site unresolved."
+  ],
+  "wifi_reconnected": true
+}

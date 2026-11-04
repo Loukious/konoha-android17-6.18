@@ -1,0 +1,27 @@
+{
+  "status": "PASS",
+  "cases": 156898,
+  "driver_sha256": "e4aae6f59626ec5d3b2a9c3a49e123ee6b3545bed48561914ce555cfa6a7d8e5",
+  "harness_sha256": "e49eae96755bb9928cd1b3276a319db080254a8d66b8ee04d4a22b18dd3618f3",
+  "sanitizers": [
+    "ASan",
+    "UBSan"
+  ],
+  "regression_mutations": {
+    "obsolete-task-storage": "REJECTED",
+    "unreferenced-pid-lookup": "REJECTED",
+    "skip-task-reference-release": "REJECTED",
+    "skip-pid-reference-release": "REJECTED",
+    "panic-with-disabled-threshold": "REJECTED",
+    "ignore-effective-task-state": "REJECTED",
+    "drop-scan-count-reset": "REJECTED",
+    "skip-counter-saturation": "REJECTED",
+    "skip-callback-drain": "REJECTED",
+    "skip-hook-failure-unwind": "REJECTED",
+    "ignore-walt-availability": "REJECTED"
+  },
+  "limits": [
+    "Complete native driver C; sysctl parsing/copy, PID references, WALT storage and tracepoint RCU are mocked.",
+    "Panic policy only exercised against a returning host mock. No live hung task, panic, malformed user-copy or callback injection."
+  ]
+}

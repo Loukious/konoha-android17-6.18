@@ -1,0 +1,205 @@
+--- a/drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c
++++ b/drivers/soc/qcom/qcom_cpuss_sleep_stats_v4.c
+@@ -5,6 +5,10 @@
+ 
+ #include <linux/debugfs.h>
+ #include <linux/io.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/seq_file.h>
++#include <linux/of_device.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ 
+@@ -45,81 +49,123 @@
+ static int qcom_stats_residency_show(struct seq_file *s, void *d)
+ {
+ 	struct regs_config *reg = s->private;
+-	u64 val;
+-
+-	val = (u64)readl_relaxed(reg->base + reg->offset
+-				+ reg->residency_lo_hi_distance) << 32;
+-	val += readl_relaxed(reg->base + reg->offset);
+-	seq_printf(s, "%llu\n", val);
+-
+-	return 0;
+-}
++	u32 high, low, verify;
++	unsigned int attempt;
++
++	for (attempt = 0; attempt < 128; attempt++) {
++		high = readl(reg->base + reg->offset + reg->residency_lo_hi_distance);
++		low = readl(reg->base + reg->offset);
++		verify = readl(reg->base + reg->offset + reg->residency_lo_hi_distance);
++		if (high == verify) {
++			seq_printf(s, "%llu\n", (u64)high << 32 | low);
++			return 0;
++		}
++	}
++	return -EAGAIN;
++}
++
+ DEFINE_SHOW_ATTRIBUTE(qcom_stats_residency);
+ 
+-static void qcom_create_count_file(struct qcom_stats_prvdata *pdata)
+-{
+-	int i;
+-	struct stats_config *config = pdata->offset;
+-
+-	for (i = 0; i < ARRAY_SIZE(config->count_regs); i++) {
++static int qcom_create_count_file(struct qcom_stats_prvdata *pdata)
++{
++	struct dentry *file;
++	unsigned int i;
++	for (i = 0; i < REGS_MAX; i++) {
+ 		pdata->offset->count_regs[i].base = pdata->base;
+-		debugfs_create_file(pdata->offset->count_regs[i].name, 0400, pdata->rootdir,
+-				(void *)&pdata->offset->count_regs[i],
+-				&qcom_stats_count_fops);
+-	}
+-}
+-
+-static void qcom_create_resindency_file(struct qcom_stats_prvdata *pdata)
+-{
+-	int i;
+-	struct stats_config *config = pdata->offset;
+-
+-	for (i = 0; i < ARRAY_SIZE(config->residency_regs); i++) {
++		file = debugfs_create_file(pdata->offset->count_regs[i].name, 0400, pdata->rootdir,
++					  &pdata->offset->count_regs[i], &qcom_stats_count_fops);
++		if (IS_ERR_OR_NULL(file))
++			return file ? PTR_ERR(file) : -ENOMEM;
++	}
++	return 0;
++}
++
++
++static int qcom_create_resindency_file(struct qcom_stats_prvdata *pdata)
++{
++	struct dentry *file;
++	unsigned int i;
++	for (i = 0; i < REGS_MAX; i++) {
+ 		pdata->offset->residency_regs[i].base = pdata->base;
+-		debugfs_create_file(pdata->offset->residency_regs[i].name, 0400, pdata->rootdir,
+-				(void *)&pdata->offset->residency_regs[i],
+-				&qcom_stats_residency_fops);
+-	}
++		file = debugfs_create_file(pdata->offset->residency_regs[i].name, 0400, pdata->rootdir,
++					  &pdata->offset->residency_regs[i], &qcom_stats_residency_fops);
++		if (IS_ERR_OR_NULL(file))
++			return file ? PTR_ERR(file) : -ENOMEM;
++	}
++	return 0;
++}
++
++
++static int qcom_cpuss_v4_validate_config(const struct stats_config *config, u64 size)
++{
++	unsigned int i;
++	for (i = 0; i < REGS_MAX; i++) {
++		if ((u64)config->count_regs[i].offset + sizeof(u32) > size ||
++		    (u64)config->residency_regs[i].offset + sizeof(u32) > size ||
++		    (u64)config->residency_regs[i].offset +
++			config->residency_regs[i].residency_lo_hi_distance + sizeof(u32) > size)
++			return -EINVAL;
++	}
++	return 0;
++}
++
++static void qcom_cpuss_v4_cleanup(void *arg)
++{
++	struct qcom_stats_prvdata *pdata = arg;
++	debugfs_remove_recursive(pdata->rootdir);
++	pdata->rootdir = NULL;
+ }
+ 
+ static int qcom_cpuss_sleep_stats_v4_probe(struct platform_device *pdev)
+ {
+ 	struct qcom_stats_prvdata *pdata;
+-
+-	pdata = devm_kzalloc(&pdev->dev, sizeof(struct qcom_stats_prvdata),
+-			      GFP_KERNEL);
++	const struct stats_config *configuration;
++	struct resource *resource;
++	int ret;
++
++	configuration = of_device_get_match_data(&pdev->dev);
++	if (!configuration)
++		return -ENODEV;
++	resource = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!resource)
++		return -ENODEV;
++	ret = qcom_cpuss_v4_validate_config(configuration, resource_size(resource));
++	if (ret)
++		return ret;
++	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+ 	if (!pdata)
+ 		return -ENOMEM;
+-
++	pdata->offset = devm_kmemdup(&pdev->dev, configuration, sizeof(*configuration), GFP_KERNEL);
++	if (!pdata->offset)
++		return -ENOMEM;
+ 	pdata->base = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
+ 	if (IS_ERR(pdata->base))
+ 		return PTR_ERR(pdata->base);
+-
++	pdata->pdev = pdev;
+ 	pdata->rootdir = debugfs_create_dir("qcom_cpuss_sleep_stats", NULL);
+-	pdata->pdev = pdev;
+-
+-	pdata->offset = (struct stats_config *)of_device_get_match_data(&pdev->dev);
+-	if (!pdata->offset)
+-		return -EINVAL;
+-
+-	qcom_create_count_file(pdata);
+-	qcom_create_resindency_file(pdata);
+-
+-	platform_set_drvdata(pdev, pdata->rootdir);
+-
+-	return 0;
+-}
+-
+-static int qcom_cpuss_sleep_stats_remove(struct platform_device *pdev)
+-{
+-	struct dentry *root = platform_get_drvdata(pdev);
+-
+-	debugfs_remove_recursive(root);
+-
+-	return 0;
+-}
+-
+-struct stats_config qcom_cpuss_cntr_offsets = {
++	if (IS_ERR_OR_NULL(pdata->rootdir))
++		return pdata->rootdir ? PTR_ERR(pdata->rootdir) : -ENOMEM;
++	ret = devm_add_action_or_reset(&pdev->dev, qcom_cpuss_v4_cleanup, pdata);
++	if (ret)
++		return ret;
++	ret = qcom_create_count_file(pdata);
++	if (ret)
++		return ret;
++	ret = qcom_create_resindency_file(pdata);
++	if (ret)
++		return ret;
++	platform_set_drvdata(pdev, pdata);
++	return 0;
++}
++
++
++static void qcom_cpuss_sleep_stats_remove(struct platform_device *pdev)
++{
++	qcom_cpuss_v4_cleanup(platform_get_drvdata(pdev));
++}
++
++
++static const struct stats_config qcom_cpuss_cntr_offsets = {
+ 	.count_regs = {
+ 		{
+ 			.offset = 0x1220,
+@@ -167,6 +213,7 @@
+ 	},
+ };
+ 
++MODULE_DEVICE_TABLE(of, qcom_cpuss_stats_v4_table);
+ module_platform_driver(qcom_cpuss_sleep_stats_v4);
+ 
+ MODULE_DESCRIPTION("Qualcomm Technologies, Inc. (QTI) CPUSS sleep stats v4 driver");
