@@ -4252,6 +4252,8 @@ kernel_module_group(
         ":coresight_tpdm",
         ":coresight_tpda",
         ":coresight_tmc",
+        ":coresight_csr",
+        ":coresight_trace_noc",
         ":mca_ut_test",
         ":hl7603",
 
@@ -4734,7 +4736,7 @@ ddk_headers(
 
 ddk_headers(
     name = "coresight_provider_headers",
-    hdrs = ["drivers/hwtracing/coresight/coresight-priv.h", "drivers/hwtracing/coresight/coresight-tpda.h", "drivers/hwtracing/coresight/coresight-tpdm.h", "drivers/hwtracing/coresight/coresight-trace-id.h"],
+    hdrs = ["drivers/hwtracing/coresight/coresight-priv.h", "drivers/hwtracing/coresight/coresight-tpda.h", "drivers/hwtracing/coresight/coresight-tpdm.h", "drivers/hwtracing/coresight/coresight-trace-id.h", "drivers/hwtracing/coresight/coresight-csr.h", "drivers/hwtracing/coresight/coresight-trace-noc.h"],
     includes = ["drivers/hwtracing/coresight"],
     linux_includes = [],
 )
@@ -4902,6 +4904,7 @@ ddk_module(
 ddk_module(
     name = "coresight_tpdm",
     srcs = ["drivers/hwtracing/coresight/coresight-tpdm.c"],
+    hdrs = ["drivers/hwtracing/coresight/coresight-tpdm-legacy.c"],
     out = "coresight-tpdm.ko",
     kernel_build = "//common:kernel_aarch64",
     kconfig = "Kconfig",
@@ -4951,11 +4954,32 @@ ddk_module(
         "drivers/hwtracing/coresight/coresight-tmc-core.c",
         "drivers/hwtracing/coresight/coresight-tmc-etf.c",
         "drivers/hwtracing/coresight/coresight-tmc-etr.c",
+
         "drivers/hwtracing/coresight/coresight-tmc.h",
         "drivers/hwtracing/coresight/coresight-etm-perf.h",
         "drivers/hwtracing/coresight/coresight-catu.h",
     ],
+    hdrs = ["drivers/hwtracing/coresight/coresight-byte-cntr.c"],
     out = "coresight-tmc.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers", ":coresight_csr"],
+)
+
+ddk_module(
+    name = "coresight_csr",
+    srcs = ["drivers/hwtracing/coresight/coresight-csr.c"],
+    out = "coresight-csr.ko",
+    kernel_build = "//common:kernel_aarch64",
+    kconfig = "Kconfig",
+    defconfig = "platform_defconfig",
+    deps = [":coresight_provider_headers"],
+)
+ddk_module(
+    name = "coresight_trace_noc",
+    srcs = ["drivers/hwtracing/coresight/coresight-trace-noc.c"],
+    out = "coresight-trace-noc.ko",
     kernel_build = "//common:kernel_aarch64",
     kconfig = "Kconfig",
     defconfig = "platform_defconfig",

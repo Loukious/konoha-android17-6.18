@@ -31,6 +31,7 @@
 
 #include "coresight-priv.h"
 #include "coresight-tmc.h"
+#include "coresight-csr.h"
 
 DEFINE_CORESIGHT_DEVLIST(etb_devs, "tmc_etb");
 DEFINE_CORESIGHT_DEVLIST(etf_devs, "tmc_etf");
@@ -805,12 +806,6 @@ static int __tmc_probe(struct device *dev, struct resource *res)
 
 	devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
 	drvdata->config_type = BMVAL(devid, 6, 7);
-	/* Native ETR requires CSR ATID/IRQ control, which is not ported here. */
-	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR &&
-	    device_property_present(dev, "coresight-csr")) {
-		ret = -EOPNOTSUPP;
-		goto out;
-	}
 	drvdata->memwidth = tmc_get_memwidth(devid);
 	/* This device is not associated with a session */
 	drvdata->pid = -1;
@@ -874,6 +869,11 @@ static int __tmc_probe(struct device *dev, struct resource *res)
 	}
 	dev->platform_data = pdata;
 	desc.pdata = pdata;
+	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
+		ret = qcom_csr_attach(dev, pdata, &drvdata->csr);
+		if (ret)
+			goto out;
+	}
 
 	coresight_clear_self_claim_tag(&desc.access);
 	drvdata->csdev = coresight_register(&desc);
@@ -882,11 +882,20 @@ static int __tmc_probe(struct device *dev, struct resource *res)
 		goto out;
 	}
 
+	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
+		ret = tmc_stream_init(drvdata);
+		if (ret) {
+			coresight_unregister(drvdata->csdev);
+			goto out;
+		}
+	}
+
 	drvdata->miscdev.name = desc.name;
 	drvdata->miscdev.minor = MISC_DYNAMIC_MINOR;
 	drvdata->miscdev.fops = &tmc_fops;
 	ret = misc_register(&drvdata->miscdev);
 	if (ret) {
+		tmc_stream_remove(drvdata);
 		coresight_unregister(drvdata->csdev);
 		goto out;
 	}
@@ -940,6 +949,7 @@ static void __tmc_remove(struct device *dev)
 	 * etb fops in this case, device is there until last file
 	 * handler to this device is closed.
 	 */
+	tmc_stream_remove(drvdata);
 	misc_deregister(&drvdata->miscdev);
 	if (drvdata->crashdev.fops)
 		misc_deregister(&drvdata->crashdev);

@@ -244,7 +244,10 @@ struct tmc_resrv_buf {
  * @crash_mdata: Reserved memory for storing tmc crash metadata.
  *		 Used by ETR/ETF.
  */
+struct tmc_stream;
 struct tmc_drvdata {
+	struct coresight_device *csr;
+	struct tmc_stream *stream;
 	struct clk		*atclk;
 	struct clk		*pclk;
 	void __iomem		*base;
@@ -444,5 +447,8 @@ void tmc_etr_remove_catu_ops(void);
 struct etr_buf *tmc_etr_get_buffer(struct coresight_device *csdev,
 				   enum cs_mode mode, void *data);
 extern const struct attribute_group coresight_etr_group;
+
+int tmc_stream_init(struct tmc_drvdata *d);
+void tmc_stream_remove(struct tmc_drvdata *d);
 
 #endif

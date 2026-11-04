@@ -18,8 +18,13 @@
 #include "coresight-etm-perf.h"
 #include "coresight-priv.h"
 #include "coresight-tmc.h"
+#include "coresight-csr.h"
+#include <linux/of_irq.h>
+static void tmc_stream_stop(struct tmc_drvdata *d);
+static bool tmc_stream_is_open(struct tmc_drvdata *d);
 
 struct etr_flat_buf {
+	bool coherent;
 	struct device	*dev;
 	dma_addr_t	daddr;
 	void		*vaddr;
@@ -616,10 +621,14 @@ static int tmc_etr_alloc_flat_buf(struct tmc_drvdata *drvdata,
 	if (!flat_buf)
 		return -ENOMEM;
 
-	flat_buf->vaddr = dma_alloc_noncoherent(real_dev, etr_buf->size,
-						&flat_buf->daddr,
-						DMA_FROM_DEVICE,
-						GFP_KERNEL | __GFP_NOWARN);
+	flat_buf->coherent = drvdata->csr != NULL;
+	if (flat_buf->coherent)
+		flat_buf->vaddr = dma_alloc_coherent(real_dev, etr_buf->size,
+					&flat_buf->daddr, GFP_KERNEL | __GFP_NOWARN);
+	else
+		flat_buf->vaddr = dma_alloc_noncoherent(real_dev, etr_buf->size,
+						      &flat_buf->daddr, DMA_FROM_DEVICE,
+						      GFP_KERNEL | __GFP_NOWARN);
 	if (!flat_buf->vaddr) {
 		kfree(flat_buf);
 		return -ENOMEM;
@@ -640,9 +649,11 @@ static void tmc_etr_free_flat_buf(struct etr_buf *etr_buf)
 	if (flat_buf && flat_buf->daddr) {
 		struct device *real_dev = flat_buf->dev->parent;
 
-		dma_free_noncoherent(real_dev, etr_buf->size,
-				     flat_buf->vaddr, flat_buf->daddr,
-				     DMA_FROM_DEVICE);
+		if (flat_buf->coherent)
+			dma_free_coherent(real_dev, etr_buf->size, flat_buf->vaddr, flat_buf->daddr);
+		else
+			dma_free_noncoherent(real_dev, etr_buf->size,
+					     flat_buf->vaddr, flat_buf->daddr, DMA_FROM_DEVICE);
 	}
 	kfree(flat_buf);
 }
@@ -661,6 +672,11 @@ static void tmc_etr_sync_flat_buf(struct etr_buf *etr_buf, u64 rrp, u64 rwp)
 		etr_buf->len = etr_buf->size;
 	else
 		etr_buf->len = rwp - rrp;
+
+	if (flat_buf->coherent) {
+		dma_rmb();
+		return;
+	}
 
 	/*
 	 * The driver always starts tracing at the beginning of the buffer,
@@ -1062,6 +1078,8 @@ static int __tmc_etr_enable_hw(struct tmc_drvdata *drvdata)
 	struct etr_buf *etr_buf = drvdata->etr_buf;
 	int rc = 0;
 
+	if (tmc_stream_is_open(drvdata))
+		return -EBUSY;
 	CS_UNLOCK(drvdata->base);
 
 	/* Wait for TMCSReady bit to be set */
@@ -1185,9 +1203,11 @@ tmc_etr_setup_sysfs_buf(struct tmc_drvdata *drvdata)
 static void
 tmc_etr_free_sysfs_buf(struct etr_buf *buf)
 {
-	if (buf)
+	if (buf && refcount_dec_and_test(&buf->refcount))
 		tmc_free_etr_buf(buf);
 }
+
+#include "coresight-byte-cntr.c"
 
 static void tmc_etr_sync_sysfs_buf(struct tmc_drvdata *drvdata)
 {
@@ -1202,7 +1222,7 @@ static void tmc_etr_sync_sysfs_buf(struct tmc_drvdata *drvdata)
 		 * Insert barrier packets at the beginning, if there was
 		 * an overflow.
 		 */
-		if (etr_buf->full)
+		if (etr_buf->full && !tmc_stream_is_open(drvdata))
 			tmc_etr_buf_insert_barrier_packet(etr_buf,
 							  etr_buf->offset);
 	}
@@ -1213,6 +1233,7 @@ static void __tmc_etr_disable_hw(struct tmc_drvdata *drvdata)
 	CS_UNLOCK(drvdata->base);
 
 	tmc_flush_and_stop(drvdata);
+	tmc_stream_stop(drvdata);
 	/*
 	 * When operating in sysFS mode the content of the buffer needs to be
 	 * read before the TMC is disabled.
@@ -1940,7 +1961,7 @@ int tmc_read_prepare_etr(struct tmc_drvdata *drvdata)
 		return -EINVAL;
 
 	raw_spin_lock_irqsave(&drvdata->spinlock, flags);
-	if (drvdata->reading) {
+	if (drvdata->reading || tmc_stream_is_open(drvdata)) {
 		ret = -EBUSY;
 		goto out;
 	}

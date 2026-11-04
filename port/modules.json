@@ -1399,5 +1399,13 @@
   {
     "target": "coresight_tmc",
     "output": "coresight-tmc.ko"
+  },
+  {
+    "target": "coresight_csr",
+    "output": "coresight-csr.ko"
+  },
+  {
+    "target": "coresight_trace_noc",
+    "output": "coresight-trace-noc.ko"
   }
 ]

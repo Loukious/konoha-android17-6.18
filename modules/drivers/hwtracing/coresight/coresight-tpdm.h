@@ -9,6 +9,96 @@
 /* The max number of the datasets that TPDM supports */
 #define TPDM_DATASETS       7
 
+/* GPR Registers */
+#define TPDM_GPR_CR(n)		(0x0 + (n * 4))
+
+/* BC Subunit Registers */
+#define TPDM_BC_CR		(0x280)
+#define TPDM_BC_SATROLL		(0x284)
+#define TPDM_BC_CNTENSET	(0x288)
+#define TPDM_BC_CNTENCLR	(0x28C)
+#define TPDM_BC_INTENSET	(0x290)
+#define TPDM_BC_INTENCLR	(0x294)
+#define TPDM_BC_TRIG_LO(n)	(0x298 + (n * 4))
+#define TPDM_BC_TRIG_HI(n)	(0x318 + (n * 4))
+#define TPDM_BC_GANG		(0x398)
+#define TPDM_BC_OVERFLOW(n)	(0x39C + (n * 4))
+#define TPDM_BC_OVSR		(0x3C0)
+#define TPDM_BC_SELR		(0x3C4)
+#define TPDM_BC_CNTR_LO		(0x3C8)
+#define TPDM_BC_CNTR_HI		(0x3CC)
+#define TPDM_BC_SHADOW_LO(n)	(0x3D0 + (n * 4))
+#define TPDM_BC_SHADOW_HI(n)	(0x450 + (n * 4))
+#define TPDM_BC_SWINC		(0x4D0)
+#define TPDM_BC_MSR(n)		(0x4F0 + (n * 4))
+
+/* TC Subunit Registers */
+#define TPDM_TC_CR		(0x500)
+#define TPDM_TC_CNTENSET	(0x504)
+#define TPDM_TC_CNTENCLR	(0x508)
+#define TPDM_TC_INTENSET	(0x50C)
+#define TPDM_TC_INTENCLR	(0x510)
+#define TPDM_TC_TRIG_SEL(n)	(0x514 + (n * 4))
+#define TPDM_TC_TRIG_LO(n)	(0x534 + (n * 4))
+#define TPDM_TC_TRIG_HI(n)	(0x554 + (n * 4))
+#define TPDM_TC_OVSR_GP		(0x580)
+#define TPDM_TC_OVSR_IMPL	(0x584)
+#define TPDM_TC_SELR		(0x588)
+#define TPDM_TC_CNTR_LO		(0x58C)
+#define TPDM_TC_CNTR_HI		(0x590)
+#define TPDM_TC_SHADOW_LO(n)	(0x594 + (n * 4))
+#define TPDM_TC_SHADOW_HI(n)	(0x644 + (n * 4))
+#define TPDM_TC_SWINC		(0x700)
+#define TPDM_TC_MSR(n)		(0x768 + (n * 4))
+
+#define TPDM_PIDR0_DS_TC BIT(3)
+#define TPDM_PIDR0_DS_BC BIT(4)
+#define TPDM_PIDR0_DS_GPR BIT(5)
+#define TPDM_BC_MAX_COUNTERS 32
+#define TPDM_BC_MAX_OVERFLOW 6
+#define TPDM_BC_MAX_MSR 4
+#define TPDM_TC_MAX_COUNTERS 44
+#define TPDM_TC_MAX_TRIG 8
+#define TPDM_TC_MAX_MSR 6
+#define TPDM_GPR_REGS_MAX 160
+#define TPDM_MODE_ATB 0
+#define TPDM_MODE_APB 1
+#define TPDM_SUPPORT_TYPE_FULL 0
+#define TPDM_SUPPORT_TYPE_PARTIAL 1
+#define TPDM_SUPPORT_TYPE_NO 2
+struct bc_dataset {
+	u32		capture_mode;
+	u32		retrieval_mode;
+	uint32_t		sat_mode;
+	uint32_t		enable_counters;
+	uint32_t		clear_counters;
+	uint32_t		enable_irq;
+	uint32_t		clear_irq;
+	uint32_t		trig_val_lo[TPDM_BC_MAX_COUNTERS];
+	uint32_t		trig_val_hi[TPDM_BC_MAX_COUNTERS];
+	uint32_t		enable_ganging;
+	uint32_t		overflow_val[TPDM_BC_MAX_OVERFLOW];
+	uint32_t		msr[TPDM_BC_MAX_MSR];
+};
+
+struct tc_dataset {
+	u32		capture_mode;
+	u32		retrieval_mode;
+	u32			sat_mode;
+	uint32_t		enable_counters;
+	uint32_t		clear_counters;
+	uint32_t		enable_irq;
+	uint32_t		clear_irq;
+	uint32_t		trig_sel[TPDM_TC_MAX_TRIG];
+	uint32_t		trig_val_lo[TPDM_TC_MAX_TRIG];
+	uint32_t		trig_val_hi[TPDM_TC_MAX_TRIG];
+	uint32_t		msr[TPDM_TC_MAX_MSR];
+};
+
+struct gpr_dataset {
+ bool dirty[TPDM_GPR_REGS_MAX];
+ u32 gp_regs[TPDM_GPR_REGS_MAX];
+};
 /* CMB/MCMB Subunit Registers */
 #define TPDM_CMB_CR		(0xA00)
 /* CMB subunit timestamp insertion enable register */
@@ -303,6 +393,12 @@ struct cmb_dataset {
  */
 
 struct tpdm_drvdata {
+	struct bc_dataset *bc;
+	struct tc_dataset *tc;
+	struct gpr_dataset *gpr;
+	u32 bc_counters_avail, tc_counters_avail;
+	u32 bc_trig_type, tc_trig_type, bc_gang_type;
+	bool msr_support;
 	void __iomem		*base;
 	struct device		*dev;
 	struct coresight_device	*csdev;

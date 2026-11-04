@@ -541,7 +541,8 @@ static long qcom_stats_device_ioctl_active(struct file *file, unsigned int cmd,
 		/* Items are allocated lazily, so lookup pointer each time */
 		temp = qcom_stats_smem_get(subsystem->pid, subsystem->smem_item, sizeof(struct sleep_stats));
 		if (IS_ERR(temp)) {
-			ret = -EIO;
+			/* Missing optional firmware items are not transport failures. */
+			ret = PTR_ERR(temp);
 			goto exit;
 		}
 

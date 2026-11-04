@@ -689,13 +689,13 @@ void cam_init_message_buffer(void)
 		return;
 	}
 
-	CAM_ERR(CAM_UTIL, "io_record_size:%d",
+	CAM_DBG(CAM_UTIL, "io_record_size:%zu",
 		sizeof(struct cam_io_data_record));
 	cam_key_buffer =
 		vmalloc(sizeof(struct cam_debug_record_key_message_buffer));
 	cam_io_record_buffer = vmalloc(sizeof(struct cam_io_data_record));
 	cam_power_record_buffer = vmalloc(sizeof(struct cam_power_info_record));
-	CAM_ERR(CAM_UTIL, "cam_debug_record_key_message_buffer:%d",
+	CAM_DBG(CAM_UTIL, "cam_debug_record_key_message_buffer:%zu",
 		sizeof(struct cam_debug_record_key_message_buffer));
 
 	if (!cam_key_buffer || !cam_io_record_buffer ||
