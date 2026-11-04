@@ -130,4 +130,12 @@ ambiguous or changed draft identity, bad upload digests, original-run recovery,
 failed/running/duplicate build jobs, expired or mismatched artifacts and unsafe
 revision inputs. Independent read-only live checks resolved artifact
 `13359984661` for the original attempt and found the existing hidden draft.
-Hosted recovery publication still requires its first manual run.
+Hosted recovery run `41915138461` successfully reused immutable artifact
+`13359984661`, published release `434429464` and recorded the exact released
+inputs. All eight downloaded assets passed SHA256 checks; public release state
+and API digests matched the original build. Tracker `41915536268` then reported
+all change/release flags false and skipped update/build dispatch.
+
+This validates release automation, not device flashing. Regular release assets
+remain build archives; recovery installation needs a separately verified matched
+image set for the supplied ROM baseline.

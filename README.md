@@ -4,15 +4,31 @@ This repository contains the complete POCO F7 (Onyx/SM8735) module port and a
 reproducible GKI build recipe. It tracks Google's `android17-6.18-lts` branch
 and fetches the official **KernelSU Next `dev` branch on every build**.
 
-The current accepted port uses Linux **6.18.38**, with **391 platform modules**
-and **5,042 materialized module/build files**, imported from the working Konoha
-6.18 development workspace. The matched package on the current phone contains
-**471 total modules**, including ROM/GKI modules outside the platform catalog.
-Startup and bounded functional checks were performed on this Onyx phone.
-Both Tuna device-tree variants are checked offline; other phones, SoCs and
-motherboard revisions are not established as compatible. China-only notification
-LED support is outside this port's active scope. New LTS/KernelSU builds require
-their own device validation.
+The current Onyx recipe uses Linux **6.18.38** with **400 platform modules**,
+**37 additional native GKI modules** for CAN, USB adapters and network facilities,
+and **16 wireless firmware files** with their redistribution notices and matching
+ATH source. The module snapshot reproduces **5,193 files** from pinned imports
+and reviewed patches. See [NetHunter and CAN support](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/nethunter-can.md).
+
+The last device-validated checkpoint, source `c683c79`, used **391 platform
+modules** and **471 matched modules**. That image set passed Android, KernelSU
+root, audio, enforcing SELinux and partition-identity checks on the global POCO
+F7 used for development. It includes native WALT and Qualcomm low-power idle,
+Gunyah transport and HVC lifetime fixes, battery/IOMMU diagnostics, and
+block-backed MTD kernel/pmsg archival. New catalog additions and freshly built
+images require their own build, packaging and device validation.
+
+The device target is **Onyx / SM8735**. Android and Geekbench report the platform
+name `sun`; the device-tree recipe includes Tuna and Tuna7 with the Onyx overlay.
+Both trees pass offline checks. Hardware testing covers the development phone,
+not every phone or board revision using those names. China-only notification LED
+support and other unconfirmed hardware remain outside the target scope.
+
+Battery aggregation and firmware console availability remain unresolved optional
+diagnostics. Automatic block2mtd attachment requires the saved ROM policy change;
+Wi-Fi concurrent-channel ROM work is also pending. Broad peripheral, suspend,
+power and endurance validation remains. See [current device validation summary](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/validation/onyx-runtime-summary-20261104.md) and [remaining module inventory](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/validation/remaining_391_modules/priorities.md). A new upstream or KernelSU build
+requires device validation even when its automated build checks pass.
 
 ## Branch layout
 
@@ -31,7 +47,7 @@ On the source branch:
 - `common/` contains the complete pinned upstream GKI with the required common
   fixes applied. CI independently recreates and verifies every source file,
   executable bit and symlink before building.
-- `modules/` contains all 5,042 materialized, modified source/build files used
+- `modules/` contains all 5,193 materialized, modified source/build files used
   by the module port, including WLAN, IPA, Bluetooth, graphics, audio, camera,
   charging, PMIC/SPMI, clocks, USB and the remaining device driver groups.
 - `port/imports.json` records the exact original repositories, commits and Git
@@ -83,12 +99,13 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
-Every build includes GKI, every module in `port/modules.json`, both supported device-tree variants,
-KernelSU dev's exact source archive, classic/extended symbol CRC verification,
-input hashes and logs. Download `konoha-gki-and-modules.tar.gz`, `kernel-abi/`
-and `SHA256SUMS` from the build's artifacts or its GitHub release. These are build outputs, not a
-universal flashable ZIP: matched boot/DLKM images depend on the ROM's ramdisks,
-module load lists, filesystem labels and partition layout. CI does not flash devices.
+Every build includes GKI, all 400 platform modules, the native GKI archive,
+KernelSU dev's exact source archive, both device-tree variants, wireless firmware
+with licenses/source, import CRC verification, input hashes and logs. Download
+`konoha-gki-and-modules.tar.gz` and `SHA256SUMS` from the build artifacts or release.
+Actions stores separate ABI files under `kernel-abi/`; releases expose those files
+individually. Installation needs matching ROM images; see the instructions below.
+CI does not flash devices.
 
 Successful ordinary builds of accepted source automatically create a GitHub
 release. A successful upstream candidate is first fast-forwarded to the exact
@@ -115,6 +132,57 @@ The tracker also detects older build state without a published-release tag and
 dispatches one migration build. Accepted input state is written only after the
 release is published or an existing complete release is confirmed.
 
+## Install a release
+
+Regular [GitHub releases](https://github.com/Loukious/konoha-android17-6.18/releases)
+provide `konoha-gki-and-modules.tar.gz`. This archive contains build outputs and
+cannot be flashed directly in recovery. Download it with `SHA256SUMS` and check
+the archive before packaging it:
+
+```sh
+awk '$2 == "konoha-gki-and-modules.tar.gz"' SHA256SUMS | sha256sum -c -
+```
+
+Installing it requires a matched image set built around your ROM's ramdisks, module load lists, labels and partition
+sizes. A boot-only 6.6-to-6.18 installation leaves incompatible modules and boot
+configuration behind and can prevent Android from starting.
+
+A recovery/AnyKernel-style ZIP can install the complete matched set. The supplied
+[Onyx recovery package generator](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md) produces
+`konoha-onyx-matched.zip` for one exact ROM baseline. Use a ZIP only when its
+installer release identifies that baseline and its verification report; the
+regular build archive and an experimental installer can cover different source
+checkpoints. An offline packaging pass does not establish that the new kernel or
+recovery installer has been tested on a phone.
+
+For a prepared matched ZIP:
+
+1. Verify the ZIP's companion SHA256 file and read its profile/report. Keep full
+   original partition images on the PC. The profile binds the active slot's
+   `boot`, `vendor_boot`, `dtbo`, `system_dlkm`, `vendor_dlkm`, `init_boot` and
+   `vbmeta` bytes and sizes; a matching ROM version name alone is insufficient.
+2. Use the custom recovery and tools listed in the [installer guide](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md).
+   This route requires an already unlocked Onyx, AVB flags 3, mounted `/metadata`,
+   no active OTA snapshots, and unmounted linear DLKM devices. It does not prepare
+   a locked, verified stock phone for installation.
+3. Select `konoha-onyx-matched.zip` in recovery. After its preflight checks, the
+   installer backs up and verifies all five target partitions under `/metadata/ota`.
+   It writes `system_dlkm`, `vendor_dlkm`, `dtbo`, `vendor_boot`, then `boot`, and
+   reads back every image. The other slot, `init_boot` and `vbmeta` are retained.
+4. Reboot after a successful installation. A write/readback failure attempts a
+   complete verified rollback. If rollback fails, keep the recovery session open
+   and restore the matching originals through fastbootd using the reported backup
+   path before rebooting.
+
+To package another ROM baseline on a Linux PC, supply its full-size partition
+dumps, verified module-layout checkout, ROM file contexts and Android image tools
+to `port/recovery/profile.py` and `port/recovery/generate.py`. The generator writes
+images and a ZIP locally; it does not flash the phone. Follow the complete
+[per-ROM commands and supported layouts](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md). The saved
+development baseline additionally needs the exact audited serial-loader/policy
+prerequisite documented there. Unsupported profiles are rejected, and the generator never writes phone
+partitions.
+
 ## Manual workflow
 
 Select **Build Android 17 6.18 GKI and Onyx modules** on the `ci` branch.
@@ -129,8 +197,8 @@ Requirements: Linux x86-64, Git, Python 3.12+, Android `repo`, GNU patch, C
 build tools, kmod and enough free disk for the source and Kleaf outputs.
 
 ```sh
-git clone --branch ci https://github.com/Loukious/konoha-android17-6.18 automation
-git clone --branch android17-6.18 https://github.com/Loukious/konoha-android17-6.18 source
+git clone --depth 1 --single-branch --branch ci https://github.com/Loukious/konoha-android17-6.18 automation
+git clone --depth 1 --single-branch --branch android17-6.18 https://github.com/Loukious/konoha-android17-6.18 source
 export KONOHA_SOURCE_ROOT="$PWD/source"
 python3 source/port/prepare.py /path/to/fresh-workspace
 python3 source/port/stage.py /path/to/fresh-workspace

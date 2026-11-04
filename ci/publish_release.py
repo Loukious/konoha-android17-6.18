@@ -149,14 +149,15 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
     url = f'https://github.com/{repository}/actions/runs/{run_id}'
     notes = (
         f'Automatically built Android 17 GKI **{identity["kernel_release"]}**, '
-        f'KernelSU Next dev, and all **{identity["modules"]} Onyx platform modules.\n\n'
+        f'KernelSU Next dev, and all **{identity["modules"]} Onyx platform modules**.\n\n'
         f'- Source commit: `{source}`\n- Google GKI revision: `{kernel}`\n'
         f'- KernelSU Next revision: `{kernelsu}`\n- Verified build: {url} (attempt {attempt})\n\n'
         'Complete source replay, module import CRCs, artifact hashes and both device-tree variants passed. '
         'The archive includes matching kernel, modules, device trees, ABI, configuration, source inputs and logs; '
         'release.json and SHA256SUMS identify the exact assets.\n\n'
         'These are build artifacts. Device boot and hardware validation are separate; '
-        'installation requires matched boot/DLKM images for the ROM.\n'
+        'installation requires matched boot/DLKM images for the ROM. '
+        f'[Installation and recovery ZIP instructions](https://github.com/{repository}/blob/ci/README.md#install-a-release).\n'
     )
     with tempfile.TemporaryDirectory(prefix='konoha-release-notes-') as temporary:
         path = Path(temporary) / 'notes.md'
