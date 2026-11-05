@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <time.h>
 typedef uint8_t u8;
@@ -16,6 +17,8 @@ typedef uint8_t u8;
 #define unlikely(x) (x)
 #define READ_ONCE(x) __atomic_load_n(&(x), __ATOMIC_RELAXED)
 #define WRITE_ONCE(x,v) __atomic_store_n(&(x), (v), __ATOMIC_RELAXED)
+#define smp_load_acquire(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#define smp_store_release(p,v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
 #define late_initcall(x)
 #define module_exit(x)
 #define MODULE_DESCRIPTION(x)
@@ -52,15 +55,20 @@ static pthread_mutex_t gate=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gate_cond=PTHREAD_COND_INITIALIZER;
 static bool block_callback,callback_entered,resume_callback,drain_entered;
 static atomic_int active_callbacks,exit_returned;
+static bool walt_disabled;
+static int task_storage_ready;
+/* WALT_AVAILABILITY */
+static void publish_walt_ready(void) {
+    /* WALT_PUBLICATION */
+}
 static struct walt_task_struct *task_walt(struct task_struct *t) {
     assert(t);
+    assert(walt_task_data_available() && task_storage_ready);
     pthread_mutex_lock(&gate);
     if(block_callback){callback_entered=true;pthread_cond_broadcast(&gate_cond);while(!resume_callback)pthread_cond_wait(&gate_cond,&gate);}
     pthread_mutex_unlock(&gate);
     return &t->storage;
 }
-static bool walt_available=true;
-static bool walt_task_data_available(void){return walt_available;}
 struct pid {int number;atomic_int refs;bool alive;struct task_struct *task;};
 static struct pid test_pid;
 static struct pid *find_get_pid(int n){if(n!=test_pid.number||!READ_ONCE(test_pid.alive))return NULL;atomic_fetch_add(&test_pid.refs,1);return &test_pid;}
@@ -116,7 +124,7 @@ static void reset(void){
     memset(&hung_task_enh,0,sizeof(hung_task_enh));memset(&task,0,sizeof(task));
     task.mm=(void*)1;task.group_leader=&task;task.in_iowait=true;task.__state=TASK_UNINTERRUPTIBLE;task.last_switch_time=899;
     test_pid.number=123;test_pid.task=&task;test_pid.alive=true;
-    walt_available=true;hook1_error=hook2_error=sysctl_error=drains=panic_calls=0;
+    walt_disabled=false;task_storage_ready=1;hook1_error=hook2_error=sysctl_error=drains=panic_calls=0;
     block_callback=callback_entered=resume_callback=drain_entered=false;atomic_store(&exit_returned,0);
 }
 static int ctl(unsigned index,bool write,struct io *io){size_t len=8;loff_t pos=0;return hung_task_table[index].proc_handler(&hung_task_table[index],write,io,&len,&pos);}
@@ -126,13 +134,58 @@ static void *run_callback(void *unused){
     pthread_mutex_lock(&gate);atomic_fetch_sub(&active_callbacks,1);pthread_cond_broadcast(&gate_cond);pthread_mutex_unlock(&gate);return NULL;
 }
 static void *run_exit(void *unused){hung_task_enh_exit();atomic_store(&exit_returned,1);return NULL;}
+static atomic_bool readiness_probe;
+static void *wait_for_task_data(void *unused){
+    bool need=true;
+    qcom_before_check_tasks(NULL,&task,1,&need);
+    assert(need); /* Original scanner decision survives unavailable storage. */
+    atomic_store_explicit(&readiness_probe,true,memory_order_relaxed);
+    do {
+        need=true;
+        qcom_before_check_tasks(NULL,&task,1,&need);
+        if(need)sched_yield();
+    } while(need);
+    assert(task_storage_ready && task.storage.hung_detect_status==TASK_IN_BLOCKLIST);
+    return NULL;
+}
 int main(void){unsigned cases=0;
     /* Init errors must leave no hook/sysctl and drain registered callbacks. */
-    for(int fault=0;fault<4;fault++){
-        reset();if(fault==0)walt_available=false;if(fault==1)hook1_error=-EIO;if(fault==2)hook2_error=-EIO;if(fault==3)sysctl_error=-ENOMEM;
-        assert(hung_task_enh_init()==(fault==0?-ENODEV:fault==3?-ENOMEM:-EIO));
+    for(int ready=0;ready<2;ready++)for(int fault=1;fault<4;fault++){
+        reset();walt_disabled=!ready;task_storage_ready=ready;if(fault==1)hook1_error=-EIO;if(fault==2)hook2_error=-EIO;if(fault==3)sysctl_error=-ENOMEM;
+        assert(hung_task_enh_init()==(fault==3?-ENOMEM:-EIO));
         assert(!hook1_live&&!hook2_live&&!header.live&&drains==(fault>=2));cases++;
     }
+    /* Delayed or failed WALT init must not fail module load or touch storage. */
+    for(int becomes_ready=0;becomes_ready<2;becomes_ready++){
+        reset();walt_disabled=true;task_storage_ready=0;
+        assert(!hung_task_enh_init()&&hook1_live&&hook2_live&&header.live);
+        for(int initial=0;initial<2;initial++){
+            bool need=initial;qcom_before_check_tasks(NULL,&task,1,&need);
+            assert(need==initial&&!atomic_read(&hung_task_enh.curr_iowait_task_cnt));cases++;
+        }
+        struct io io={.n=1,.v={123}};
+        assert(!ctl(4,true,&io)); /* Configuration independent of task data works. */
+        io.n=2;io.v[0]=123;io.v[1]=1;
+        assert(ctl(1,true,&io)==-EAGAIN&&ctl(1,false,&io)==-EAGAIN);
+        assert(!task.storage.hung_detect_status&&!atomic_load(&test_pid.refs)&&!atomic_load(&task.refs));
+        hung_task_enh.max_iowait_timeout_cnt=1;hung_task_enh.max_iowait_task_cnt=1;
+        qcom_check_tasks_done(NULL,NULL);assert(!panic_calls);
+        if(becomes_ready){
+            task_storage_ready=1;publish_walt_ready();
+            assert(!ctl(1,true,&io)&&task.storage.hung_detect_status==TASK_IN_ALLOWLIST);
+            io.n=0;assert(!ctl(1,false,&io)&&io.n==2&&io.v[0]==123&&io.v[1]==TASK_IN_ALLOWLIST);
+            bool need=false;qcom_before_check_tasks(NULL,&task,1,&need);assert(need);
+            qcom_check_tasks_done(NULL,NULL);assert(panic_calls==1);
+        }
+        hung_task_enh_exit();assert(drains==1&&!hook1_live&&!hook2_live&&!header.live);cases+=8;
+    }
+    /* A concurrent consumer sees all task initialization after publication. */
+    reset();walt_disabled=true;task_storage_ready=0;assert(!hung_task_enh_init());
+    pthread_t readiness_reader;atomic_store(&readiness_probe,false);
+    assert(!pthread_create(&readiness_reader,NULL,wait_for_task_data,NULL));
+    while(!atomic_load_explicit(&readiness_probe,memory_order_relaxed))sched_yield();
+    task.storage.hung_detect_status=TASK_IN_BLOCKLIST;task_storage_ready=1;publish_walt_ready();
+    assert(!pthread_join(readiness_reader,NULL));hung_task_enh_exit();cases++;
     reset();assert(!hung_task_enh_init());assert(!hung_task_enh.global_detect_mode&&hung_task_enh.max_iowait_task_cnt==5&&!hung_task_enh.max_iowait_timeout_cnt&&!hung_task_enh.read_pid);cases++;
     /* Native allowlist/blocklist selection, including each task status. */
     for(int mode=0;mode<2;mode++)for(int status=0;status<3;status++){

@@ -1,0 +1,73 @@
+{
+  "status": "PASS: focused two-module build and two fresh Android boots",
+  "date": "2026-11-05",
+  "patch": "0243-fix-shared-amplifier-gpio-retries-and-managed-links.patch",
+  "patch_sha256": "0d34bcdd7aea3279c9db7da12ca0a8e6eddf3187a85517751a8fa344fe13cde2",
+  "source_base": "10474ceaafd6e18e6e8f546c850220f61b651139",
+  "targeted_build_command": [
+    "tools/bazel",
+    "build",
+    "--jobs=12",
+    "--local_resources=memory=20000",
+    "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
+    "//onyx:aw882xx_dlkm",
+    "//onyx:sia91xx_dlkm"
+  ],
+  "modules": {
+    "aw882xx_dlkm.ko": {
+      "sha256": "884d3e89878cf486215f3264abc5a55d5912e60d8f9136b0673eb94830e79b16",
+      "imports_checked": 93,
+      "build_id": "e986a4ee550dedd46cee1f6740b1e776b24e4f0a"
+    },
+    "sia91xx_dlkm.ko": {
+      "sha256": "95def67b4d7f70f414a63bf0884d88d98b6945f24ca01aac154f93c822f2a62e",
+      "imports_checked": 92,
+      "build_id": "bad2003388f74495e5da966c93a9633b19c0bd61"
+    }
+  },
+  "imports_checked": 185,
+  "sia_exports_unchanged": 17,
+  "kernel_release": "6.18.38-android17-5-maybe-dirty-4k",
+  "installed_kernel_build_id": "b8587a51d2a866026061adfba1f937f3b30cde6f",
+  "installed_kernel_and_providers_retained": true,
+  "rom": "EvolutionX 17.0, Onyx, 2026-11-05 build",
+  "serial_first_stage_module_loading": true,
+  "changed_images": {
+    "vendor_boot": "deba2f3958ab0212b9b2f037296e890c137c936b65d5ab87fd3d0e277c51acf2",
+    "vendor_dlkm": "a52f02c34d706abf8b22c360e0e7bd81a63a4778d4d54f07ec007d31a0d77f15",
+    "recovery": "0e6a07a1617bb4da7de4b2533b00600203f60be7c6c52e0032510605b22a5407"
+  },
+  "acceptance": {
+    "all_nine_partition_readbacks_match_final_manifest": true,
+    "kernel_notes_unchanged": true,
+    "kernelsu_root_retained": true,
+    "live_aw_and_sia_module_build_ids_match": true,
+    "both_aw_amplifiers_bind_automatically": true,
+    "alsa_card": "tuna-mtp-snd-card",
+    "first_boot_completed_by_seconds": 22.24,
+    "first_boot_stable_services_observed_at_seconds": 156.81,
+    "second_boot_completed_by_seconds": 20.62,
+    "second_boot_healthy_capture_at_seconds": 92.35,
+    "no_recorded_recurrence_of_audio_watchdog_or_sia_managed_link_warning": true,
+    "final_recovery_reaches_fastbootd": true,
+    "returned_to_healthy_android": true,
+    "selinux_enforcing_retained": true
+  },
+  "limitations": [
+    "Validates the focused AW/SIA module update on the development phone with two AW amplifiers; SIA-only hardware was not tested.",
+    "The ROM bootconfig flag was changed from parallel=true to false in addition to the module fix. Boot success does not isolate the effects of those two changes.",
+    "The original spontaneous crash cause remains unknown; this acceptance addresses the diagnosed subsequent audio boot stall.",
+    "This is a locally prepared image set matching the current ROM and installed GKI; it does not validate or replace published recovery release packages or a complete new GKI build.",
+    "Audible playback and prolonged stress were not tested."
+  ],
+  "private_evidence_sha256": {
+    "build/build-validation.json": "3c5111df11060aad50a07f219f6a1521864b2a57140607a93590ca7ec10d7bf4",
+    "images-report.json": "237593fc02ef0723bfb41df99728ae66fa5c65e3e1a1ff217f806bd882d7f0d5",
+    "FLASH.json": "88cfe7f99987da6020982b80768c90247d4af39bbc16645dc1e956c44dde5856",
+    "acceptance/INITIAL-ANDROID-VERIFY.json": "d0545f73efb5172040a8cf05231338d55b13849a4ceec09f72579e14f2f55ccf",
+    "ANDROID-VERIFY.json": "876ff94dd5cc86b251f7573722450d7a81d3fd1f033c4a5c6be152adaf70a53a",
+    "acceptance/FINAL-FASTBOOT-CHECK.json": "9a795e74ac54ca9b00369fd7485dd687b25fcb3fba9224375e39b2b5e318ed28",
+    "acceptance/stability.json": "f25ec3116c7d7c64f9071b42087f014d15a2edead602aae7bed5870ce5802142",
+    "acceptance/independent-acceptance-review.json": "9a9431f81bb3e69e02d6a2106218724c86bd0e7fa1d6a0cc208fbbcd78943246"
+  }
+}

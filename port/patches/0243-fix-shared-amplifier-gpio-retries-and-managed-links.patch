@@ -1,0 +1,106 @@
+Subject: Retry shared amplifier GPIOs and retain managed-link cleanup
+
+Onyx may probe AW and SIA amplifier alternatives concurrently. A temporary
+GPIO claim must defer AW probe rather than leave one speaker unbound and
+prevent registration of the machine sound card. Preserve all exclusive GPIO
+requests and report the affected pin through dev_err_probe.
+
+Let the driver core remove SIA AUTOREMOVE_CONSUMER links after failed or
+deferred probes; manually deleting a managed link warns on Linux 6.18.
+
+--- a/qcom/opensource/audio-kernel/asoc/codecs/aw882xx/aw882xx.c
++++ b/qcom/opensource/audio-kernel/asoc/codecs/aw882xx/aw882xx.c
+@@ -2220,6 +2220,7 @@
+ 	return aw882xx;
+ }
+ 
++/* Alternative board amplifiers can hold these GPIOs while detecting chips. */
+ static int aw882xx_gpio_request(struct aw882xx *aw882xx)
+ {
+ 	int ret = 0;
+@@ -2227,29 +2228,32 @@
+ 	if (gpio_is_valid(aw882xx->reset_gpio)) {
+ 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->reset_gpio,
+ 					    GPIOF_OUT_INIT_LOW, "aw882xx_rst");
+-		if (ret) {
+-			aw_dev_err(aw882xx->dev, "rst request failed");
+-			return ret;
+-		}
++		if (ret)
++			return dev_err_probe(aw882xx->dev,
++					     ret == -EBUSY ? -EPROBE_DEFER : ret,
++					     "reset GPIO %d unavailable\n",
++					     aw882xx->reset_gpio);
+ 	}
+ 
+ 	if (gpio_is_valid(aw882xx->irq_gpio)) {
+ 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->irq_gpio,
+ 					    GPIOF_IN, "aw882xx_int");
+-		if (ret) {
+-			aw_dev_err(aw882xx->dev, "int request failed");
+-			return ret;
+-		}
++		if (ret)
++			return dev_err_probe(aw882xx->dev,
++					     ret == -EBUSY ? -EPROBE_DEFER : ret,
++					     "interrupt GPIO %d unavailable\n",
++					     aw882xx->irq_gpio);
+ 	}
+ 
+ 	if (gpio_is_valid(aw882xx->spksw_gpio)) {
+ 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->spksw_gpio,
+ 					    GPIOF_OUT_INIT_LOW,
+ 					    "aw882xx_spksw");
+-		if (ret) {
+-			aw_dev_err(aw882xx->dev, "spksw request failed");
+-			return ret;
+-		}
++		if (ret)
++			return dev_err_probe(aw882xx->dev,
++					     ret == -EBUSY ? -EPROBE_DEFER : ret,
++					     "speaker switch GPIO %d unavailable\n",
++					     aw882xx->spksw_gpio);
+ 	}
+ 
+ 	return 0;
+--- a/qcom/opensource/audio-kernel/asoc/codecs/sia91xx/sipa.c
++++ b/qcom/opensource/audio-kernel/asoc/codecs/sia91xx/sipa.c
+@@ -2264,7 +2264,6 @@
+ 	struct device_node *node;
+ 	struct snd_soc_dai_driver *dai;
+ 	sipa_dev_t *si_pa;
+-	struct device_link *link;
+ 	int ret, addr_offset = 0, addr;
+ 	u16 original_addr = client->addr;
+ 	unsigned int value;
+@@ -2284,16 +2283,14 @@
+ 		return -EBUSY;
+ 	if (si_pa->chip_type == CHIP_TYPE_UNKNOWN)
+ 		return -ENODEV;
+-	link = device_link_add(&client->dev, &si_pa->pdev->dev,
+-			       DL_FLAG_AUTOREMOVE_CONSUMER);
+-	if (!link)
++	/* Driver core removes this managed link on failed probe or unbind. */
++	if (!device_link_add(&client->dev, &si_pa->pdev->dev,
++			     DL_FLAG_AUTOREMOVE_CONSUMER))
+ 		return -ENOMEM;
+ 
+ 	of_property_read_s32(client->dev.of_node, "si,sipa-addr_offset", &addr_offset);
+-	if (addr_offset < -(int)original_addr || addr_offset > 0x7f - original_addr) {
+-		ret = -EINVAL;
+-		goto err_link;
+-	}
++	if (addr_offset < -(int)original_addr || addr_offset > 0x7f - original_addr)
++		return -EINVAL;
+ 	addr = original_addr + addr_offset;
+ 	client->addr = addr;
+ 	si_pa->original_addr = original_addr;
+@@ -2388,8 +2385,6 @@
+ 	si_pa->client = NULL;
+ 	dev_set_drvdata(&client->dev, NULL);
+ 	client->addr = original_addr;
+-err_link:
+-	device_link_del(link);
+ 	return ret;
+ }
+ EXPORT_SYMBOL(sipa_i2c_probe);

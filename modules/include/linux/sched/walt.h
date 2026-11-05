@@ -171,6 +171,10 @@ struct walt_task_struct {
 	atomic_t			event_windows;
 };
 
+/*
+ * Module loading validates the extension size; task initialization is async.
+ * Once ready, the resident provider keeps the task data available permanently.
+ */
 bool walt_task_data_available(void);
 
 /* Allocated and zeroed by the GKI task allocator, including every fork. */

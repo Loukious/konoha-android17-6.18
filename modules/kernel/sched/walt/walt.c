@@ -5521,7 +5521,7 @@ DEFINE_MUTEX(walt_cycle_counter_lock);
 
 bool walt_task_data_available(void)
 {
-	return !READ_ONCE(walt_disabled);
+	return !smp_load_acquire(&walt_disabled);
 }
 EXPORT_SYMBOL_GPL(walt_task_data_available);
 
@@ -5569,7 +5569,8 @@ static int walt_init_stop_handler(void *data)
 
 	create_default_coloc_group();
 
-	walt_disabled = false;
+	/* Publish initialized task extensions to consumers loaded in parallel. */
+	smp_store_release(&walt_disabled, false);
 
 	for_each_possible_cpu(cpu) {
 		raw_spin_unlock(&cpu_rq(cpu)->__lock);

@@ -2264,7 +2264,6 @@ int sipa_i2c_probe(struct i2c_client *client)
 	struct device_node *node;
 	struct snd_soc_dai_driver *dai;
 	sipa_dev_t *si_pa;
-	struct device_link *link;
 	int ret, addr_offset = 0, addr;
 	u16 original_addr = client->addr;
 	unsigned int value;
@@ -2284,16 +2283,14 @@ int sipa_i2c_probe(struct i2c_client *client)
 		return -EBUSY;
 	if (si_pa->chip_type == CHIP_TYPE_UNKNOWN)
 		return -ENODEV;
-	link = device_link_add(&client->dev, &si_pa->pdev->dev,
-			       DL_FLAG_AUTOREMOVE_CONSUMER);
-	if (!link)
+	/* Driver core removes this managed link on failed probe or unbind. */
+	if (!device_link_add(&client->dev, &si_pa->pdev->dev,
+			     DL_FLAG_AUTOREMOVE_CONSUMER))
 		return -ENOMEM;
 
 	of_property_read_s32(client->dev.of_node, "si,sipa-addr_offset", &addr_offset);
-	if (addr_offset < -(int)original_addr || addr_offset > 0x7f - original_addr) {
-		ret = -EINVAL;
-		goto err_link;
-	}
+	if (addr_offset < -(int)original_addr || addr_offset > 0x7f - original_addr)
+		return -EINVAL;
 	addr = original_addr + addr_offset;
 	client->addr = addr;
 	si_pa->original_addr = original_addr;
@@ -2388,8 +2385,6 @@ err_client:
 	si_pa->client = NULL;
 	dev_set_drvdata(&client->dev, NULL);
 	client->addr = original_addr;
-err_link:
-	device_link_del(link);
 	return ret;
 }
 EXPORT_SYMBOL(sipa_i2c_probe);

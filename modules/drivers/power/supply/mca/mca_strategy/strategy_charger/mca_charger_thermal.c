@@ -74,14 +74,22 @@ static int thermal_validate_level(int level, int maximum)
 		       0;
 }
 
-static int thermal_vote(struct mca_votable *voter, const char *client,
+static int thermal_vote(const char *name, const char *client,
 			bool enabled, int milliamps, int *result)
 {
 	int ret;
 
-	if (!voter)
+	if (!name)
 		return -EAGAIN;
-	ret = mca_vote(voter, client, enabled, milliamps);
+	/*
+	 * Suppliers can remove their voters before our shutdown callback runs.
+	 * Named operations hold the voter registry's SRCU read lock across lookup
+	 * and use; a cached mca_votable pointer has no such lifetime guarantee.
+	 */
+	ret = mca_vote_named(name, client, enabled, milliamps);
+	/* A removed supplier already discarded this client's disabled vote. */
+	if (ret == -ENODEV && !enabled)
+		ret = 0;
 	if (ret && !*result)
 		*result = ret;
 	return ret;
@@ -99,8 +107,8 @@ static int thermal_apply_flip(struct mca_thermal_info *info, bool wireless)
 {
 	struct mca_thermal_ctrl_info *ctrl =
 		wireless ? &info->wireless_ctrl_info : &info->wired_ctrl_info;
-	struct mca_votable *voter = wireless ? info->wls_flip_voter :
-					       info->flip_voter;
+	const char *voter = wireless ? info->wls_flip_voter_name :
+				      info->flip_voter_name;
 	int *data = wireless ? info->wireless_flip_thermal_data :
 			       info->wired_flip_thermal_data;
 	bool removed = wireless ? ctrl->wls_flip_thermal_remove :
@@ -151,7 +159,7 @@ static int thermal_apply_wired(struct mca_thermal_info *info)
 		for (i = 0; i <= THERMAL_MODE_INLIMIT; i++)
 			currents[i] = table[i];
 	for (i = 0; i < THERMAL_MODE_MAX; i++)
-		thermal_vote(info->wired_voter[i], "mca_thermal",
+		thermal_vote(info->wired_voter_names[i], "mca_thermal",
 			     !ctrl->wired_thermal_remove && currents[i] > 0,
 			     currents[i], &ret);
 	return ret;
@@ -195,7 +203,7 @@ static int thermal_apply_wireless(struct mca_thermal_info *info)
 					      table[i];
 		else if (i > THERMAL_MODE_WIRELESS_INLIMIT)
 			currents[i] = ctrl->chg_curr;
-		thermal_vote(info->wireless_voter[i], "mca_wireless_thermal",
+		thermal_vote(info->wireless_voter_names[i], "mca_wireless_thermal",
 			     !ctrl->wls_thermal_remove && currents[i] > 0,
 			     currents[i], &ret);
 	}
@@ -308,10 +316,10 @@ static int thermal_initial_current(struct mca_thermal_info *info)
 
 static int thermal_clear_votes(struct mca_thermal_info *info, bool wireless)
 {
-	struct mca_votable **voters = wireless ? info->wireless_voter :
-						 info->wired_voter;
-	struct mca_votable *flip = wireless ? info->wls_flip_voter :
-					      info->flip_voter;
+	const char *const *voters = wireless ? info->wireless_voter_names :
+					      info->wired_voter_names;
+	const char *flip = wireless ? info->wls_flip_voter_name :
+				     info->flip_voter_name;
 	int count = wireless ? THERMAL_MODE_WIRELESS_MAX : THERMAL_MODE_MAX;
 	const char *client = wireless ? "mca_wireless_thermal" : "mca_thermal";
 	int i, ret = 0;
@@ -328,30 +336,29 @@ static int thermal_init_voters(struct mca_thermal_info *info, bool wireless)
 {
 	struct mca_thermal_ctrl_info *ctrl =
 		wireless ? &info->wireless_ctrl_info : &info->wired_ctrl_info;
-	struct mca_votable **voters = wireless ? info->wireless_voter :
-						 info->wired_voter;
+	const char **voters = wireless ? info->wireless_voter_names :
+					info->wired_voter_names;
 	const char *const *names = wireless ? wireless_voter_names :
 					      wired_voter_names;
 	int count = wireless ? THERMAL_MODE_WIRELESS_MAX : THERMAL_MODE_MAX;
-	struct mca_votable *voter;
+	const char *voter;
 	int i;
 
 	if (ctrl->voter_ok)
 		return 0;
 	if (info->support_base_flip) {
-		voter = mca_find_votable(wireless ? "wls_thermal_flip" :
-						    "thermal_flip");
-		if (!voter)
+		voter = wireless ? "wls_thermal_flip" : "thermal_flip";
+		if (!mca_named_votable_exists(voter))
 			return -EAGAIN;
 		if (wireless)
-			info->wls_flip_voter = voter;
+			info->wls_flip_voter_name = voter;
 		else
-			info->flip_voter = voter;
+			info->flip_voter_name = voter;
 	} else {
 		for (i = 0; i < count; i++) {
-			voters[i] = mca_find_votable(names[i]);
-			if (!voters[i])
+			if (!mca_named_votable_exists(names[i]))
 				return -EAGAIN;
+			voters[i] = names[i];
 		}
 	}
 	ctrl->voter_ok = 1;

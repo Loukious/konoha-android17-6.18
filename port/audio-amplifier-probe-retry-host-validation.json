@@ -1,0 +1,29 @@
+{
+  "status": "PASS",
+  "patch": "0243-fix-shared-amplifier-gpio-retries-and-managed-links.patch",
+  "patch_sha256": "0d34bcdd7aea3279c9db7da12ca0a8e6eddf3187a85517751a8fa344fe13cde2",
+  "source_base": "10474ceaafd6e18e6e8f546c850220f61b651139",
+  "changed_module_files": {
+    "qcom/opensource/audio-kernel/asoc/codecs/aw882xx/aw882xx.c": {
+      "before_sha256": "bfb9b8810f72cde929bc639f439f68718802eba93fd2c158c592be211edca97f",
+      "after_sha256": "dd4cf17c7f86326a1fc88e0ac3ff2ad77f6fdba5b15295ec8a041ba5b83a4d84",
+      "matches_final_source": true
+    },
+    "qcom/opensource/audio-kernel/asoc/codecs/sia91xx/sipa.c": {
+      "before_sha256": "7f4f47176c79302ca168511ee512d9d0d6110a435007c2bd96a1d8288fcdb66a",
+      "after_sha256": "61829cfbfa930b1752f132ac80daa187cf8936622928fc7c80392d9ab5bfa1ad",
+      "matches_final_source": true
+    }
+  },
+  "module_snapshot_files": 5193,
+  "platform_catalog_modules": 400,
+  "recipe_patch_count": 234,
+  "module_ledger_sha256": "d0174d0566fb38b64ccb7a06f05067cb007fb3f1b462643c1c66972c9c21f95a",
+  "replay": "pinned Git blobs + all reviewed patches with --fuzz=0; all 5,193 files equal committed final module snapshot",
+  "host_fault_validation": "PASS cc -std=c11 -Wall -Wextra -Werror; 1000 fault combinations, 196 busy cases, observed retry sequence",
+  "independent_review": "PASS independent-review.md; AW ownership/error invariants and SIA failed/deferred/core cleanup",
+  "kernel_common_changes": false,
+  "full_module_build_status": "not run for this fix; official two-target build passes",
+  "targeted_build_status": "PASS: 185 imports checked against retained installed providers; 17 SIA exports unchanged",
+  "device_validation": "audio-amplifier-probe-retry-device-validation.json"
+}

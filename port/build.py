@@ -65,6 +65,10 @@ def main():
         workspace / "onyx/drivers/thermal/xiaomi/mi_thermal_interface.c")
     (artifacts / "mi-thermal-host-validation.json").write_text(
         json.dumps(thermal_validation, indent=2) + "\n")
+    charger_thermal_report = artifacts / "charger-thermal-host-validation.json"
+    subprocess.run([sys.executable, str(HERE / "verify_charger_thermal.py"),
+                    str(workspace), "--output", str(charger_thermal_report)], check=True)
+    charger_thermal_validation = json.loads(charger_thermal_report.read_text())
     from verify_device_services import verify as verify_device_services
     services_validation = verify_device_services(workspace / "onyx")
     (artifacts / "device-services-host-validation.json").write_text(
@@ -193,7 +197,7 @@ def main():
     for name in ["sources.json", "imports.json", "onyx-port.xml", "dependency-lock.xml",
                  "module-source-hashes.json", "common-source-hashes.json",
                  "BUILD.bazel", "Kconfig", "scm_defconfig", "platform_defconfig", "relay.fragment", "modules.json",
-                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
+                 "build.py", "prepare.py", "stage.py", "integrate_kernelsu.py", "verify_modules.py", "verify_mi_thermal.py", "verify_charger_thermal.py", "verify_device_services.py", "verify_platform_providers.py", "boot-parameters.txt",
                  "qdss_diagnostic.py", "common_fixes.py", "verify_vbat_ovp.py", "verify_cti_assoc.py", "verify_qcom_sysfs.py", "verify_coresight_cti.py", "verify_memlat.py",
                  "build_devicetrees.py", "devicetrees.json", "kmi-symbols",
                  "nethunter-native-modules.json", "verify_nethunter.py"]:
@@ -240,6 +244,7 @@ def main():
         "module_verification": verification,
         "nethunter_host_validation": nethunter_validation,
         "mi_thermal_host_validation": thermal_validation,
+        "charger_thermal_host_validation": charger_thermal_validation,
         "device_services_host_validation": services_validation,
         "platform_providers_host_validation": platform_validation,
         "vbat_ovp_host_validation": vbat_validation,

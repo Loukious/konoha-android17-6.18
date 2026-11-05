@@ -1,0 +1,82 @@
+diff --git a/drivers/soc/qcom/hung_task_enh.c b/drivers/soc/qcom/hung_task_enh.c
+index fc5b32be0..25b0c3bca 100644
+--- a/drivers/soc/qcom/hung_task_enh.c
++++ b/drivers/soc/qcom/hung_task_enh.c
+@@ -68,7 +68,12 @@ static int hung_task_saturating_inc(atomic_t *counter)
+ static void qcom_before_check_tasks(void *ignore, struct task_struct *t, unsigned long timeout,
+ 							bool *need_check)
+ {
+-	struct walt_task_struct *wts = task_walt(t);
++	struct walt_task_struct *wts;
++
++	/* WALT initializes asynchronously after its module has loaded. */
++	if (!walt_task_data_available())
++		return;
++	wts = task_walt(t);
+ 
+ 	if ((READ_ONCE(hung_task_enh.global_detect_mode) == HUNG_TASK_MODE_ALLOWLIST &&
+ 			READ_ONCE(wts->hung_detect_status) != TASK_IN_ALLOWLIST) ||
+@@ -132,6 +137,10 @@ static int hung_task_handler(const struct ctl_table *table, int write,
+ 		.mode	= table->mode,
+ 	};
+ 
++	/* Do not expose uninitialized task data while WALT is starting. */
++	if (!walt_task_data_available())
++		return -EAGAIN;
++
+ 	mutex_lock(&readpid_mutex);
+ 
+ 	if (!write) {
+@@ -234,9 +243,11 @@ static int __init hung_task_enh_init(void)
+ {
+ 	int ret;
+ 
+-	/* The native WALT provider owns and validates the GKI task extension. */
+-	if (!walt_task_data_available())
+-		return -ENODEV;
++	/*
++	 * The WALT dependency validates storage when it loads, but publishes
++	 * readiness later. Register now and gate task access in the consumers;
++	 * waiting here can block modules needed by WALT's initialization.
++	 */
+ 	atomic_set(&hung_task_enh.curr_iowait_task_cnt, 0);
+ 	atomic_set(&hung_task_enh.curr_iowait_timeout_cnt, 0);
+ 	hung_task_enh.max_iowait_task_cnt = DEFAULT_MAX_IOWAIT_TASK;
+diff --git a/include/linux/sched/walt.h b/include/linux/sched/walt.h
+index 3b98e9d9e..fe3d552d5 100644
+--- a/include/linux/sched/walt.h
++++ b/include/linux/sched/walt.h
+@@ -171,6 +171,10 @@ struct walt_task_struct {
+ 	atomic_t			event_windows;
+ };
+ 
++/*
++ * Module loading validates the extension size; task initialization is async.
++ * Once ready, the resident provider keeps the task data available permanently.
++ */
+ bool walt_task_data_available(void);
+ 
+ /* Allocated and zeroed by the GKI task allocator, including every fork. */
+diff --git a/kernel/sched/walt/walt.c b/kernel/sched/walt/walt.c
+index e845609ce..586451f95 100644
+--- a/kernel/sched/walt/walt.c
++++ b/kernel/sched/walt/walt.c
+@@ -5521,7 +5521,7 @@ DEFINE_MUTEX(walt_cycle_counter_lock);
+ 
+ bool walt_task_data_available(void)
+ {
+-	return !READ_ONCE(walt_disabled);
++	return !smp_load_acquire(&walt_disabled);
+ }
+ EXPORT_SYMBOL_GPL(walt_task_data_available);
+ 
+@@ -5569,7 +5569,8 @@ static int walt_init_stop_handler(void *data)
+ 
+ 	create_default_coloc_group();
+ 
+-	walt_disabled = false;
++	/* Publish initialized task extensions to consumers loaded in parallel. */
++	smp_store_release(&walt_disabled, false);
+ 
+ 	for_each_possible_cpu(cpu) {
+ 		raw_spin_unlock(&cpu_rq(cpu)->__lock);

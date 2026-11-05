@@ -87,7 +87,9 @@ static void mca_smartchg_if_ops_unregister(int t,void *d){(void)t;assert(live_sm
 static void mca_log_charge_log_register(int t,struct mca_log_charge_log_ops *o,void *d){(void)t;assert(o->dump_log_head&&o->dump_log_context&&d==allocation);live_log++;}
 static void mca_log_charge_log_unregister(int t,void *d){(void)t;assert(live_log==1&&d==allocation);live_log--;}
 static struct mca_votable *mca_find_votable(const char *n){if(missing_voter)return NULL;for(int i=0;i<10;i++){if(!strcmp(n,wired_voter_names[i]))return voters+i;if(!strcmp(n,wireless_voter_names[i]))return voters+10+i;}if(!strcmp(n,"thermal_flip"))return voters+20;if(!strcmp(n,"wls_thermal_flip"))return voters+21;assert(0);return NULL;}
-static int mca_vote(struct mca_votable *v,const char *c,bool enabled,int ma){assert(v&&c&&ma>=0);if(stop_hook){stop_hook=false;pthread_barrier_wait(&reached_vote);pthread_barrier_wait(&release_vote);}v->enabled=enabled;v->ma=ma;return voter_error;}
+static int mca_vote(struct mca_votable *v,const char *c,bool enabled,int ma){assert(!missing_voter && "use of a destroyed supplier voter");assert(v&&c&&ma>=0);if(stop_hook){stop_hook=false;pthread_barrier_wait(&reached_vote);pthread_barrier_wait(&release_vote);}v->enabled=enabled;v->ma=ma;return voter_error;}
+static bool mca_named_votable_exists(const char *name){return mca_find_votable(name)!=NULL;}
+static int mca_vote_named(const char *name,const char *client,bool enabled,int ma){struct mca_votable *v=mca_find_votable(name);return v?mca_vote(v,client,enabled,ma):-ENODEV;}
 static unsigned long ktime_get_boottime_seconds(void){return boottime;}
 static int get_smem_battery_info(int *v){if(smem_error)return smem_error;*v=zero_speed;return 0;}
 static int mca_strategy_func_process(int t,int e,int v){(void)t;(void)e;(void)v;return 0;}
@@ -113,5 +115,27 @@ int main(void){
  reset();dt_wireless=1;dt_count=160;for(int c=0;c<160;c++)table[c]=5000;assert(!mca_charger_thermal_probe(&dev));i=allocation;assert(!mca_charger_thermal_process_event(MCA_EVENT_WIRELESS_CONNECT,1,i));assert(!thermal_write_control(i,MCA_THERMAL_WIRELESS_QUICK_CHG_CTRL_LIMIT,16));assert(!mca_charger_thermal_wls_super_sts_callback(i,1));i->wireless_ctrl_info.quickchg_limit_level=17;assert(thermal_apply_wireless(i)==-ERANGE);i->wireless_ctrl_info.quickchg_limit_level=-1;assert(thermal_apply_wireless(i)==-ERANGE);i->wireless_ctrl_info.quickchg_limit_level=16;assert(!mca_get_wls_charger_thermal_remove(&remove)&&!remove);cases+=5;
  stop_hook=true;pthread_barrier_init(&reached_vote,NULL,2);pthread_barrier_init(&release_vote,NULL,2);pthread_t worker,removing;assert(!pthread_create(&worker,NULL,setter,NULL));pthread_barrier_wait(&reached_vote);assert(!pthread_create(&removing,NULL,remove_dev,&dev));pthread_barrier_wait(&release_vote);assert(!pthread_join(worker,NULL));assert(!pthread_join(removing,NULL));assert(mca_get_wls_charger_thermal_remove(&remove)==-ENODEV);release();
  reset();dt_flip=1;assert(!mca_charger_thermal_probe(&dev));i=allocation;assert(i->wired_ctrl_info.max_level==15);assert(!mca_charger_thermal_process_event(MCA_EVENT_USB_CONNECT,1,i));for(int level=0;level<16;level++){assert(!mca_charger_thermal_set_cur_level(i->tcd,level)&&voters[20].ma==(int)table[level]);cases++;}assert(mca_charger_thermal_set_cur_level(i->tcd,16)==-ERANGE);mca_charger_thermal_remove(&dev);assert(!voters[20].enabled);release();
- printf("{\"probe_failure_points\":%d,\"table_control_level_provider_cases\":%d,\"invalid_dt_schemas\":%d,\"actual_overlay_levels\":15,\"deferred_voter_replay\":true,\"selected_wireless_level_bounds\":true,\"active_exported_setter_removal\":true,\"all_registrations_and_work_drained\":true,\"shutdown_remove_idempotent\":true}\n",wired_faults+wireless_faults,cases,schema);
+ /* Suppliers can be shut down before this consumer in either boot mode. */
+ int removed_supplier_cases=0;
+ for(int wireless=0;wireless<2;wireless++)for(int flip=0;flip<2;flip++){
+  reset();dt_wireless=wireless;dt_flip=flip;
+  assert(!mca_charger_thermal_probe(&dev));i=allocation;
+  assert(!mca_charger_thermal_process_event(MCA_EVENT_USB_CONNECT,1,i));
+  assert(!mca_charger_thermal_set_cur_level(i->tcd,1));
+  if(wireless){assert(!mca_charger_thermal_process_event(MCA_EVENT_WIRELESS_CONNECT,1,i));assert(!thermal_write_control(i,MCA_THERMAL_WIRELESS_CTRL_LIMIT,1));}
+  missing_voter=1;
+  assert(thermal_apply_wired(i)==-ENODEV);
+  if(wireless)assert(thermal_apply_wireless(i)==-ENODEV);
+  assert(!thermal_clear_votes(i,false));
+  if(wireless)assert(!thermal_clear_votes(i,true));
+  mca_charger_thermal_shutdown(&dev);assert(drains==1);
+  mca_charger_thermal_remove(&dev);assert(drains==1);release();
+  removed_supplier_cases++;
+ }
+ reset();assert(!mca_charger_thermal_probe(&dev));i=allocation;
+ assert(!mca_charger_thermal_process_event(MCA_EVENT_USB_CONNECT,1,i));
+ assert(!mca_charger_thermal_set_cur_level(i->tcd,1));
+ voter_error=-EIO;assert(thermal_clear_votes(i,false)==-EIO);voter_error=0;
+ mca_charger_thermal_remove(&dev);release();
+ printf("{\"probe_failure_points\":%d,\"table_control_level_provider_cases\":%d,\"invalid_dt_schemas\":%d,\"actual_overlay_levels\":15,\"deferred_voter_replay\":true,\"selected_wireless_level_bounds\":true,\"active_exported_setter_removal\":true,\"all_registrations_and_work_drained\":true,\"shutdown_remove_idempotent\":true,\"supplier_removed_before_shutdown_cases\":%d,\"active_missing_supplier_error_preserved\":true,\"teardown_io_error_preserved\":true}\n",wired_faults+wireless_faults,cases,schema,removed_supplier_cases);
 }

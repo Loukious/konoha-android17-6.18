@@ -1,8 +1,11 @@
 {
   "status": "PASS",
-  "cases": 156898,
-  "driver_sha256": "e4aae6f59626ec5d3b2a9c3a49e123ee6b3545bed48561914ce555cfa6a7d8e5",
-  "harness_sha256": "e49eae96755bb9928cd1b3276a319db080254a8d66b8ee04d4a22b18dd3618f3",
+  "cases": 156921,
+  "driver_sha256": "9c461be451101fe884686ee96973dc960cf9dbc504061d8e3d8f5b636f0cf794",
+  "walt_sha256": "d5b8ef36af099e21790f0b04b331127d5f149abbd0432ebcddc6df4f63a202a9",
+  "walt_availability_sha256": "cbf72d7c5b4c8275edddd9ffb5f0a754e9a958c2ec7adba0c2082ac89947c72b",
+  "walt_publication": "smp_store_release(&walt_disabled, false);",
+  "harness_sha256": "74c23f96455e04b0dbde6325eb560c7493f2e6ce0b4a005eb2640b5f0a73bb96",
   "sanitizers": [
     "ASan",
     "UBSan"
@@ -18,10 +21,30 @@
     "skip-counter-saturation": "REJECTED",
     "skip-callback-drain": "REJECTED",
     "skip-hook-failure-unwind": "REJECTED",
-    "ignore-walt-availability": "REJECTED"
+    "ignore-callback-walt-availability": "REJECTED",
+    "ignore-sysctl-walt-availability": "REJECTED",
+    "reject-delayed-walt-at-module-load": "REJECTED",
+    "disable-native-scanner-before-walt": "REJECTED"
   },
+  "thread_sanitizer": {
+    "status": "PASS",
+    "cases": 156921,
+    "compiler": "/home/loukious/Android/custom-rom/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang",
+    "regression_mutations": {
+      "unpublished-task-initialization": "REJECTED: ThreadSanitizer data race",
+      "unacquired-task-initialization": "REJECTED: ThreadSanitizer data race"
+    }
+  },
+  "readiness_cases": [
+    "load before WALT initialization",
+    "unload while WALT stays unavailable",
+    "preserve native scanner before readiness",
+    "per-task sysctl returns EAGAIN before readiness",
+    "activate task controls and I/O policy after readiness without reload",
+    "concurrent initialization publication with actual WALT getter and release store"
+  ],
   "limits": [
-    "Complete native driver C; sysctl parsing/copy, PID references, WALT storage and tracepoint RCU are mocked.",
+    "Complete native driver C and actual WALT readiness getter/publication; sysctl parsing/copy, PID references, WALT allocation and tracepoint RCU are mocked.",
     "Panic policy only exercised against a returning host mock. No live hung task, panic, malformed user-copy or callback injection."
   ]
 }

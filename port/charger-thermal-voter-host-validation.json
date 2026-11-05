@@ -1,0 +1,32 @@
+{
+  "probe_failure_points": 19,
+  "table_control_level_provider_cases": 61,
+  "invalid_dt_schemas": 9,
+  "actual_overlay_levels": 15,
+  "deferred_voter_replay": true,
+  "selected_wireless_level_bounds": true,
+  "active_exported_setter_removal": true,
+  "all_registrations_and_work_drained": true,
+  "shutdown_remove_idempotent": true,
+  "supplier_removed_before_shutdown_cases": 4,
+  "active_missing_supplier_error_preserved": true,
+  "teardown_io_error_preserved": true,
+  "status": "PASS",
+  "sanitizers": [
+    "AddressSanitizer",
+    "UndefinedBehaviorSanitizer"
+  ],
+  "stock_device_tree": {
+    "wired_levels": 15,
+    "support_wireless": 0,
+    "source_sha256": {
+      "mca.dtsi": "a8b904d84e0e86409460dd9a0ec53c33eca8e43670cf7ee1977a6aff36eb63cb",
+      "onyx-charger-common.dtsi": "beee130eb05ae67d91d675ca78b40a4463b53de9793572c41f71428fa52d217e"
+    }
+  },
+  "source_sha256": {
+    "mca_charger_thermal.c": "97c5e64b9e2db0247780b27ddccd8de82a3a8297be763d6d37719b7bb941ddfe",
+    "inc/mca_charger_thermal.h": "989a682d5a93bac22f6259011983d5e60f8b554a6898412af2deff4a40ace267"
+  },
+  "limits": "Extracted production thermal functions with pthread locks/SRCU and mocked DT, cooling, registration, workqueue, voter and protocol APIs. Named voter API doubles reject removed suppliers; this suite checks the production thermal consumer behavior, not the kernel SRCU implementation. No live kernel lifetime, policy timing, electrical safety, hardware charging or phone validation."
+}

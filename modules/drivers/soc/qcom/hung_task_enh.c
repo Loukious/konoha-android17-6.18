@@ -68,7 +68,12 @@ static int hung_task_saturating_inc(atomic_t *counter)
 static void qcom_before_check_tasks(void *ignore, struct task_struct *t, unsigned long timeout,
 							bool *need_check)
 {
-	struct walt_task_struct *wts = task_walt(t);
+	struct walt_task_struct *wts;
+
+	/* WALT initializes asynchronously after its module has loaded. */
+	if (!walt_task_data_available())
+		return;
+	wts = task_walt(t);
 
 	if ((READ_ONCE(hung_task_enh.global_detect_mode) == HUNG_TASK_MODE_ALLOWLIST &&
 			READ_ONCE(wts->hung_detect_status) != TASK_IN_ALLOWLIST) ||
@@ -131,6 +136,10 @@ static int hung_task_handler(const struct ctl_table *table, int write,
 		.maxlen	= sizeof(pid_and_val),
 		.mode	= table->mode,
 	};
+
+	/* Do not expose uninitialized task data while WALT is starting. */
+	if (!walt_task_data_available())
+		return -EAGAIN;
 
 	mutex_lock(&readpid_mutex);
 
@@ -234,9 +243,11 @@ static int __init hung_task_enh_init(void)
 {
 	int ret;
 
-	/* The native WALT provider owns and validates the GKI task extension. */
-	if (!walt_task_data_available())
-		return -ENODEV;
+	/*
+	 * The WALT dependency validates storage when it loads, but publishes
+	 * readiness later. Register now and gate task access in the consumers;
+	 * waiting here can block modules needed by WALT's initialization.
+	 */
 	atomic_set(&hung_task_enh.curr_iowait_task_cnt, 0);
 	atomic_set(&hung_task_enh.curr_iowait_timeout_cnt, 0);
 	hung_task_enh.max_iowait_task_cnt = DEFAULT_MAX_IOWAIT_TASK;

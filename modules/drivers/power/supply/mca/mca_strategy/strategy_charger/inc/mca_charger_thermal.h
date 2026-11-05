@@ -114,10 +114,10 @@ struct mca_thermal_info {
 	int wired_flip_thermal_data[MAX_THERMAL_LEVEL];
 	int wireless_flip_thermal_data[MAX_THERMAL_LEVEL];
 	int support_base_flip;
-	struct mca_votable *wired_voter[THERMAL_MODE_MAX];
-	struct mca_votable *wireless_voter[THERMAL_MODE_WIRELESS_MAX];
-	struct mca_votable *flip_voter;
-	struct mca_votable *wls_flip_voter;
+	const char *wired_voter_names[THERMAL_MODE_MAX];
+	const char *wireless_voter_names[THERMAL_MODE_WIRELESS_MAX];
+	const char *flip_voter_name;
+	const char *wls_flip_voter_name;
 	struct mca_thermal_ctrl_info wired_ctrl_info;
 	struct mca_thermal_ctrl_info wireless_ctrl_info;
 	struct mca_buck_jeita_smartchg_data smartchg_data;

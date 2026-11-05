@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "pre_fix_fails_regression": true,
+  "observed_assertion": "use of a destroyed supplier voter",
+  "pre_fix_exit": 1,
+  "candidate_passed": true
+}

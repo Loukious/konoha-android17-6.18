@@ -2220,6 +2220,7 @@ static struct aw882xx *aw882xx_malloc_init(struct i2c_client *i2c)
 	return aw882xx;
 }
 
+/* Alternative board amplifiers can hold these GPIOs while detecting chips. */
 static int aw882xx_gpio_request(struct aw882xx *aw882xx)
 {
 	int ret = 0;
@@ -2227,29 +2228,32 @@ static int aw882xx_gpio_request(struct aw882xx *aw882xx)
 	if (gpio_is_valid(aw882xx->reset_gpio)) {
 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->reset_gpio,
 					    GPIOF_OUT_INIT_LOW, "aw882xx_rst");
-		if (ret) {
-			aw_dev_err(aw882xx->dev, "rst request failed");
-			return ret;
-		}
+		if (ret)
+			return dev_err_probe(aw882xx->dev,
+					     ret == -EBUSY ? -EPROBE_DEFER : ret,
+					     "reset GPIO %d unavailable\n",
+					     aw882xx->reset_gpio);
 	}
 
 	if (gpio_is_valid(aw882xx->irq_gpio)) {
 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->irq_gpio,
 					    GPIOF_IN, "aw882xx_int");
-		if (ret) {
-			aw_dev_err(aw882xx->dev, "int request failed");
-			return ret;
-		}
+		if (ret)
+			return dev_err_probe(aw882xx->dev,
+					     ret == -EBUSY ? -EPROBE_DEFER : ret,
+					     "interrupt GPIO %d unavailable\n",
+					     aw882xx->irq_gpio);
 	}
 
 	if (gpio_is_valid(aw882xx->spksw_gpio)) {
 		ret = devm_gpio_request_one(aw882xx->dev, aw882xx->spksw_gpio,
 					    GPIOF_OUT_INIT_LOW,
 					    "aw882xx_spksw");
-		if (ret) {
-			aw_dev_err(aw882xx->dev, "spksw request failed");
-			return ret;
-		}
+		if (ret)
+			return dev_err_probe(aw882xx->dev,
+					     ret == -EBUSY ? -EPROBE_DEFER : ret,
+					     "speaker switch GPIO %d unavailable\n",
+					     aw882xx->spksw_gpio);
 	}
 
 	return 0;
