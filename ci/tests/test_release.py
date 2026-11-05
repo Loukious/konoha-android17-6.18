@@ -181,29 +181,83 @@ class ArtifactTests(unittest.TestCase):
 class ReleaseTests(unittest.TestCase):
     def exercise(self, failed_build=False, stale_source=False, upload_failure=False, incomplete=False, existing=False,
                  advance_during_upload=False, hidden_draft=False, draft_exists=False, later_page=False,
-                 wrong_draft=False, drift_after_upload=False, wrong_digest=False, api_calls=None):
+                 wrong_draft=False, drift_after_upload=False, wrong_digest=False, api_calls=None,
+                 hidden_listing=False, bad_created_id=False, partial_upload=False, duplicate_uploaded=False,
+                 published_during_upload=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, workspace, artifact, report = fixture(root)
             bundle = root / 'bundle'
             export_artifacts.export(workspace, bundle, source, SOURCE, '123', '1')
-            paths = [p for p in bundle.rglob('*') if p.is_file()]
-            assets = [{'name': p.name, 'size': p.stat().st_size,
-                       'digest': 'sha256:' + verify_artifacts.digest(p)} for p in paths]
+            paths = sorted(p for p in bundle.rglob('*') if p.is_file())
+            assets = {p.name: {'id': 100 + i, 'name': p.name, 'size': p.stat().st_size, 'state': 'uploaded',
+                              'digest': 'sha256:' + verify_artifacts.digest(p)} for i, p in enumerate(paths)}
+            stored = {name: dict(asset) for name, asset in assets.items()} if existing else {}
+            if partial_upload:
+                first, second = list(assets)[:2]
+                stored[first] = dict(assets[first])
+                stored[second] = {**assets[second], 'state': 'starter', 'size': 0, 'digest': None}
             commands = []
             head_reads = 0
-            created, uploaded = draft_exists, False
+            created, uploaded, published = draft_exists, False, existing
             tag = f'gki-6.18.38-s{SOURCE[:12]}-k{KSU[:12]}'
+            release_path = 'repos/owner/repo/releases/77'
+
             def release():
-                return {'id': 77, 'tag_name': tag, 'draft': not existing,
+                inventory = [dict(asset) for asset in stored.values()]
+                if incomplete and uploaded:
+                    inventory = inventory[:-1]
+                if duplicate_uploaded and uploaded:
+                    inventory.append(dict(inventory[0]))
+                if wrong_digest and uploaded:
+                    inventory[0]['digest'] = 'sha256:' + '0' * 64
+                return {'id': 77, 'tag_name': tag, 'draft': not (published or (published_during_upload and uploaded)),
                         'target_commitish': 'd' * 40 if wrong_draft or (drift_after_upload and uploaded) else SOURCE,
-                        'body': SOURCE + KERNEL + KSU,
-                        'assets': assets[:-1] if incomplete and uploaded else assets,
-                        'html_url': 'release-url'}
-            def api(path, optional=False):
-                nonlocal head_reads
+                        'body': SOURCE + KERNEL + KSU, 'assets': inventory, 'html_url': 'release-url'}
+
+            def api(path, optional=False, *, method='GET', data=None, input_file=None):
+                nonlocal head_reads, created, uploaded, published
                 if api_calls is not None:
-                    api_calls.append(path)
+                    api_calls.append((method, path))
+                if method != 'GET':
+                    commands.append({'method': method, 'path': path, 'data': data,
+                                     'filename': input_file.name if input_file else None})
+                if method == 'POST' and path == 'repos/owner/repo/releases':
+                    self.assertFalse(created)
+                    self.assertEqual(data['tag_name'], tag)
+                    self.assertEqual(data['target_commitish'], SOURCE)
+                    self.assertIs(data['draft'], True)
+                    self.assertTrue(all(value in data['body'] for value in (SOURCE, KERNEL, KSU)))
+                    created = True
+                    result = release()
+                    if bad_created_id:
+                        result['id'] = True
+                    return result
+                if method == 'POST' and path.startswith('https://uploads.github.com/' + release_path + '/assets?name='):
+                    self.assertTrue(created)
+                    self.assertFalse(published)
+                    self.assertTrue(path.endswith(input_file.name))
+                    if upload_failure:
+                        raise RuntimeError('Upload failed')
+                    self.assertNotIn(input_file.name, stored)
+                    uploaded = True
+                    stored[input_file.name] = dict(assets[input_file.name])
+                    return dict(stored[input_file.name])
+                if method == 'DELETE' and path.startswith('repos/owner/repo/releases/assets/'):
+                    asset_id = int(path.rsplit('/', 1)[1])
+                    matches = [name for name, item in stored.items() if item['id'] == asset_id]
+                    self.assertEqual(len(matches), 1)
+                    del stored[matches[0]]
+                    return None
+                if method == 'PATCH' and path == release_path:
+                    self.assertFalse(published)
+                    self.assertEqual(stored, assets)
+                    self.assertIs(data['draft'], False)
+                    self.assertEqual(data['make_latest'], 'true')
+                    self.assertTrue(all(value in data['body'] for value in (SOURCE, KERNEL, KSU)))
+                    published = True
+                    return release()
+                self.assertEqual(method, 'GET', 'Unexpected release mutation: ' + path)
                 if path.endswith('/attempts/1'):
                     return {'head_branch': 'ci', 'path': '.github/workflows/build.yml'}
                 if path.endswith('/jobs'):
@@ -214,45 +268,37 @@ class ReleaseTests(unittest.TestCase):
                     return {'object': {'sha': 'd' * 40 if changed else SOURCE}}
                 if '/releases/tags/' in path:
                     if hidden_draft:
-                        if not optional:
-                            raise RuntimeError('gh: Not Found (HTTP 404)')
+                        self.assertTrue(optional)
                         return None
                     return release() if created or existing else None
                 if '/releases?per_page=100&page=' in path:
+                    if hidden_listing:
+                        return []
                     if later_page and path.endswith('page=1'):
-                        return [{'id': 100 + i, 'tag_name': 'unrelated-' + str(i)} for i in range(100)]
+                        return [{'id': 1000 + i, 'tag_name': 'unrelated-' + str(i)} for i in range(100)]
                     return [release()] if created else []
-                if path.endswith('/releases/77'):
-                    value = release()
-                    if wrong_digest and uploaded:
-                        value = {**value, 'assets': [{**asset, 'digest': 'sha256:' + '0' * 64} for asset in assets]}
-                    return value
+                if path == release_path:
+                    self.assertTrue(created or existing)
+                    return release()
                 raise AssertionError(path)
-            def run(args):
-                nonlocal created, uploaded
-                commands.append(args)
-                if args[:3] == ['gh', 'release', 'create']:
-                    created = True
-                if upload_failure and args[:3] == ['gh', 'release', 'upload']:
-                    raise subprocess.CalledProcessError(1, args)
-                if args[:3] == ['gh', 'release', 'upload']:
-                    uploaded = True
-                return ''
-            with patch.object(publish_release, 'api', side_effect=api), patch.object(publish_release, 'run', side_effect=run):
+
+            with patch.object(publish_release, 'api', side_effect=api), \
+                    patch.object(subprocess, 'check_output', side_effect=AssertionError('Unexpected tag-based CLI call')):
                 try:
                     result = publish_release.publish('owner/repo', bundle, source, SOURCE, KERNEL, KSU, '123', '1')
-                except (ValueError, subprocess.CalledProcessError) as error:
+                except (ValueError, RuntimeError) as error:
                     result = {'error': str(error)}
             return result, commands
 
     def test_release_stays_draft_until_complete_upload_verified(self):
         result, commands = self.exercise()
-        self.assertEqual([args[2] for args in commands], ['create', 'upload', 'edit'])
-        self.assertIn('--draft', commands[0])
-        self.assertIn('--target', commands[0])
-        self.assertIn(SOURCE, commands[0])
-        self.assertIn('--draft=false', commands[-1])
         self.assertEqual(result['status'], 'verified build released')
+        self.assertEqual(commands[0]['path'], 'repos/owner/repo/releases')
+        self.assertIs(commands[0]['data']['draft'], True)
+        self.assertEqual(len([c for c in commands if c['filename']]), len(publish_release.FILES) + 2)
+        self.assertEqual(commands[-1]['method'], 'PATCH')
+        self.assertEqual(commands[-1]['path'], 'repos/owner/repo/releases/77')
+        self.assertIs(commands[-1]['data']['draft'], False)
 
     def test_failed_build_cannot_create_release(self):
         result, commands = self.exercise(failed_build=True)
@@ -267,8 +313,8 @@ class ReleaseTests(unittest.TestCase):
     def test_head_advance_during_upload_cannot_publish_an_older_latest_release(self):
         result, commands = self.exercise(advance_during_upload=True)
         self.assertIn('advanced during upload', result['error'])
-        self.assertEqual([args[2] for args in commands], ['create', 'upload'])
-        self.assertFalse(any('--latest' in args for args in commands))
+        self.assertTrue(any(c['filename'] for c in commands))
+        self.assertFalse(any(c['method'] == 'PATCH' for c in commands))
 
     def test_release_only_rerun_uses_original_verified_build_attempt(self):
         environment = {'GITHUB_REPOSITORY': 'owner/repo', 'KONOHA_SOURCE_ROOT': '/fixture/source',
@@ -284,49 +330,73 @@ class ReleaseTests(unittest.TestCase):
         with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2', 'BUILD_RUN_ATTEMPT': '1'}):
             result, commands = self.exercise()
         self.assertEqual(result['status'], 'verified build released')
-        self.assertIn('--draft=false', commands[-1])
+        self.assertIs(commands[-1]['data']['draft'], False)
 
     def test_upload_failure_does_not_publish_draft(self):
         result, commands = self.exercise(upload_failure=True)
-        self.assertIn('error', result)
-        self.assertFalse(any(args[2] == 'edit' for args in commands))
+        self.assertIn('Upload failed', result['error'])
+        self.assertFalse(any(c['method'] == 'PATCH' for c in commands))
 
-    def test_incomplete_upload_does_not_publish_draft(self):
-        result, commands = self.exercise(incomplete=True)
-        self.assertIn('incomplete', result['error'])
-        self.assertFalse(any(args[2] == 'edit' for args in commands))
+    def test_incomplete_or_duplicate_upload_does_not_publish_draft(self):
+        for flags in ({'incomplete': True}, {'duplicate_uploaded': True}):
+            with self.subTest(flags=flags):
+                result, commands = self.exercise(**flags)
+                self.assertIn('incomplete', result['error'])
+                self.assertFalse(any(c['method'] == 'PATCH' for c in commands))
 
     def test_existing_complete_release_is_not_overwritten(self):
         result, commands = self.exercise(existing=True)
         self.assertEqual(result['status'], 'verified inputs already released')
         self.assertEqual(commands, [])
 
-    def test_new_hidden_draft_tag_404_publishes_only_after_immutable_id_checks(self):
+    def test_creation_response_id_works_when_tag_and_listing_never_expose_new_draft(self):
         calls = []
-        result, commands = self.exercise(hidden_draft=True, api_calls=calls)
+        result, commands = self.exercise(hidden_draft=True, hidden_listing=True, api_calls=calls)
         self.assertEqual(result['status'], 'verified build released')
-        self.assertEqual([args[2] for args in commands], ['create', 'upload', 'edit'])
-        self.assertEqual(sum(path.endswith('/releases/77') for path in calls), 2)
+        self.assertEqual(sum(c['path'] == 'repos/owner/repo/releases' for c in commands), 1)
+        after_create = calls[calls.index(('POST', 'repos/owner/repo/releases')) + 1:]
+        self.assertFalse(any('/releases/tags/' in path or '/releases?' in path for _, path in after_create))
+        self.assertEqual(sum(method == 'GET' and path.endswith('/releases/77')
+                             for method, path in after_create), 2)
+        self.assertTrue(all('/releases/77/assets?' in c['path'] for c in commands if c['filename']))
+        self.assertEqual(commands[-1]['path'], 'repos/owner/repo/releases/77')
 
     def test_existing_hidden_draft_retry_uses_paginated_inventory_without_recreate(self):
         calls = []
         result, commands = self.exercise(hidden_draft=True, draft_exists=True, later_page=True, api_calls=calls)
         self.assertEqual(result['status'], 'verified build released')
-        self.assertEqual([args[2] for args in commands], ['upload', 'edit'])
-        self.assertTrue(any('/releases?per_page=100&page=2' in path for path in calls))
+        self.assertFalse(any(c['path'] == 'repos/owner/repo/releases' for c in commands))
+        self.assertTrue(any('/releases?per_page=100&page=2' in path for _, path in calls))
+
+    def test_partial_upload_retry_keeps_verified_asset_and_replaces_only_failed_asset(self):
+        result, commands = self.exercise(draft_exists=True, partial_upload=True)
+        self.assertEqual(result['status'], 'verified build released')
+        self.assertEqual([c['path'] for c in commands if c['method'] == 'DELETE'],
+                         ['repos/owner/repo/releases/assets/101'])
+        uploads = [c['filename'] for c in commands if c['filename']]
+        self.assertEqual(len(uploads), len(publish_release.FILES) + 1)
+        self.assertNotIn('SHA256SUMS', uploads)
+        self.assertFalse(any(c['path'] == 'repos/owner/repo/releases' for c in commands))
 
     def test_wrong_hidden_draft_is_rejected_before_upload(self):
         result, commands = self.exercise(hidden_draft=True, draft_exists=True, wrong_draft=True)
         self.assertIn('different inputs', result['error'])
         self.assertEqual(commands, [])
 
-    def test_immutable_draft_input_drift_or_bad_server_digest_prevents_publication(self):
+    def test_invalid_created_release_id_is_rejected_before_upload(self):
+        result, commands = self.exercise(bad_created_id=True)
+        self.assertIn('different inputs', result['error'])
+        self.assertEqual(len(commands), 1)
+        self.assertFalse(any(c['filename'] for c in commands))
+
+    def test_draft_input_drift_bad_digest_or_publication_race_prevents_publishing(self):
         for flags, reason in [({'drift_after_upload': True}, 'different inputs'),
-                              ({'wrong_digest': True}, 'Uploaded release asset differs')]:
+                              ({'wrong_digest': True}, 'Uploaded release asset differs'),
+                              ({'published_during_upload': True}, 'no longer the expected draft')]:
             with self.subTest(flags=flags):
                 result, commands = self.exercise(hidden_draft=True, draft_exists=True, **flags)
                 self.assertIn(reason, result['error'])
-                self.assertEqual([args[2] for args in commands], ['upload'])
+                self.assertFalse(any(c['method'] == 'PATCH' for c in commands))
 
     def test_ambiguous_hidden_draft_inventory_is_rejected(self):
         prefix, tag = 'repos/owner/repo', 'expected-tag'
@@ -346,6 +416,35 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(os.environ['GITHUB_SHA'], 'd' * 40)
             self.assertEqual(os.environ['GITHUB_RUN_ID'], '999')
         self.assertEqual(publish.call_args.args[-2:], ('123', '1'))
+
+
+class ReleaseApiTests(unittest.TestCase):
+    def test_creation_body_preserves_newlines_and_literal_shell_text(self):
+        body = {'draft': True, 'body': 'first line\n`literal` $(literal)\\n'}
+        result = subprocess.CompletedProcess([], 0, '{"id":77}', '')
+        with patch.object(subprocess, 'run', return_value=result) as run:
+            self.assertEqual(publish_release.api('repos/owner/repo/releases', method='POST', data=body), {'id': 77})
+        self.assertEqual(json.loads(run.call_args.kwargs['input']), body)
+        self.assertIn('--input', run.call_args.args[0])
+        self.assertIn('-', run.call_args.args[0])
+
+    def test_binary_upload_uses_file_input_and_binary_content_type(self):
+        result = subprocess.CompletedProcess([], 0, '{"id":101}', '')
+        with patch.object(subprocess, 'run', return_value=result) as run:
+            publish_release.api('https://uploads.github.com/repos/owner/repo/releases/77/assets?name=archive',
+                                method='POST', input_file=Path('/fixture/archive'))
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index('--input') + 1], '/fixture/archive')
+        self.assertIn('Content-Type: application/octet-stream', command)
+        self.assertIsNone(run.call_args.kwargs['input'])
+
+    def test_delete_accepts_empty_response_and_optional_lookup_still_handles_404(self):
+        with patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            self.assertIsNone(publish_release.api('repos/owner/repo/releases/assets/101', method='DELETE'))
+        with patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'gh: Not Found (HTTP 404)')):
+            self.assertIsNone(publish_release.api('repos/owner/repo/releases/tags/missing', optional=True))
+            with self.assertRaises(RuntimeError):
+                publish_release.api('repos/owner/repo/releases/77')
 
 
 class RecoveryTests(unittest.TestCase):

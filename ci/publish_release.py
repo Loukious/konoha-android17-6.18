@@ -8,6 +8,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+from urllib.parse import quote
 
 from verify_artifacts import digest, relative, verify
 
@@ -18,17 +19,21 @@ FILES = {
 }
 
 
-def run(args):
-    return subprocess.check_output(args, text=True).strip()
-
-
-def api(path, optional=False):
-    result = subprocess.run(['gh', 'api', path], text=True, capture_output=True)
+def api(path, optional=False, *, method='GET', data=None, input_file=None):
+    if data is not None and input_file is not None:
+        raise ValueError('API request cannot contain both JSON and a file')
+    args = ['gh', 'api', path, '--method', method]
+    if data is not None:
+        args += ['--input', '-']
+    if input_file is not None:
+        args += ['--input', str(input_file), '--header', 'Content-Type: application/octet-stream']
+    result = subprocess.run(args, input=json.dumps(data) if data is not None else None,
+                            text=True, capture_output=True)
     if optional and result.returncode and '(HTTP 404)' in result.stderr:
         return None
     if result.returncode:
         raise RuntimeError(result.stderr)
-    return json.loads(result.stdout)
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def listed(path, key=None):
@@ -56,7 +61,8 @@ def release_by_tag(prefix, tag):
 
 
 def release_inputs(release, tag, source, kernel, kernelsu):
-    if (type(release.get('id')) is not int or release['id'] < 1 or release.get('tag_name') != tag or
+    if (not isinstance(release, dict) or type(release.get('id')) is not int or release['id'] < 1 or
+            release.get('tag_name') != tag or
             release.get('target_commitish') != source or
             not isinstance(release.get('body'), str) or
             any(value not in release.get('body', '') for value in (source, kernel, kernelsu))):
@@ -159,38 +165,58 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
         'installation requires matched boot/DLKM images for the ROM. '
         f'[Installation and recovery ZIP instructions](https://github.com/{repository}/blob/ci/README.md#install-a-release).\n'
     )
-    with tempfile.TemporaryDirectory(prefix='konoha-release-notes-') as temporary:
-        path = Path(temporary) / 'notes.md'
-        path.write_text(notes)
-        if not existing:
-            run(['gh', 'release', 'create', tag, '--repo', repository, '--target', source, '--draft',
-                 '--title', f'Android 17 GKI {version} / KernelSU Next', '--notes-file', str(path)])
-            existing = release_by_tag(prefix, tag)
-            if not existing:
-                raise ValueError('Created draft release is missing from the authenticated inventory')
-            release_inputs(existing, tag, source, kernel, kernelsu)
-        release_id = existing['id']
-        draft = api(prefix + '/releases/' + str(release_id))
-        release_inputs(draft, tag, source, kernel, kernelsu)
-        if draft['id'] != release_id or draft.get('draft') is not True:
-            raise ValueError('Selected release is no longer the expected draft')
-        run(['gh', 'release', 'upload', tag, *map(str, assets), '--repo', repository, '--clobber'])
-        uploaded = api(prefix + '/releases/' + str(release_id))
-        release_inputs(uploaded, tag, source, kernel, kernelsu)
-        if uploaded['id'] != release_id or uploaded.get('draft') is not True:
-            raise ValueError('Uploaded release is no longer the expected draft')
-        if {asset['name'] for asset in uploaded['assets']} != asset_names:
-            raise ValueError('Draft release upload is incomplete')
-        for asset in uploaded['assets']:
-            local = next(path for path in assets if path.name == asset['name'])
-            if asset['size'] != local.stat().st_size or asset.get('digest') not in (None, 'sha256:' + digest(local)):
-                raise ValueError('Uploaded release asset differs: ' + asset['name'])
-        # A source push may land during a long upload. Publishing an older
-        # draft as Latest must not supersede a newer accepted-source release.
-        accepted = api(prefix + '/git/ref/heads/' + TRACK['source_branch'])['object']['sha']
-        if accepted != source:
-            raise ValueError('Source branch advanced during upload; leaving the release unpublished')
-        run(['gh', 'release', 'edit', tag, '--repo', repository, '--draft=false', '--latest', '--notes-file', str(path)])
+    if not existing:
+        # Draft tags and release listings may not expose a just-created release.
+        # The creation response supplies its ID; keep that identity for every
+        # later read, upload and publication instead of resolving the tag again.
+        existing = api(prefix + '/releases', method='POST', data={
+            'tag_name': tag, 'target_commitish': source, 'draft': True,
+            'name': f'Android 17 GKI {version} / KernelSU Next', 'body': notes,
+        })
+        release_inputs(existing, tag, source, kernel, kernelsu)
+        if existing.get('draft') is not True:
+            raise ValueError('Created release is not the expected draft')
+    release_id = existing['id']
+    release_path = prefix + '/releases/' + str(release_id)
+    draft = api(release_path)
+    release_inputs(draft, tag, source, kernel, kernelsu)
+    if draft['id'] != release_id or draft.get('draft') is not True:
+        raise ValueError('Selected release is no longer the expected draft')
+    for path in assets:
+        matches = [asset for asset in draft['assets'] if asset['name'] == path.name]
+        if len(matches) > 1:
+            raise ValueError('Draft contains duplicate asset names: ' + path.name)
+        if matches:
+            asset = matches[0]
+            if (asset.get('state') == 'uploaded' and asset['size'] == path.stat().st_size and
+                    asset.get('digest') == 'sha256:' + digest(path)):
+                continue  # Resume an interrupted upload without replacing verified bytes.
+            if type(asset.get('id')) is not int or asset['id'] < 1:
+                raise ValueError('Draft asset has an invalid ID: ' + path.name)
+            api(prefix + '/releases/assets/' + str(asset['id']), method='DELETE')
+        api('https://uploads.github.com/' + release_path + '/assets?name=' + quote(path.name, safe=''),
+            method='POST', input_file=path)
+    uploaded = api(release_path)
+    release_inputs(uploaded, tag, source, kernel, kernelsu)
+    if uploaded['id'] != release_id or uploaded.get('draft') is not True:
+        raise ValueError('Uploaded release is no longer the expected draft')
+    if (len(uploaded['assets']) != len(assets) or
+            {asset['name'] for asset in uploaded['assets']} != asset_names):
+        raise ValueError('Draft release upload is incomplete')
+    for asset in uploaded['assets']:
+        local = next(path for path in assets if path.name == asset['name'])
+        if (asset.get('state') != 'uploaded' or asset['size'] != local.stat().st_size or
+                asset.get('digest') not in (None, 'sha256:' + digest(local))):
+            raise ValueError('Uploaded release asset differs: ' + asset['name'])
+    # A source push may land during a long upload. Publishing an older
+    # draft as Latest must not supersede a newer accepted-source release.
+    accepted = api(prefix + '/git/ref/heads/' + TRACK['source_branch'])['object']['sha']
+    if accepted != source:
+        raise ValueError('Source branch advanced during upload; leaving the release unpublished')
+    published = api(release_path, method='PATCH', data={'draft': False, 'make_latest': 'true', 'body': notes})
+    release_inputs(published, tag, source, kernel, kernelsu)
+    if published['id'] != release_id or published.get('draft') is not False:
+        raise ValueError('Release publication did not return the expected published release')
     return {'status': 'verified build released', 'tag': tag,
             'url': f'https://github.com/{repository}/releases/tag/{tag}'}
 

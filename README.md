@@ -128,6 +128,14 @@ before publication, preventing an older upload from becoming Latest afterward.
 These automatic releases establish
 build verification; hardware validation remains a separate step.
 
+The publisher retains the release ID returned by draft creation and uses that
+ID for uploads, verification and publication. A new draft need not be visible
+through its tag or the release listing. Upload retries reuse assets whose size
+and server digest already match, and replace incomplete uploads within that draft.
+When a build succeeds but publication fails, run **Recover a verified GKI
+release** on `ci` with the original `build_run_id` and `build_attempt`. It uses
+the original immutable artifact and current publication code without rebuilding.
+
 The tracker also detects older build state without a published-release tag and
 dispatches one migration build. Accepted input state is written only after the
 release is published or an existing complete release is confirmed.
