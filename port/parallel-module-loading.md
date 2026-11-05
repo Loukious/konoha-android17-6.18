@@ -1,8 +1,9 @@
 # Parallel module loading on Onyx
 
 Parallel Android, fastbootd and the normal recovery menu passed on November 5,
-2026 with the 6.18 port. The phone finishes in Android with
-`androidboot.load_modules_parallel=true`. The device receipt is
+2026 with the corrected 6.18 modules and the original ROM init binaries.
+The tested configuration uses `androidboot.load_modules_parallel=true`
+without a ROM loader patch. The device receipt is
 [parallel-module-loading-20261105.json](../validation/parallel-module-loading-20261105.json).
 
 ## Captured failure and repair
@@ -26,24 +27,20 @@ provider's readiness transition uses release/acquire ordering. Task storage,
 PID references, callback draining, native defaults and disabled panic threshold
 remain protected.
 
-The ROM also needs the production `system/core` loader patch saved in
-`crdroid_onyx_patches/patches/system_core/0001-fix-parallel-module-loader-synchronization.patch`.
-It fixes worker shutdown after errors, producer/worker races, failure-result
-overwrites and sequential-option parsing. All dependency-map access belongs to
-the producer; worker queues, completion and shutdown share one mutex. A zero
-hardware thread count uses one worker. Ordinary loading remains parallel.
+The kernel repair works with the shipping ROM loaders and the BoardConfig's
+existing `androidboot.load_modules_parallel=true` setting. Android, fastbootd
+and normal recovery have been verified after restoring the original first-stage
+and recovery init binaries. The separate `system/core` patch and serial-loading
+workaround were removed from the ROM patch repository.
 
-The old device-tree patch `0019-use-serial-first-stage-module-loading.patch`
-is retired. `apply.sh` now maps `system_core` to `system/core` and applies that
-patch with exact context. The existing device BoardConfig already enables
-parallel loading. Both the updated modules and loader are required for this
-validated configuration.
+The earlier combined trial used a rebuilt module loader. It did not establish
+that this ROM change was necessary for the WALT readiness fix. The kernel fix
+must not be described as depending on that loader patch. The original-loader
+restoration changes only init payloads in `init_boot` and `recovery`; all kernel
+modules, module lists and AVB profiles match the preceding working images.
 
 ## Verification
 
-- The actual loader and parser pass 29 host cases with ThreadSanitizer, including
-  all three loading modes, the real recovery list, error shutdown, dependency
-  aliases, sequential exclusions and zero-worker fallback.
 - The complete hung-task driver, actual WALT readiness getter and publication
   pass 156,921 host cases under ASan, UBSan and ThreadSanitizer. Fourteen behavior
   and lifetime mutations and two memory-ordering mutations are rejected. The
@@ -53,21 +50,23 @@ validated configuration.
 - All port patches replayed. Both rebuilt modules match the source ledger.
   Their 336 imported-symbol CRCs match the installed kernel/providers, and all
   25 WALT export signatures are unchanged.
-- Two production Android boots pass all nine partition readbacks, loaded-module
+- Two original-loader Android boots pass all nine partition readbacks, loaded-module
   identities, native per-task controls, KernelSU root, SELinux enforcing, audio
   policy, sound card and both AW amplifiers.
-- Production fastbootd appears in 12.59 seconds. The normal recovery menu also
+- Original-loader fastbootd appears in 15.33 seconds. The normal recovery menu also
   boots; after the user enables ADB, its live module set contains exactly all
   315 expected modules. The 316-entry list retains its original blocklist entry
   for `llcc_perfmon`. Recovery retains the new module identities and all seven
   physical partition hashes. It remained on the same boot through the capture
-  at over nine minutes of uptime.
+  at 236 seconds of uptime.
 
-The installed kernel, audio fixes and thermal-voter fix are retained. The
-production images contain no diagnostic init, watchdog or logging override.
-Validation used targeted module and init builds on one Onyx phone; a full ROM
-build was not run. Sysctl/PID/tracepoint framework behavior is mocked in the
-host harness; no live hung task or panic was injected.
+The installed kernel, audio fixes and thermal-voter fix are retained. Both init
+binaries match the shipping ROM bytes. The image comparison verifies every
+other ramdisk record, including module payloads and load lists, and preserves
+headers and AVB profiles. No diagnostic init, watchdog or logging override is
+installed. Validation used targeted module builds and the existing ROM images
+on one Onyx phone; a full ROM build was not run. Sysctl/PID/tracepoint framework
+behavior is mocked in the host harness; no live hung task or panic was injected.
 
 ## Reproduce the module checks
 
@@ -78,6 +77,8 @@ the `//onyx:hung_task_enh` and `//onyx:sched_walt` targets and verify their impo
 against the matched installed artifacts before packaging all three module
 copies in vendor_boot, recovery and vendor_dlkm.
 
-The build, guarded installation, rollback staging and raw runtime captures are
-retained in `konoha-parallel-rootfix-20261105/hung-task-walt-fix/`. The final boot
-ID is `d2631c28-b05a-45a1-b690-eb86642543e3` on slot B.
+The build evidence is retained in
+`konoha-parallel-rootfix-20261105/hung-task-walt-fix/`. Its
+`original-loader-restoration/` directory contains the guarded installation,
+rollback staging, complete image manifest and fresh Android/recovery captures.
+The device receipt records the final Android boot ID on slot B.

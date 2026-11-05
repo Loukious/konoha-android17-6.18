@@ -5,8 +5,8 @@ module-init race with asynchronous WALT startup. Task accesses remain gated
 until readiness; per-task controls return `EAGAIN` while WALT starts and become
 active without reloading. The updated actual-C harness passes 156,921 cases
 under ASan/UBSan and ThreadSanitizer, rejecting 14 behavior/lifetime mutations
-and two publication-ordering mutations. Production Android and full recovery
-now pass with parallel loading enabled.
+and two publication-ordering mutations. Android and full recovery pass with
+parallel loading enabled and the original ROM init binaries.
 
 The original provider-deployment checkpoint is described below. The [current 391-module runtime summary](../validation/onyx-runtime-summary-20261104.md) records the latest kernel and outstanding limits; earlier counts, preserved-kernel and temporary Wi-Fi statements describe that historical checkpoint.
 

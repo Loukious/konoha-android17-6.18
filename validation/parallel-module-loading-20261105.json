@@ -1,15 +1,20 @@
 {
   "status": "PASS",
-  "utc": "2026-11-05T14:10:30.422750+00:00",
+  "utc": "2026-11-05T14:45:57.895658+00:00",
   "serial": "5493f3c6",
   "product": "onyx",
   "slot": "b",
+  "configuration": "original ROM init loaders",
+  "rom_loader_patch_installed": false,
+  "serial_workaround_installed": false,
   "final_device": {
+    "rom_loader_patch_installed": false,
+    "original_init_verified": true,
     "status": "PASS",
-    "boot_id": "d2631c28-b05a-45a1-b690-eb86642543e3",
+    "boot_id": "70ec3a3b-a902-4cd3-91b1-63f1e24a6a09",
     "parallel": true,
-    "android_capture_sha256": "c8bd746a5721d3c320671e74e06ca0b1047a1e9facad3c881c25a22350d91525",
-    "production_manifest_sha256": "3055e58187c062f582fceddee8d32904e7f7b1286f83e8b0a252f25af4cd9031",
+    "android_capture_sha256": "6290d766839451a225f220cdac166be211956ea1576b4297f4039660e1148e15",
+    "production_manifest_sha256": "850f6cc8cd5df1c7ce74bbb2d2314b348c25c4b8762a5f32e0437116c56aee97",
     "module_build_ids": {
       "hung_task_enh": "2f8250c89e41f0a3e75a38aa17ff6398211ee473",
       "sched_walt": "edbdf39b3579a566d057c863785a0cb2fc22253f"
@@ -28,38 +33,46 @@
     "thermal_build_id": "254b7b72efd10b09009792eb5f8a93fce4352b42",
     "root": true,
     "enforcing": true,
-    "boot_completed": true,
-    "uptime": "250.69 1824.57"
+    "boot_completed": true
   },
   "android_boots": [
-    "9c2fe62a-ba81-40b4-9a85-f51e8632c25b",
-    "d2631c28-b05a-45a1-b690-eb86642543e3"
+    "f8383ee9-821f-44c4-9441-de40d5d927f2",
+    "70ec3a3b-a902-4cd3-91b1-63f1e24a6a09"
   ],
   "fastbootd": {
     "passed": true,
     "is_userspace": true,
-    "seconds": 12.585617885983083
+    "seconds": 15.329574859992135
   },
   "recovery": {
-    "boot_id": "8af438f6-6492-4cb0-a18d-961e1905bdbe",
+    "rom_loader_patch_installed": false,
+    "original_init_verified": true,
+    "exact_expected_module_set_loaded": true,
+    "status": "PASS",
+    "utc": "2026-11-05T14:43:04.358619+00:00",
+    "boot_id": "d081a42f-dd46-4d7d-97c4-1be81cb2ae92",
     "parallel": true,
     "recovery_process_running": true,
-    "uptime": "576.13 4602.53",
+    "recovery_pids": [
+      "399",
+      "402"
+    ],
+    "uptime": "236.41 1885.94",
     "module_build_ids": {
       "hung_task_enh": "2f8250c89e41f0a3e75a38aa17ff6398211ee473",
       "sched_walt": "edbdf39b3579a566d057c863785a0cb2fc22253f",
       "mca_charger_thermal": "254b7b72efd10b09009792eb5f8a93fce4352b42"
     },
     "requested_module_count": 316,
-    "expected_recovery_modules": 315,
     "loaded_module_count": 315,
+    "expected_recovery_modules": 315,
     "skipped_blocklisted_modules": [
       "llcc_perfmon"
     ],
     "missing_requested_modules": [],
-    "exact_expected_module_set_loaded": true,
-    "blocklist_unchanged_from_rom": true,
-    "user_confirmed_recovery_menu": true
+    "production_manifest_sha256": "850f6cc8cd5df1c7ce74bbb2d2314b348c25c4b8762a5f32e0437116c56aee97",
+    "user_confirmed_recovery_menu": true,
+    "adb_enabled_by_user": true
   },
   "installed_images": {
     "boot": {
@@ -68,7 +81,7 @@
     },
     "init_boot": {
       "size": 8388608,
-      "sha256": "3da435aea42143b9e2e0b29fafa018e03eb4d44e79f017ca7b0e617c6b7bbf58"
+      "sha256": "5d2608a16ead5d5da874fd280461aaad33e0f52ece2f496c9593bea30d5090d2"
     },
     "vendor_boot": {
       "size": 100663296,
@@ -76,7 +89,7 @@
     },
     "recovery": {
       "size": 104857600,
-      "sha256": "b21d02268e8a03d4c7015615e79da81fb874c80fbe49a3628f201f8fd9e5e8c5"
+      "sha256": "5fcc05ab860a577ce3579dd5cc5a244079e84213e11eec67438a019deb8bfb97"
     },
     "dtbo": {
       "size": 25165824,
@@ -99,6 +112,26 @@
       "sha256": "33ff8abfe1a374d9a83efad4eecd10cf24c59b6418465631bf668cd786ce78fe"
     }
   },
+  "original_init_verification": {
+    "init_boot": {
+      "shipping_init_sha256": "43641a2116087571720d8e73472d1b02f4c009c451b86d91ea34a737006d9a92",
+      "previous_init_sha256": "49bc15ece3cb6c345da253890949f5e982b78f20a52c83644f1e781c1e816dfe",
+      "changed_cpio_entry": "init",
+      "retained_raw_records": 29,
+      "all_modules_and_load_lists_preserved": true,
+      "header_components_and_avb_profile_preserved": true,
+      "avb_verified": true
+    },
+    "recovery": {
+      "shipping_init_sha256": "bfa9175c1e751700f4d104c367e63b6211e253ecc5c88cf3337ba3f445a2685e",
+      "previous_init_sha256": "f889820b08f37d921cca44f84a1df9cef3254d40f6e2c38afeaac0dc8c64f440",
+      "changed_cpio_entry": "system/bin/init",
+      "retained_raw_records": 1061,
+      "all_modules_and_load_lists_preserved": true,
+      "header_components_and_avb_profile_preserved": true,
+      "avb_verified": true
+    }
+  },
   "source": {
     "module_sha256": {
       "drivers/soc/qcom/hung_task_enh.c": "9c461be451101fe884686ee96973dc960cf9dbc504061d8e3d8f5b636f0cf794",
@@ -107,14 +140,15 @@
     },
     "module_patch": "port/patches/0245-fix-hung-task-readiness-during-parallel-loading.patch",
     "module_patch_sha256": "c29b3108dcc3696597716fcc484c1c0a5646c4601027bfd2cd992d046c7b713d",
-    "loader_patch": "/home/loukious/Android/crdroid_onyx_patches/patches/system_core/0001-fix-parallel-module-loader-synchronization.patch",
-    "loader_patch_sha256": "21069b1365bad727307fdbdd775729c309d8350ab544e3ffafd31b5e1992050c",
-    "loader_base": "ea0752d2d09c1fffdb4e40c048735b1a0a28fd95",
-    "retired_serial_patch": "/home/loukious/Android/crdroid_onyx_patches/retired/device_xiaomi_onyx/0019-use-serial-first-stage-module-loading.patch"
+    "kernel_fix_commit": "0a4334dec4e8be7d609120cdf862970610358268",
+    "rom_loader_revision": "ea0752d2d09c1fffdb4e40c048735b1a0a28fd95",
+    "shipping_init_sha256": {
+      "init_boot": "43641a2116087571720d8e73472d1b02f4c009c451b86d91ea34a737006d9a92",
+      "recovery": "bfa9175c1e751700f4d104c367e63b6211e253ecc5c88cf3337ba3f445a2685e"
+    },
+    "rom_loader_patch_required": false
   },
   "validation": {
-    "loader_cases": 29,
-    "loader_tsan": true,
     "hung_task_cases": 156921,
     "hung_task_sanitizers": [
       "ASan",
@@ -132,9 +166,7 @@
     "module_build_ids": {
       "hung_task_enh.ko": "2f8250c89e41f0a3e75a38aa17ff6398211ee473",
       "sched-walt.ko": "edbdf39b3579a566d057c863785a0cb2fc22253f"
-    },
-    "rom_patch_round_trip": true,
-    "rom_preflight": "PASS"
+    }
   },
   "preserved": {
     "kernel_build_id": "b8587a51d2a866026061adfba1f937f3b30cde6f",
@@ -146,24 +178,42 @@
     "shared_rom_checkout": true
   },
   "diagnostic_images_installed": false,
+  "rom_history": {
+    "removed_commit": "e9e0b7d5e0c886a9df120a74ba2e807c74632d9b",
+    "branch": "evolution-cnb",
+    "new_tip": "08d7297f3f59e6144c52d18fbcdb3d6ba34ac0e5",
+    "method": "force-with-lease",
+    "local_patch_cleanup_verified": true
+  },
+  "changed_from_previous_trial": [
+    "init_boot",
+    "recovery"
+  ],
   "evidence_root": "/home/loukious/Android/konoha-parallel-rootfix-20261105",
   "evidence_sha256": {
-    "host/candidate-tsan-results.json": "0e498c548727021ede061c0595b78c35cf55af61c08f230c50af8865c7fcb7bf",
+    "hung-task-walt-fix/original-loader-restoration/manifest.json": "850f6cc8cd5df1c7ce74bbb2d2314b348c25c4b8762a5f32e0437116c56aee97",
+    "hung-task-walt-fix/original-loader-restoration/offline-validation.json": "de6a7d857570b6b62f1e46c5a3f13bf9aa1db953cba31d5c8a27fe8b990846d5",
+    "hung-task-walt-fix/original-loader-restoration/INSTALL.json": "e9ec28c3b78a3dc0a59171b50358b4f37c3c3e2f29f37783b2be1dfbf8d1ada7",
+    "hung-task-walt-fix/original-loader-restoration/REBOOT-ANDROID.json": "6ccb44aa58a7d6cda533ce6938158fedc2bb1f7845a28257082d14cc3f9e22ae",
+    "hung-task-walt-fix/original-loader-restoration/android-1/report.json": "e6ac14dcab74f85a8a363b4a22e0ef3b0edebc6657473bf322693c11062b5830",
+    "hung-task-walt-fix/original-loader-restoration/android-1/readiness-validation.json": "705a21685f84b48686dc9058e131666254fb483d9ddf053148fc6c15e537b975",
+    "hung-task-walt-fix/original-loader-restoration/FASTBOOTD-TEST.json": "64b5f38d7553d163d43ede01c46e7644faac99e0b8915dc62078b92bcd476f44",
+    "hung-task-walt-fix/original-loader-restoration/RECOVERY-MENU-TEST-RECONNECTED.json": "8c7d341eb6451aa124b5cc2278c6fa6bd1ffcd0a32a3537f7dac3edbd37b1c8a",
+    "hung-task-walt-fix/original-loader-restoration/recovery/report.json": "6efb1cd9d678ec79bdf28ac4cd0c6c07ac476a0c0dcd4863c276c8d829d3cc45",
+    "hung-task-walt-fix/original-loader-restoration/RETURN-ANDROID.json": "3dcfa370aad12be3c61dd77d55be192bd151d4a256d5a50af5b7a03effdd02b6",
+    "hung-task-walt-fix/original-loader-restoration/android-final/report.json": "6290d766839451a225f220cdac166be211956ea1576b4297f4039660e1148e15",
+    "hung-task-walt-fix/original-loader-restoration/android-final/readiness-validation.json": "5bef7b8197e03604e97d87b93423c78f0f1028097ea387dede4bcfc35d50d869",
+    "hung-task-walt-fix/original-loader-restoration/ROM-HISTORY-REMOVAL.json": "b787edcf5a05859c34952c0598e84cdcd1aa2373a2597802fb2dee403221a040",
+    "hung-task-walt-fix/original-loader-restoration/local-rom-cleanup/report.json": "e3298de7b1cb1bc402101a2fb31c46dc24f9a24d29c8d43e5bf8d980a78315a5",
     "hung-task-walt-fix/host-validation.json": "2bd72032e6db94a92fc541147b539bfa3069d5178fdefab728d3dd5dd5d2404c",
     "hung-task-walt-fix/build/build-validation.json": "7b2bfa7b518bf53518ba3ed6dd73b5dbfe4b620356d22187b5df11e80e6a7b4d",
-    "hung-task-walt-fix/production-manifest.json": "3055e58187c062f582fceddee8d32904e7f7b1286f83e8b0a252f25af4cd9031",
-    "hung-task-walt-fix/android-production-1/readiness-validation.json": "6c4f14be4a79d9a8f3a476464529c1293d9ad28b57d1af50c4474b397db48ab4",
-    "hung-task-walt-fix/android-production-final/readiness-validation.json": "3d9799bb3f6fb4d67da9aae2d3cac5269a3bce508424a1c1b93cd6f4d883e255",
-    "hung-task-walt-fix/recovery-production/report.json": "8536880e137a2197d69a37777b967c09151dcf9cf1ad33c37a5f182264fabddd",
-    "hung-task-walt-fix/RECOVERY-TEST-1.json": "2dbe56fd67b1f1b2aa1923769ea245e501544acc009ebd8f1bb79204c6a98a94",
-    "hung-task-walt-fix/rom-patch-validation.json": "97749d9f4b462083012282db2e3c9ff60e7adb37f38f68979cf8d3a7757ef223",
-    "hung-task-walt-fix/rom-preflight.log": "a2f4b09a920e735282d86b322fe843878e9b1ca62f9113caef12ed1de003a5ed",
     "thermal-voter-fix/build/build-validation.json": "953438d50f588442bfe4c2c6a1eb4eeb20cbffdd2cb574abbc92b56f7fd20755",
     "thermal-voter-fix/host-validation.json": "c447f5658c3face632b4dcdcece916265de27e3d8523749bd03c0d17d2ba6351",
     "thermal-voter-fix/regression-validation.json": "20eaaac96321ec52dc702c6884015682336aa62444eeb2384200cf293adc432d"
   },
   "limits": [
-    "Targeted module/init builds; no full ROM build.",
-    "One Onyx device; no live hung-task or panic injection."
+    "One Onyx device; no live hung-task or panic injection.",
+    "Targeted module builds and existing ROM images; no full ROM rebuild.",
+    "Earlier combined-loader validation did not establish a ROM patch dependency."
   ]
 }
