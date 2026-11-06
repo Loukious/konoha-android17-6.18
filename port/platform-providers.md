@@ -77,5 +77,5 @@ high-power charging/reverse-peer tests and sustained thermal/reclaim testing
 still need evidence. Existing camera/ROM SELinux findings remain.
 
 The draft feature PR remains unmerged:
-https://github.com/Loukious/konoha-android17-6.18/pull/4
+https://github.com/Loukious/onyx-android17-6.18/pull/4
 Raw device logs, trace data and partition backups remain local.
