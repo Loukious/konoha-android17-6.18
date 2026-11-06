@@ -44,3 +44,11 @@ wrappers have concurrent add/remove-versus-unload host tests in
 `verify_cti_assoc.py`, and the normal GKI build checks the real SRCU API.
 
 The HVC extension uses `0002-required-common-fixes-with-hvc.patch`. The original required patch and pre-HVC manifest are preserved; `hvc-core.patch` is the independently reviewed second component. Its public certificate and trusted-key config preserve signed accepted GKI compatibility without disabling module protection. New-file before hashes are null and those files are removed on context exit.
+
+The current aggregate is `0004-required-common-fixes-with-timerfd.patch`.
+It retains the NetHunter/CAN additions in `0003` and adds
+`timerfd-resume-freezer.patch`. The latter queues timerfd's resume notification
+on `system_freezable_wq`, so an intermediate s2idle CPU exit cannot notify an
+`EPOLLWAKEUP` waiter before the system has actually resumed. Timer expiry and
+explicit clock-change notification paths retain their existing behavior.
+See [the diagnosis and validation](../timerfd-s2idle.md).

@@ -1,0 +1,76 @@
+{
+  "status": "PASS",
+  "scope": "Offline regression and production ARM64 build; phone validation pending",
+  "phone_validated": false,
+  "timerfd_sha256": "628c6b705c64ac1269380e25e151ce78b2ba47f931d3c15ad4b94b213849b584",
+  "vm": {
+    "status": "PASS",
+    "test_sha256": {
+      "timerfd_resume_vm_test.h": "93be011345fbd4442ed5470f5b6e7603f6517f29ba58ccb5aed6e86dcdfd5e0a",
+      "timerfd_vm_init.c": "a1650b2b0269390cac868f93cf44d8e201089c212c7eba760b816e43d531cecd",
+      "run_timerfd_vm.py": "f4989ab351760e436e9a63d8b9d81a0440cccb12728f7dad3c433d35dc8ced3b"
+    },
+    "baseline": {
+      "qemu_exit": 33,
+      "freezer_pass": 1,
+      "freezer_fail": 2,
+      "api_pass": 8,
+      "image_sha256": "4072371b10eb3b379ac280c77b8c546b261fa78896378faf872d51b527ed6542",
+      "log_sha256": "20916634be002398a91ea472ebcd90a7cbb2f6f64c1f8378bef9fb1c62a0df86",
+      "source_sha256": "e2f56800708897205c1588b22040071b4b150513b50ff1c694bdefdb575898cc",
+      "config_sha256": "ecba6772799c55ecedf009b154766e1c79cb9bf02480eecb22bed1916eab8e60"
+    },
+    "candidate": {
+      "qemu_exit": 33,
+      "freezer_pass": 3,
+      "freezer_fail": 0,
+      "api_pass": 8,
+      "image_sha256": "fe2aebcabf25b609b4db288ab5fabd30ccf7922f593f55a1ed021f49f374bc99",
+      "log_sha256": "733e888cc4135cb68ead8d59f37990168bdd978524592a4639b4ac97758e2559",
+      "source_sha256": "628c6b705c64ac1269380e25e151ce78b2ba47f931d3c15ad4b94b213849b584",
+      "config_sha256": "ecba6772799c55ecedf009b154766e1c79cb9bf02480eecb22bed1916eab8e60"
+    }
+  },
+  "arm64": {
+    "command": [
+      "tools/bazel",
+      "build",
+      "--keep_going",
+      "--jobs=16",
+      "--local_resources=memory=18000",
+      "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
+      "//common:kernel_aarch64"
+    ],
+    "kernelsu_revision": "b2c1ad00b755afe0db74d889b67a137f56e71fcc",
+    "image_sha256": "144239724253d34fc0d833c37bff9776e28a8c9ad4768927df7027938137fb66",
+    "config_sha256": "eafde7c715619774666b96772bcafe5f4c7d804f8dedbeb83cfb09af5efdb996",
+    "kmi_strict_and_symbol_list_checks": "PASS"
+  },
+  "source_replay": {
+    "gki_files_verified": 91829,
+    "upstream_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0"
+  },
+  "checkpatch": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "phone_trace": {
+    "complete_retained_sleep_spans": 134,
+    "first_timerfd_resume_wake": 118,
+    "first_qrtr_wake": 3,
+    "no_wake_retained": 13,
+    "buffers_wrapped": true,
+    "firmware_acks": 148,
+    "firmware_nacks": 1,
+    "nack_reasons": [
+      0
+    ],
+    "reason_7_reproduced": false
+  },
+  "evidence_sha256": {
+    "trace-unplugged.txt": "c2444f116828621e0bc1e5e21a703962e3c57ba13b82f137c742a3dd650fb196",
+    "unplugged-analysis.json": "5229872d126fd57ce426dc2944363adaa45237914e30ebefeb4ded246ee18ee6",
+    "vm-repro/report.json": "54bb442e94b7349787f8843fdc7022e8e2b7933f418767cc8d1a36f0ab90bec7",
+    "arm64-build-report.json": "86624d1db482343a9262eadd98b0bcce753861246dd2274729d77764b7246653"
+  }
+}

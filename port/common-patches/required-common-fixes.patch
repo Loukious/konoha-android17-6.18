@@ -1174,3 +1174,21 @@ diff --git a/bazel/modules_private.bzl b/bazel/modules_private.bzl
  ]
  
  _X86_GKI_MODULES_LIST = [
+diff --git a/fs/timerfd.c b/fs/timerfd.c
+index 79122fb46..d28b408e5 100644
+--- a/fs/timerfd.c
++++ b/fs/timerfd.c
+@@ -128,7 +128,12 @@ static DECLARE_WORK(timerfd_work, timerfd_resume_work);
+  */
+ void timerfd_resume(void)
+ {
+-	schedule_work(&timerfd_work);
++	/*
++	 * A CPU can leave s2idle without the system resuming. Keep this
++	 * userspace notification frozen until resume, otherwise an epoll
++	 * waiter using EPOLLWAKEUP can turn that idle exit into a system wakeup.
++	 */
++	queue_work(system_freezable_wq, &timerfd_work);
+ }
+ 
+ static void __timerfd_remove_cancel(struct timerfd_ctx *ctx)

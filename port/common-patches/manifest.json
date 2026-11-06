@@ -1,6 +1,6 @@
 {
-  "patch": "0003-required-common-fixes-with-nethunter-can.patch",
-  "patch_sha256": "862c70b7d27bf5e1d81ed55befaabe3c59c26b041daa41d09fdfd460ce20d1c4",
+  "patch": "0004-required-common-fixes-with-timerfd.patch",
+  "patch_sha256": "213ee3dc6056048352b59cf4cd6758878ef311252d9b84268ab876d3157db511",
   "upstream": "https://lists.openwall.net/linux-kernel/2026/07/10/62",
   "files": {
     "drivers/hwtracing/coresight/coresight-catu.c": {
@@ -82,6 +82,10 @@
     "bazel/modules_private.bzl": {
       "before_sha256": "d93adc60fdd792cc5d6eed6415f99dffb67fb3b4425235745104577618843595",
       "candidate_sha256": "95eaadf870ffeab3d2f082bafb8e70e47715eb1284ccebc8393f7430aed64a3f"
+    },
+    "fs/timerfd.c": {
+      "before_sha256": "e2f56800708897205c1588b22040071b4b150513b50ff1c694bdefdb575898cc",
+      "candidate_sha256": "628c6b705c64ac1269380e25e151ce78b2ba47f931d3c15ad4b94b213849b584"
     }
   },
   "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",
@@ -95,7 +99,8 @@
     "Validate Gunyah console notification header/tail against real received size before unsized notifier dispatch",
     "Trust the pinned accepted GKI public certificate so preserved modules retain protected-export authorization after kernel rebuild",
     "Remove interior certificate-list alignment so the native X.509 loader reaches the added public certificate",
-    "Native CAN USB/virtual/ISO-TP/J1939, USB serial generic/adapters, Bluetooth USB, network filesystems and host-network diagnostics with exact ARM64 module outputs"
+    "Native CAN USB/virtual/ISO-TP/J1939, USB serial generic/adapters, Bluetooth USB, network filesystems and host-network diagnostics with exact ARM64 module outputs",
+    "Defer timerfd resume cancellation notifications on the freezable workqueue until actual system resume, preserving timer expiry and explicit clock changes"
   ],
   "integrated_upstream": [],
   "components": [
@@ -113,6 +118,11 @@
       "patch": "nethunter-can-native.patch",
       "sha256": "5ffa842f1ed321cf1f97bdfbc7a8da276a822eeb23498e263443549482bb658b",
       "role": "Native GKI NetHunter peripherals/filesystems and common USB/virtual CAN"
+    },
+    {
+      "patch": "timerfd-resume-freezer.patch",
+      "sha256": "6d97b58efdf2bdf16e3e4f61e12fa51b7f611bc4af4fc98b48be5c5adf54e05d",
+      "role": "Keep timerfd resume work frozen during transient s2idle CPU exits"
     }
   ]
 }
