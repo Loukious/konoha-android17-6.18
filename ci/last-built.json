@@ -1,6 +1,6 @@
 {
-  "common_revision": "ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0",
-  "kernelsu_revision": "84c644c7e32f463a6292dc811d79b62ec8253d87",
-  "source_revision": "f1b51a3724435afc9990c9392f65bc9c025d9353",
-  "release_tag": "gki-6.18.38-sf1b51a372443-k84c644c7e32f"
+  "common_revision": "ed4489e76f6fafbe67b99e8a9419215313df189e",
+  "kernelsu_revision": "0c9c4438a6273c5bd80c9fd8816a4c9801e108fe",
+  "source_revision": "8a10a2823370f0830364cf57238e20d009bd886b",
+  "release_tag": "gki-6.18.38-s8a10a2823370-k0c9c4438a627"
 }
