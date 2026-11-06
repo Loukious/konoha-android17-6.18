@@ -160,8 +160,9 @@ downloaded for this route. KernelSU Next dev is resolved on every build.
 Local kernel objects persist under
 `out/target/product/onyx/obj/KERNEL_BAZEL_OUT/kleaf-cache`. Kleaf's supported
 `--config=local --cache_dir=...` mode reuses unchanged compilation outputs; source,
-configuration and ABI checks still run. The GitHub build restores and saves the
-same type of cache with keys separated by toolchain/configuration and diagnostic
+configuration and ABI checks still run. The GitHub build also preserves Bazel action records and their outputs, so a
+fresh runner can reuse content-checked results despite new checkout timestamps.
+It restores and saves these caches with keys separated by toolchain/configuration and diagnostic
 mode. This is incremental compilation, not reuse of a previously released kernel.
 A cold build still performs full compilation. Cache timings depend on what changed.
 

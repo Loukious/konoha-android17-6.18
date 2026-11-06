@@ -84,10 +84,13 @@ jobs:
         id: kleaf-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/kleaf-cache
-          key: kleaf-v1-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/kleaf-cache
+            ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/action_cache
+            ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/execroot/_main/bazel-out
+          key: kleaf-v2-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            kleaf-v1-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-
+            kleaf-v2-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-
       - name: Build matching GKI and every ported module with latest KernelSU Next dev
         id: compile
         env:
@@ -114,11 +117,18 @@ jobs:
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
+      - name: Flush Bazel action cache
+        if: success() && steps.compile.outputs.cache_enabled == 'true'
+        working-directory: ${{ runner.temp }}/konoha-workspace
+        run: tools/bazel shutdown
       - name: Save verified Kleaf incremental build cache
         if: success() && steps.compile.outputs.cache_enabled == 'true' && steps.kleaf-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}/kleaf-cache
+          path: |
+            ${{ runner.temp }}/kleaf-cache
+            ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/action_cache
+            ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/execroot/_main/bazel-out
           key: ${{ steps.kleaf-cache.outputs.cache-primary-key }}
       - name: Upload failure evidence
         if: failure()
