@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
@@ -43,7 +44,7 @@ def main():
                      ET.fromstring(manifests["dependency-lock.xml"])})
     expected.update({p["workspace_path"]: p["revision"] for p in pins["baseline"]})
     local_manifests = workspace / ".repo/local_manifests"
-    if (workspace / ".repo").is_dir():
+    if (workspace / ".repo/manifests.git").is_dir():
         source = workspace / ".repo/manifests"
         if (git(source, "remote", "get-url", "origin") != pins["manifest"]["url"]
                 or git(source, "rev-parse", "HEAD") != pins["manifest"]["revision"]):
@@ -54,9 +55,19 @@ def main():
     else:
         if args.verify_only:
             parser.error("no prepared workspace at this path")
-        if workspace.exists() and any(workspace.iterdir()):
+        if workspace.exists() and any(p.name != ".repo" for p in workspace.iterdir()):
             parser.error("workspace must be empty")
         workspace.mkdir(parents=True, exist_ok=True)
+        # The repo launcher searches parent directories for .repo/repo/main.py.
+        # Bootstrap an independent client before init inside a ROM's out/ tree,
+        # otherwise repo init would reconfigure the enclosing ROM manifest.
+        client = workspace / ".repo/repo"
+        if not (client / "main.py").is_file():
+            enclosing = next((p / ".repo/repo" for p in workspace.parents
+                              if (p / ".repo/repo/main.py").is_file()), None)
+            if enclosing:
+                shutil.copytree(enclosing, client, symlinks=True,
+                                ignore=shutil.ignore_patterns("__pycache__"))
         command = ["repo", "init", "-u", pins["manifest"]["url"], "-b",
                    pins["manifest"]["revision"], "--depth=1", "--no-clone-bundle"]
         if args.reference:

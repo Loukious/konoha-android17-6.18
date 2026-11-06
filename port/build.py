@@ -45,6 +45,8 @@ def main():
     parser.add_argument("workspace", type=Path)
     parser.add_argument("--jobs", type=int, default=12)
     parser.add_argument("--memory-mb", type=int, default=20000)
+    parser.add_argument("--cache-dir", type=Path,
+                        help="Reuse Kleaf's supported incremental OUT_DIR cache")
     parser.add_argument("--qdss-diagnostic", action="store_true",
                         help="temporarily apply reviewed opt-in AMBA/QDSS logging")
     args = parser.parse_args()
@@ -130,7 +132,12 @@ def main():
     for name, inputs in standalone_provider_verifiers.items():
         provider_validations[name + "_host_validation"] = verify_standalone_provider(
             *inputs, workspace / "onyx", artifacts)
-    command = ["tools/bazel", "build", "--keep_going", f"--jobs={args.jobs}",
+    cache_flags = []
+    if args.cache_dir:
+        cache = args.cache_dir.resolve()
+        cache.mkdir(parents=True, exist_ok=True)
+        cache_flags = ["--config=local", f"--cache_dir={cache}"]
+    command = ["tools/bazel", "build", *cache_flags, "--keep_going", f"--jobs={args.jobs}",
                f"--local_resources=memory={args.memory_mb}",
                "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
                "//common:kernel_aarch64", "//onyx:platform_modules"]
@@ -150,7 +157,7 @@ def main():
     execution_root = Path(subprocess.check_output(
         ["tools/bazel", "info", "execution_root"], cwd=workspace, text=True).strip())
     query = subprocess.check_output([
-        "tools/bazel", "cquery", "--output=files",
+        "tools/bazel", "cquery", *cache_flags, "--output=files",
         "--//build/kernel/kleaf:user_kmi_symbol_lists=//onyx:kmi-symbols",
         "//common:kernel_aarch64 + //onyx:platform_modules"
     ], cwd=workspace, text=True)

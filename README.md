@@ -38,10 +38,8 @@ requires device validation even when its automated build checks pass.
   contains the complete GKI source in `common/`, modified modules in `modules/`,
   and the pinned recipe/patches in `port/`. It contains no workflows.
 - [`prebuilt-onyx`](https://github.com/Loukious/onyx-android17-6.18/tree/prebuilt-onyx)
-  contains the matched kernel binaries, partitioned modules, device trees and UAPI
-  headers consumed by the ROM at `device/xiaomi/onyx-kernel`. The ROM manifest
-  pins an exact commit here; this branch is updated separately from automatic
-  releases after exporting a verified module layout.
+  retains the earlier matched binary bundle for reproducibility. Current ROM
+  manifests sync the source branch and compile the kernel and modules instead.
 - `upstream/` branches are proposed updates to the source branch. Builds run
   from `ci` and attach their status to the selected source commit and its PR.
 
@@ -149,6 +147,34 @@ range. A release using the same Google revision says that explicitly.
 The tracker also detects older build state without a published-release tag and
 dispatches one migration build. Accepted input state is written only after the
 release is published or an existing complete release is confirmed.
+
+## Build the ROM kernel from source
+
+The `evolution-cnb-konoha618` branch of
+[`local_manifests_onyx`](https://github.com/Loukious/local_manifests_onyx/tree/evolution-cnb-konoha618)
+syncs this source branch to `kernel/platform/kernel-6.18`. Apply the matching
+[`crdroid_onyx_patches`](https://github.com/Loukious/crdroid_onyx_patches/tree/evolution-cnb-konoha618)
+branch, then run the normal ROM build. `port/rom/BoardConfig.mk` connects Lineage's
+Kleaf path to `port/rom/build.py`; it compiles GKI, every platform/native module
+and the device trees from the verified source recipe. Android packages the boot
+images and DLKM partitions from that single build. Userspace headers are generated
+from the same synced GKI/module source. No release Image or module binaries are
+downloaded for this route. KernelSU Next dev is resolved on every build.
+
+Local kernel objects persist under
+`out/target/product/onyx/obj/KERNEL_BAZEL_OUT/kleaf-cache`. Kleaf's supported
+`--config=local --cache_dir=...` mode reuses unchanged compilation outputs; source,
+configuration and ABI checks still run. The GitHub build restores and saves the
+same type of cache with keys separated by toolchain/configuration and diagnostic
+mode. This is incremental compilation, not reuse of a previously released kernel.
+A cold build still performs full compilation. Cache timings depend on what changed.
+
+For standalone builds, pass `--cache-dir /path/to/persistent/kleaf-cache` to
+`port/build.py`. ROM builds enable it automatically. Resource defaults are 12 jobs
+and 20000 MB for Kleaf; override `TARGET_KERNEL_PORT_JOBS` and
+`TARGET_KERNEL_PORT_MEMORY_MB` in the device configuration when needed.
+`KERNEL_OBJ/onyx-source-build.json` records source revisions, KernelSU, module
+inventory, validation results and output hashes for the ROM being packaged.
 
 ## Install a release
 

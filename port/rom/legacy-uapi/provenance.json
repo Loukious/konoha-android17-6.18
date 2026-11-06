@@ -1,0 +1,14 @@
+{
+  "source": {
+    "rom_path": "kernel/xiaomi/sm8735",
+    "workspace_path": "baseline/kernel/xiaomi/sm8735",
+    "repo": "crdroidandroid/android_kernel_xiaomi_sm8735",
+    "revision": "10570812a4878b644e31b47c2f0bd052664cf86d",
+    "upstream": "17.0"
+  },
+  "sha256": {
+    "ion.h": "5e51c959dbfd82442f039ef3620c12789d7ef1f0174531ae1eed31431aff67a8",
+    "msm_ion.h": "5469cb96b46af3b7ab9a3f0331307f1ad96548a91658d18e4f260244fe800cbf",
+    "msm_ion_ids.h": "f17d9c702f710e38175ec74219239c2a65214f31fc72b6b45db6cb554d497ec9"
+  }
+}
