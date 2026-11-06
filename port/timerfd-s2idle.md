@@ -98,8 +98,8 @@ the candidate to pass all three. It also requires all eight timerfd API checks
 to pass on both kernels, and saves logs, source/configuration/image hashes and
 a report. The VM tests do not establish phone sleep residency or WLAN firmware
 behavior after the change. The test include is never used by the production
-ARM64 build. Installation and another unplugged phone capture are still
-needed for device validation.
+ARM64 build. The matched temporary image has now been tested on the phone,
+as described below.
 
 The replay component is
 [timerfd-resume-freezer.patch](common-patches/timerfd-resume-freezer.patch).
@@ -114,3 +114,37 @@ uses the current recipe's KernelSU revision `b2c1ad00b755`.
 The running phone's saved Image hash instead matches the earlier accepted
 baseline with KernelSU `a6c81fa4a8b7`. A device comparison must use that saved
 baseline's configuration and source inputs to isolate the timerfd change.
+
+## Phone validation on 2026-11-06
+
+The matched temporary kernel booted on slot B with build ID
+`a95103924cbfa65100a16e293beacdac2d63e21b`. Its configuration, KernelSU revision,
+all 10,091 exported-symbol/CRC records and boot ramdisk/header fields match
+the saved phone baseline. No partition was written.
+
+With Caffeine off, the phone locked and USB unplugged, the new capture retained
+30 complete sleep spans with no overruns or dropped events. None was first
+woken by `timerfd_resume_work`; all 30 timerfd notification stacks occurred
+during userspace thaw, after machine suspend ended. This validates the intended
+ordering on the device.
+
+Overall sleep remains short: median 0.363164 seconds and maximum 0.714848
+seconds, versus 0.257711 and 0.959437 seconds in the retained original capture.
+`qrtr_ws` was the first wake in 24 spans; six had no recorded activation.
+These are different capture windows, not a controlled residency benchmark.
+The candidate capture recorded 83 firmware ACKs and one reason-0 NACK, with
+no reason-7 NACK. This is a validated timerfd correction, not a demonstrated
+fix for all short sleeps or the original roaming refusal. Temporary diagnostic
+probes were removed.
+
+The follow-up investigation identified the QRTR traffic as repeated modem WDS
+`0x8e` indications after SELinux denied nicmd's netlink queries and interface
+creation. Translating that daemon's existing route/XFRM grants into explicit
+message permissions allowed the missing RMNET interfaces to be created. This
+is a separate ROM policy correction. With the temporary policy applied, an
+unplugged capture retained 98 complete sleep spans, zero WDS `0x8e`
+indications, zero QRTR first wakes and zero netlink permission failures, with
+no trace overruns or drops. Median sleep duration was 1.640443 seconds; most
+remaining IRQ wakes were WLAN_CE_2. The original policy was then restored and
+fully verified, with SELinux enforcing throughout. These separate captures
+do not establish battery-life improvement or eliminate firmware-busy replies.

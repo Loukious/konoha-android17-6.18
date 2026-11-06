@@ -1,7 +1,7 @@
 {
   "status": "PASS",
-  "scope": "Offline regression and production ARM64 build; phone validation pending",
-  "phone_validated": false,
+  "scope": "Offline regression, production ARM64 build and phone validation of timerfd ordering; overall sleep/WLAN issue remains unresolved",
+  "phone_validated": true,
   "timerfd_sha256": "628c6b705c64ac1269380e25e151ce78b2ba47f931d3c15ad4b94b213849b584",
   "vm": {
     "status": "PASS",
@@ -71,6 +71,71 @@
     "trace-unplugged.txt": "c2444f116828621e0bc1e5e21a703962e3c57ba13b82f137c742a3dd650fb196",
     "unplugged-analysis.json": "5229872d126fd57ce426dc2944363adaa45237914e30ebefeb4ded246ee18ee6",
     "vm-repro/report.json": "54bb442e94b7349787f8843fdc7022e8e2b7933f418767cc8d1a36f0ab90bec7",
-    "arm64-build-report.json": "86624d1db482343a9262eadd98b0bcce753861246dd2274729d77764b7246653"
+    "arm64-build-report.json": "86624d1db482343a9262eadd98b0bcce753861246dd2274729d77764b7246653",
+    "trace-fixed-unplugged.txt": "49416eed3f085df674b5a77c563465c622b3a7a42c08d2b92b13d748c4ab097b",
+    "fixed-sleep-analysis.json": "caad997d4c03361f7aa6ef2a7d15299393f3bfbd1bf759e4cc1180f89faa8dff",
+    "trace-fixed-buffer-stats.txt": "af91850d8b1c179e9f35e591380e06684220e4cfc7890cf76970210b3207f023",
+    "phone-test-image-validation.json": "d5065e9306c07a6157851ebe2ba640b35bbe623ce6dde623773267dab84c23c8",
+    "phone-baseline-build-report.json": "68832662e8ca3215893e22dc6162dd9add0b99a470656cdb98b84d62ae19c09b",
+    "migration-sleep-analysis.json": "bb7f58d41fc1d5950495af48d2523e6705757a12f09f7dc36c58bef76a7ca0c0",
+    "trace-qrtr-migration-unplugged.json": "b2c4dac492acd3f3a983b6be8b4061a0bb14bfe8b282c510d82adc9b3ccc797d",
+    "nicmd-netlink-migration-review.json": "3df038917f10d0579932ea28f93d979cc431c09c9652068fdc1af2e01b983971",
+    "nicmd-migration-test-state.json": "82f47719ddd1a075b2d4d2f5befdbfd6c00ce70b342c747d2344639037269eab"
+  },
+  "phone_candidate_trace": {
+    "trace": "trace-fixed-unplugged.txt",
+    "complete_machine_suspend_spans": 30,
+    "first_wake_from_timerfd_resume_work": 0,
+    "first_wake_names": {
+      "qrtr_ws": 24,
+      "none retained": 6
+    },
+    "spans_with_timekeeping_freeze": 30,
+    "duration_seconds_for_frozen_spans": {
+      "median": 0.3631640000000118,
+      "max": 0.7148480000000177,
+      "total": 11.298258000000146
+    },
+    "firmware_acks": 83,
+    "firmware_nacks": [
+      {
+        "time": 462.198947,
+        "line": 11967,
+        "nack": 1,
+        "reason": 0
+      }
+    ],
+    "examples": [],
+    "limits": "Retained events only; inspect buffer overruns.",
+    "kernel_build_id": "a95103924cbfa65100a16e293beacdac2d63e21b",
+    "boot_id": "6a1b89e6-418e-4aa6-aea6-769d89fa4327",
+    "temporary_boot": true,
+    "partitions_written": false,
+    "overruns": 0,
+    "dropped_events": 0,
+    "timerfd_notifications_during_thaw": 30,
+    "reason_7_reproduced": false
+  },
+  "nicmd_policy_followup": {
+    "separate_rom_fix": true,
+    "complete_sleep_spans": 98,
+    "wds_0x8e_indications": 0,
+    "qrtr_first_wakes": 0,
+    "netlink_permission_failures": 0,
+    "overruns": 0,
+    "dropped_events": 0,
+    "median_sleep_seconds": 1.640443,
+    "max_sleep_seconds": 1.97364,
+    "firmware_acks": 167,
+    "firmware_nack_reasons": [
+      0
+    ],
+    "remaining_irq_wakes": {
+      "WLAN_CE_2": 97,
+      "touchscreen": 1
+    },
+    "original_policy_restored": true,
+    "selinux_enforcing": true,
+    "limits": "Separate capture windows; not a battery-life benchmark or proof all firmware-busy replies are eliminated."
   }
 }
