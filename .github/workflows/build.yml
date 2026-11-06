@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   statuses: write
 
 concurrency:
@@ -132,6 +133,9 @@ jobs:
         if: success() && steps.compile.outputs.cache_enabled == 'true'
         working-directory: ${{ runner.temp }}/konoha-workspace
         run: tools/bazel shutdown
+      - name: Reclaim uploaded copies and disposable Git data for cache compression
+        if: success() && steps.compile.outputs.cache_enabled == 'true'
+        run: python3 ci/build_cache.py prepare
       - name: Save verified Kleaf incremental build cache
         if: success() && steps.compile.outputs.cache_enabled == 'true' && steps.kleaf-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -141,6 +145,13 @@ jobs:
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/action_cache
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/execroot/_main/bazel-out
           key: ${{ steps.kleaf-cache.outputs.cache-primary-key }}
+      - name: Confirm GitHub retained the compilation cache
+        if: success() && steps.compile.outputs.cache_enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ steps.kleaf-cache.outputs.cache-primary-key }}
+        run: python3 ci/build_cache.py confirm "$CACHE_KEY"
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@v4

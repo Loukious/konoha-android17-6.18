@@ -98,6 +98,14 @@ Runner cleanup must leave at least 55 GiB free before source sync; bounded
 swap allocation fails visibly if space is unavailable. No persistent secrets
 are needed. Repository Actions must be allowed to create pull requests.
 
+After the verified bundle uploads and Bazel stops, the hosted job removes its
+disposable synced Git metadata, uploaded artifact copies and leftover sandboxes
+to make room for cache compression. Kleaf objects and Bazel action/output caches
+are retained. A separate API check confirms that GitHub actually stored the
+cache; a cache action's warning alone cannot establish a successful save.
+This cleanup is restricted to disposable hosted runners and is never used for
+local ROM builds.
+
 Every build includes GKI, all 400 platform modules, the native GKI archive,
 KernelSU dev's exact source archive, both device-tree variants, wireless firmware
 with licenses/source, import CRC verification, input hashes and logs. Download
