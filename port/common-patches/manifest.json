@@ -56,8 +56,8 @@
       "candidate_sha256": "33d383595bbfd666e07b1d4a1d9788955c3abad71847bf9c72429ab6c514dbb7"
     },
     "arch/arm64/configs/gki_defconfig": {
-      "before_sha256": "4237bcef4a241e4bf8448ee3030fae0d7a21529ab9766719a2c5ce100aec9898",
-      "candidate_sha256": "52a0a31e60cbcbe7b94292e7cd512d3a4df7aeba386d883be0cf42cbe4d54ba2"
+      "before_sha256": "c2ad2dedc508b1a790a91002ae3cfe0f26a9da8212ceb5d3d7fc200f0b69dfd5",
+      "candidate_sha256": "0202b53cd710c178b9ccd11afa61ca88c951f338cbcec0daeada1c4a063e0192"
     },
     "certs/onyx-accepted-gki.pem": {
       "before_sha256": null,
@@ -80,8 +80,8 @@
       "candidate_sha256": "5acdf31e54db1c5a2c4e9b194dfaa87b7e916e31c2aee57166b932de906132c8"
     },
     "bazel/modules_private.bzl": {
-      "before_sha256": "727614cd0b4f6fca9749ae72076b1170d4ac72965a9df7d1ed5ebe4da15c92e2",
-      "candidate_sha256": "e474d19be2167f98d7e44cf1a96a3e6ae9fab88b2ca0af0b871cf5b77bda6264"
+      "before_sha256": "d93adc60fdd792cc5d6eed6415f99dffb67fb3b4425235745104577618843595",
+      "candidate_sha256": "95eaadf870ffeab3d2f082bafb8e70e47715eb1284ccebc8393f7430aed64a3f"
     }
   },
   "tnoc": "Not applicable: 6.18 has no itnoc_remove/platform driver; AMBA TNOC is unchanged",

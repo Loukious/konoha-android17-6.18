@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <manifest>
   <remote name="github-onyx" fetch="https://github.com/" />
-  <extend-project name="kernel/common" revision="ee9c8fd574f1b2c93cfc74b74b6f3a0d78a5e3a0" upstream="android17-6.18-lts" />
+  <extend-project name="kernel/common" revision="ed4489e76f6fafbe67b99e8a9419215313df189e" upstream="android17-6.18-lts" />
   <project path="baseline/kernel/xiaomi/sm8735" name="crdroidandroid/android_kernel_xiaomi_sm8735" remote="github-onyx" revision="10570812a4878b644e31b47c2f0bd052664cf86d" upstream="17.0" clone-depth="1" />
   <project path="baseline/kernel/xiaomi/sm8735-modules" name="crdroidandroid/android_kernel_xiaomi_sm8735-modules" remote="github-onyx" revision="8500748dae32f10507c02f1c94bc971553cb525b" upstream="17.0" clone-depth="1" />
   <project path="baseline/kernel/xiaomi/sm8735-devicetrees" name="crdroidandroid/android_kernel_xiaomi_sm8735-devicetrees" remote="github-onyx" revision="5b5bf9e644d3be9d4517bbf43c3073bccd84992e" upstream="17.0" clone-depth="1" />
