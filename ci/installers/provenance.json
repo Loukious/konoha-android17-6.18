@@ -1,0 +1,29 @@
+{
+  "anykernel_repository": "https://github.com/osm0sis/AnyKernel3",
+  "anykernel_revision": "41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1",
+  "anykernel_archive_sha256": "cf2b66ed085320a634597a3fe7a89a89cf14c2916effbe34e6ab9bfeade44940",
+  "module_abi_source_sha256": "c16af467265cd3f43daee1f850c6f72edefa9180369f8a661167ba75589d6fb9",
+  "module_abi_binary_sha256": "4504942e3df1d8d3dd972e172e8f91af93cdb0a6c2f18f0ea85977688949774c",
+  "compiler": "Android (14863223, +pgo, +bolt, +lto, +mlgo, based on r584948b) clang version 22.0.1 (https://android.googlesource.com/toolchain/llvm-project 2d65e4108033380e6fe8e08b1f1826cd2bfb0c99)",
+  "compiler_sha256": "15261046b6ea9504da0ae57b9d65ebc869ab1942aecb1af2819762b9b5251957",
+  "compile_flags": [
+    "--target=aarch64-linux-gnu",
+    "-fuse-ld=lld",
+    "-nostdlib",
+    "-static",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fno-stack-protector",
+    "-fno-unwind-tables",
+    "-fno-asynchronous-unwind-tables",
+    "-fno-ident",
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wl,--build-id=none",
+    "-Wl,-z,noexecstack"
+  ],
+  "anykernel_arm64_revision": "cc7d2cee9b1b4298f6ab8666eb4486dea342748c",
+  "anykernel_arm64_archive_sha256": "d1eba66364b4f90a1388673c7b45ee30386b55f13305cd796f2264fca040b9c6"
+}

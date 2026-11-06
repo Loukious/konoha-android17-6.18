@@ -11,12 +11,23 @@ import tempfile
 from urllib.parse import quote
 
 from verify_artifacts import digest, relative, verify
+import installer_assets
+import google_changelog
 
 TRACK = json.loads((Path(__file__).resolve().parent / 'upstream.json').read_text())
 FILES = {
     'report.json', 'build.log', 'konoha-gki-and-modules.tar.gz',
     'kernel-abi/Module.symvers', 'kernel-abi/kernel.release', 'kernel-abi/kernel_aarch64_dot_config',
 }
+
+
+def bundle_files(identity):
+    extra = identity.get('installers', [])
+    if extra and set(extra) != set(installer_assets.names(identity['kernel_release'])) | {'installers.json'}:
+        raise ValueError('Invalid installer asset inventory')
+    if len(extra) != len(set(extra)):
+        raise ValueError('Duplicated installer assets')
+    return FILES | set(extra)
 
 
 def api(path, optional=False, *, method='GET', data=None, input_file=None):
@@ -77,7 +88,8 @@ def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attem
     if any(identity.get(key) != value for key, value in expected.items()):
         raise ValueError('Release bundle belongs to different build inputs or run')
     actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob('*') if p.is_file()}
-    if actual != FILES | {'release.json', 'SHA256SUMS'} or any(p.is_symlink() for p in bundle.rglob('*')):
+    files = bundle_files(identity)
+    if actual != files | {'release.json', 'SHA256SUMS'} or any(p.is_symlink() for p in bundle.rglob('*')):
         raise ValueError('Release bundle inventory is incomplete or unsafe')
     hashes = {}
     for line in (bundle / 'SHA256SUMS').read_text().splitlines():
@@ -86,7 +98,7 @@ def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attem
             raise ValueError('Invalid or duplicated release checksum')
         relative(match[2])
         hashes[match[2]] = match[1]
-    if set(hashes) != actual - {'SHA256SUMS'} or set(identity['sha256']) != FILES:
+    if set(hashes) != actual - {'SHA256SUMS'} or set(identity['sha256']) != files:
         raise ValueError('Release checksums do not cover every asset')
     for name, checksum in hashes.items():
         if digest(bundle / name) != checksum:
@@ -120,7 +132,39 @@ def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attem
                 ('kernel.release', 'kernel.release'), ('kernel_aarch64_dot_config', 'kernel_aarch64_dot_config')):
             if digest(bundle / 'kernel-abi' / exported) != digest(artifact / 'gki' / archived):
                 raise ValueError('Exported ABI differs from the build archive')
+        if identity.get('installers'):
+            installer_assets.verify(artifact, bundle, identity)
     return identity
+
+
+def release_notes(repository, identity):
+    source, kernel, kernelsu = (identity[k] for k in ('source_revision', 'common_revision', 'kernelsu_revision'))
+    run_id, attempt = identity['run_id'], identity['run_attempt']
+    url = f'https://github.com/{repository}/actions/runs/{run_id}'
+    notes = (
+        f'Automatically built Android 17 GKI **{identity["kernel_release"]}**, '
+        f'KernelSU Next dev, and all **{identity["modules"]} Onyx platform modules**.\n\n'
+        f'- Source commit: `{source}`\n- Google GKI revision: `{kernel}`\n'
+        f'- KernelSU Next revision: `{kernelsu}`\n- Verified build: {url} (attempt {attempt})\n\n'
+        'Complete source replay, module import CRCs, artifact hashes and both device-tree variants passed. '
+        'The archive includes matching kernel, modules, device trees, ABI, configuration, source inputs and logs; '
+        'release.json and SHA256SUMS identify the exact assets.\n\n'
+        'Build and installer checks do not establish device boot or hardware validation. '
+        f'[Installation and recovery ZIP instructions](https://github.com/{repository}/blob/ci/README.md#install-a-release).\n'
+    )
+    if identity.get('installers'):
+        ak, wlan = installer_assets.names(identity['kernel_release'])
+        notes += (
+            '\nInstallable ZIPs:\n\n'
+            f'- `{ak}` — AnyKernel3 kernel update for Onyx with matching Android 17 / 6.18 modules. '
+            'Checks installed DLKM and vendor-ramdisk module CRCs before writing boot.\n'
+            f'- `{wlan}` — KernelSU/Magisk internal WCN7750 monitor-mode and frame-injection module. '
+            'Install after booting the matching kernel, then reboot.\n\n'
+            'A kernel-only ZIP cannot migrate a 6.6 ROM or a different KMI generation to 6.18. '
+            'Use the matched ROM/module migration procedure for that transition. '
+            '`installers.json` binds both ZIPs to the verified kernel and WLAN binaries.\n'
+        )
+    return notes
 
 
 def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, attempt):
@@ -143,7 +187,7 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
         raise ValueError('Source branch advanced or candidate was not promoted; refusing release')
     version = identity['kernel_release'].split('-')[0]
     tag = f'gki-{version}-s{source[:12]}-k{kernelsu[:12]}'
-    assets = sorted(bundle / name for name in FILES | {'release.json', 'SHA256SUMS'})
+    assets = sorted(bundle / name for name in bundle_files(identity) | {'release.json', 'SHA256SUMS'})
     asset_names = {path.name for path in assets}
     existing = release_by_tag(prefix, tag)
     if existing:
@@ -152,19 +196,8 @@ def publish(repository, bundle, source_root, source, kernel, kernelsu, run_id, a
             if {asset['name'] for asset in existing['assets']} != asset_names or any(asset['size'] < 1 for asset in existing['assets']):
                 raise ValueError('Published release has incomplete assets; refusing to overwrite it')
             return {'status': 'verified inputs already released', 'tag': tag, 'url': existing['html_url']}
-    url = f'https://github.com/{repository}/actions/runs/{run_id}'
-    notes = (
-        f'Automatically built Android 17 GKI **{identity["kernel_release"]}**, '
-        f'KernelSU Next dev, and all **{identity["modules"]} Onyx platform modules**.\n\n'
-        f'- Source commit: `{source}`\n- Google GKI revision: `{kernel}`\n'
-        f'- KernelSU Next revision: `{kernelsu}`\n- Verified build: {url} (attempt {attempt})\n\n'
-        'Complete source replay, module import CRCs, artifact hashes and both device-tree variants passed. '
-        'The archive includes matching kernel, modules, device trees, ABI, configuration, source inputs and logs; '
-        'release.json and SHA256SUMS identify the exact assets.\n\n'
-        'These are build artifacts. Device boot and hardware validation are separate; '
-        'installation requires matched boot/DLKM images for the ROM. '
-        f'[Installation and recovery ZIP instructions](https://github.com/{repository}/blob/ci/README.md#install-a-release).\n'
-    )
+    notes = release_notes(repository, identity)
+    notes += google_changelog.summary(list(listed(prefix + '/releases')), tag, kernel)
     if not existing:
         # Draft tags and release listings may not expose a just-created release.
         # The creation response supplies its ID; keep that identity for every

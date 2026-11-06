@@ -16,7 +16,7 @@ def should_dispatch(builds):
 def dispatch(source, kernelsu):
     if not all(re.fullmatch('[0-9a-f]{40}', value) for value in (source, kernelsu)):
         raise ValueError('Dispatch requires exact detected source and KernelSU revisions')
-    title = f'Build android17-6.18 @ {source} / KSU {kernelsu}'
+    title = f'Build android17-6.18-lts @ {source} / KSU {kernelsu}'
     builds = json.loads(subprocess.check_output(
         ['gh', 'run', 'list', '--workflow', 'build.yml', '--branch', 'ci', '--limit', '100',
          '--json', 'displayTitle,status,conclusion,url'], text=True))
@@ -24,7 +24,7 @@ def dispatch(source, kernelsu):
     if not should_dispatch(matches):
         return {'status': 'exact-input build active, successful, or retry limit reached', 'builds': matches}
     subprocess.run(['gh', 'workflow', 'run', 'build.yml', '--ref', 'ci',
-                    '-f', 'source_ref=android17-6.18', '-f', 'source_revision=' + source,
+                    '-f', 'source_ref=android17-6.18-lts', '-f', 'source_revision=' + source,
                     '-f', 'kernelsu_revision=' + kernelsu], check=True)
     return {'status': 'exact-input build dispatched', 'source_revision': source, 'kernelsu_revision': kernelsu}
 

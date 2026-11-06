@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
-      group: release-android17-6.18
+      group: release-android17-6.18-lts
       cancel-in-progress: false
     permissions:
       actions: read
@@ -62,6 +62,8 @@ jobs:
         with:
           ref: ${{ steps.inputs.outputs.source_revision }}
           path: source
+      - name: Package installers from the verified original build
+        run: python3 ci/installer_assets.py artifacts source
       - name: Publish all verified release assets with current CI code
         id: release
         env:

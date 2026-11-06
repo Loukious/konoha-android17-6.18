@@ -486,7 +486,7 @@ class RecoveryTests(unittest.TestCase):
                                   'artifact_name': 'Konoha-Android17-6.18-123-1', 'ci_revision': 'd' * 40})
 
     def test_wrong_run_attempt_workflow_branch_or_fork_is_rejected(self):
-        for changed in [{'id': 999}, {'run_attempt': 2}, {'head_branch': 'android17-6.18'},
+        for changed in [{'id': 999}, {'run_attempt': 2}, {'head_branch': 'android17-6.18-lts'},
                         {'path': '.github/workflows/other.yml'},
                         {'repository': {'id': 11, 'full_name': 'other/repo'}},
                         {'head_repository': {'id': 11, 'full_name': 'fork/repo'}},
@@ -558,7 +558,7 @@ class WorkflowWiringTests(unittest.TestCase):
     def test_release_and_promotion_share_one_serial_job_and_bound_artifact_outputs(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/build.yml').read_text()
         release_job = workflow.split('\n  release:\n', 1)[1]
-        self.assertIn('concurrency:\n      group: release-android17-6.18\n      cancel-in-progress: false', release_job)
+        self.assertIn('concurrency:\n      group: release-android17-6.18-lts\n      cancel-in-progress: false', release_job)
         self.assertIn('BUILD_RUN_ATTEMPT: ${{ needs.build.outputs.build_attempt }}', release_job)
         self.assertIn('name: ${{ needs.build.outputs.artifact_name }}', release_job)
         self.assertIn('name: ${{ steps.export.outputs.artifact_name }}', workflow)
@@ -567,7 +567,7 @@ class WorkflowWiringTests(unittest.TestCase):
     def test_recovery_reuses_publication_and_state_under_same_lock_and_original_identity(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/recover-release.yml').read_text()
         self.assertIn('if: github.ref == \'refs/heads/ci\'', workflow)
-        self.assertIn('concurrency:\n      group: release-android17-6.18\n      cancel-in-progress: false', workflow)
+        self.assertIn('concurrency:\n      group: release-android17-6.18-lts\n      cancel-in-progress: false', workflow)
         self.assertIn('artifact-ids: ${{ steps.build.outputs.artifact_id }}', workflow)
         self.assertIn('run-id: ${{ steps.build.outputs.build_run_id }}', workflow)
         self.assertIn('--build-run-id "$BUILD_RUN_ID" --build-run-attempt "$BUILD_RUN_ATTEMPT"', workflow)
@@ -601,7 +601,7 @@ class RealGitDetectionTests(unittest.TestCase):
             root = Path(temporary)
             kernel = self.create(root, 'kernel', 'android17-6.18-lts')
             ksu = self.create(root, 'ksu', 'dev')
-            source = self.create(root, 'source', 'android17-6.18')
+            source = self.create(root, 'source', 'android17-6.18-lts')
             current = self.git(kernel, 'rev-parse', 'HEAD')
             write_json(source / 'port/sources.json', {'common': {'revision': current}})
             accepted = self.commit(source, 'pinned kernel')

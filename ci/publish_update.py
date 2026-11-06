@@ -30,7 +30,7 @@ def publish(revision, kernelsu=None):
     # Recording build state must not create another candidate for the same
     # recipe. Recipe changes, however, need a fresh branch and complete build.
     base = run(['git', 'rev-parse', 'HEAD:port'])[:12]
-    branch = f'upstream/android17-6.18-{revision[:12]}-{base}'
+    branch = f'upstream/android17-6.18-lts-{revision[:12]}-{base}'
     existing = run(['git', 'ls-remote', 'origin', 'refs/heads/' + branch])
     version = pins['common']['kernel']
     if not existing:

@@ -467,12 +467,12 @@ class PublicationTests(unittest.TestCase):
 
     def test_failed_candidate_build_can_retry(self):
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
-                                      [{'displayTitle': 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12,
+                                      [{'displayTitle': 'Build upstream/android17-6.18-lts-' + 'a' * 12 + '-' + 'b' * 12,
                                         'status': 'completed', 'conclusion': 'failure', 'url': 'build'}])
         self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
     def test_three_failed_candidate_builds_require_repair(self):
-        build = {'displayTitle': 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12,
+        build = {'displayTitle': 'Build upstream/android17-6.18-lts-' + 'a' * 12 + '-' + 'b' * 12,
                  'status': 'completed', 'conclusion': 'failure', 'url': 'build'}
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}], [build] * 3)
         self.assertFalse(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
@@ -484,12 +484,12 @@ class PublicationTests(unittest.TestCase):
 
     def test_unrelated_source_build_does_not_block_candidate_dispatch(self):
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
-                                      [{'displayTitle': 'Build android17-6.18', 'status': 'in_progress',
+                                      [{'displayTitle': 'Build android17-6.18-lts', 'status': 'in_progress',
                                         'conclusion': '', 'url': 'build'}])
         self.assertTrue(any(args[:3] == ['gh', 'workflow', 'run'] for args in calls))
 
     def test_new_kernelsu_rebuilds_existing_lts_candidate(self):
-        title = 'Build upstream/android17-6.18-' + 'a' * 12 + '-' + 'b' * 12
+        title = 'Build upstream/android17-6.18-lts-' + 'a' * 12 + '-' + 'b' * 12
         result, calls = self.exercise([{'url': 'https://example.org/pull/1', 'state': 'OPEN'}],
                                       [{'displayTitle': title + ' / KSU ' + 'c' * 40,
                                         'status': 'completed', 'conclusion': 'success', 'url': 'build'}],
@@ -546,7 +546,7 @@ class CommonSourceTests(unittest.TestCase):
 class PromotionTests(unittest.TestCase):
     def test_release_only_rerun_checks_original_successful_build_attempt(self):
         promoter = module('promote_update')
-        branch = 'upstream/android17-6.18-' + 'e' * 12 + '-' + 'f' * 12
+        branch = 'upstream/android17-6.18-lts-' + 'e' * 12 + '-' + 'f' * 12
         with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2', 'BUILD_RUN_ATTEMPT': '1'}), \
                 patch.object(promoter, 'api', return_value={'jobs': []}) as api:
             with self.assertRaisesRegex(ValueError, 'not succeeded'):
@@ -557,7 +557,7 @@ class PromotionTests(unittest.TestCase):
     def exercise(self, change=None, push_failed=False):
         promoter = module('promote_update')
         source, kernel, ksu, base = 'a' * 40, 'b' * 40, 'c' * 40, 'd' * 40
-        branch = 'upstream/android17-6.18-' + 'e' * 12 + '-' + 'f' * 12
+        branch = 'upstream/android17-6.18-lts-' + 'e' * 12 + '-' + 'f' * 12
         run_url = 'https://github.com/owner/repo/actions/runs/123'
         responses = {
             'jobs': {'jobs': [{'name': 'build', 'conclusion': 'success'}]},
@@ -601,8 +601,8 @@ class PromotionTests(unittest.TestCase):
     def test_success_promotes_exact_tested_commit_with_atomic_base_check(self):
         result, commands, records = self.exercise()
         push = next(args for args in commands if args[:2] == ['git', 'push'])
-        self.assertIn('--force-with-lease=refs/heads/android17-6.18:' + 'd' * 40, push)
-        self.assertIn('a' * 40 + ':refs/heads/android17-6.18', push)
+        self.assertIn('--force-with-lease=refs/heads/android17-6.18-lts:' + 'd' * 40, push)
+        self.assertIn('a' * 40 + ':refs/heads/android17-6.18-lts', push)
         self.assertEqual(records[0].args, ('owner/repo', 'b' * 40, 'c' * 40, 'a' * 40))
         self.assertIn('PR merged', result['status'])
 

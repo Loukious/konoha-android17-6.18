@@ -8,7 +8,7 @@ The current Onyx recipe uses Linux **6.18.38** with **400 platform modules**,
 **37 additional native GKI modules** for CAN, USB adapters and network facilities,
 and **16 wireless firmware files** with their redistribution notices and matching
 ATH source. The module snapshot reproduces **5,193 files** from pinned imports
-and reviewed patches. See [NetHunter and CAN support](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/nethunter-can.md).
+and reviewed patches. See [NetHunter and CAN support](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/nethunter-can.md).
 
 The last device-validated checkpoint, source `c683c79`, used **391 platform
 modules** and **471 matched modules**. That image set passed Android, KernelSU
@@ -27,14 +27,14 @@ support and other unconfirmed hardware remain outside the target scope.
 Battery aggregation and firmware console availability remain unresolved optional
 diagnostics. Automatic block2mtd attachment requires the saved ROM policy change;
 Wi-Fi concurrent-channel ROM work is also pending. Broad peripheral, suspend,
-power and endurance validation remains. See [current device validation summary](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/validation/onyx-runtime-summary-20261104.md) and [remaining module inventory](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/validation/remaining_391_modules/priorities.md). A new upstream or KernelSU build
+power and endurance validation remains. See [current device validation summary](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/validation/onyx-runtime-summary-20261104.md) and [remaining module inventory](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/validation/remaining_391_modules/priorities.md). A new upstream or KernelSU build
 requires device validation even when its automated build checks pass.
 
 ## Branch layout
 
-- [`ci`](https://github.com/Loukious/konoha-android17-6.18/tree/ci) is the default
+- [`ci`](https://github.com/Loukious/onyx-android17-6.18/tree/ci) is the default
   branch and contains only workflows, automation, and documentation.
-- [`android17-6.18`](https://github.com/Loukious/konoha-android17-6.18/tree/android17-6.18)
+- [`android17-6.18-lts`](https://github.com/Loukious/onyx-android17-6.18/tree/android17-6.18-lts)
   contains the complete GKI source in `common/`, modified modules in `modules/`,
   and the pinned recipe/patches in `port/`. It contains no workflows.
 - `upstream/` branches are proposed updates to the source branch. Builds run
@@ -76,7 +76,7 @@ Already integrated CoreSight fixes are excluded from the effective patch.
 
 The tracker opens a pull request and explicitly dispatches its complete build
 (GitHub's default token does not trigger a workflow from its own push).
-Successful updates automatically fast-forward `android17-6.18` to the exact
+Successful updates automatically fast-forward `android17-6.18-lts` to the exact
 tested source commit, merging the update PR. A concurrent change to the source
 branch stops promotion until a new candidate has been rebuilt. The source
 branch remains pinned and reproducible. A KernelSU-only update rebuilds the
@@ -104,7 +104,8 @@ KernelSU dev's exact source archive, both device-tree variants, wireless firmwar
 with licenses/source, import CRC verification, input hashes and logs. Download
 `konoha-gki-and-modules.tar.gz` and `SHA256SUMS` from the build artifacts or release.
 Actions stores separate ABI files under `kernel-abi/`; releases expose those files
-individually. Installation needs matching ROM images; see the instructions below.
+individually. Releases also include AnyKernel3 and internal WLAN installer ZIPs;
+see the installation scope below.
 CI does not flash devices.
 
 Successful ordinary builds of accepted source automatically create a GitHub
@@ -136,32 +137,58 @@ When a build succeeds but publication fails, run **Recover a verified GKI
 release** on `ci` with the original `build_run_id` and `build_attempt`. It uses
 the original immutable artifact and current publication code without rebuilding.
 
+Each release summarizes the Google common commits since the preceding published
+GKI release, with area counts, linked commit subjects and the complete Google log
+range. A release using the same Google revision says that explicitly.
+
 The tracker also detects older build state without a published-release tag and
 dispatches one migration build. Accepted input state is written only after the
 release is published or an existing complete release is confirmed.
 
 ## Install a release
 
-Regular [GitHub releases](https://github.com/Loukious/konoha-android17-6.18/releases)
-provide `konoha-gki-and-modules.tar.gz`. This archive contains build outputs and
-cannot be flashed directly in recovery. Download it with `SHA256SUMS` and check
-the archive before packaging it:
+[GitHub releases](https://github.com/Loukious/onyx-android17-6.18/releases) include:
 
-```sh
-awk '$2 == "konoha-gki-and-modules.tar.gz"' SHA256SUMS | sha256sum -c -
-```
+- `Konoha-AnyKernel3-<kernel-release>.zip`: recovery installer for the kernel.
+- `nethunter-wlan-injection-<kernel-release>.zip`: optional KernelSU/Magisk module
+  containing the matching internal WCN7750 monitor-mode/frame-injection driver.
+- `konoha-gki-and-modules.tar.gz`: the complete build outputs for ROM integration;
+  this archive is not directly flashable.
+- `SHA256SUMS`, `release.json` and `installers.json`: checksums and exact build inputs.
 
-Installing it requires a matched image set built around your ROM's ramdisks, module load lists, labels and partition
-sizes. A boot-only 6.6-to-6.18 installation leaves incompatible modules and boot
-configuration behind and can prevent Android from starting.
+### Update an existing matched 6.18 installation
 
-A recovery/AnyKernel-style ZIP can install the complete matched set. The supplied
-[Onyx recovery package generator](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md) produces
-`konoha-onyx-matched.zip` for one exact ROM baseline. Use a ZIP only when its
-installer release identifies that baseline and its verification report; the
-regular build archive and an experimental installer can cover different source
-checkpoints. An offline packaging pass does not establish that the new kernel or
-recovery installer has been tested on a phone.
+1. Download the two ZIPs and `SHA256SUMS` from the same release. Verify each ZIP,
+   for example `sha256sum Konoha-AnyKernel3-*.zip`, against its checksum entry.
+2. On an unlocked Onyx already running Android 17 / 6.18 with the same KMI
+   generation, open custom recovery and mount the target ROM's system/vendor
+   DLKM partitions read-only. Flash the AnyKernel3 ZIP. It checks the active boot
+   kernel generation and every accessible target DLKM and early vendor-ramdisk
+   module's imported symbol CRCs before updating the active `boot` partition.
+   An incompatible or unavailable module set aborts installation before flashing.
+3. Boot Android. To install the optional WLAN package, select its ZIP inside
+   KernelSU or Magisk, then reboot. It requires the exact running kernel release,
+   checks the driver payload, waits for dependencies and preserves Wi-Fi's on/off
+   state. Failed replacement attempts reload the original driver where possible;
+   removing the module and rebooting restores the ROM's normal driver loading.
+
+The WLAN ZIP contains the same injection-enabled driver as the complete build
+archive. A ROM already shipping that driver does not need a second copy.
+Installer checks and automated build verification do not establish that a new
+kernel release has passed device testing.
+
+### Migrate from 6.6 or a different KMI generation
+
+An AnyKernel kernel update cannot perform this migration. It needs a complete
+matched image set built around the ROM's ramdisks, module lists, labels, device
+trees and partition sizes. In particular, a KMI 5 installation cannot take a
+KMI 6 kernel while retaining its incompatible modules.
+
+The [Onyx recovery package generator](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md)
+can create `konoha-onyx-matched.zip` for an explicitly supported, exact ROM
+baseline. **That per-ROM migration ZIP is generated separately and is not the
+AnyKernel ZIP in regular releases.** Read its profile and verification report
+before using it; an experimental profile may cover an older source checkpoint.
 
 For a prepared matched ZIP:
 
@@ -169,7 +196,7 @@ For a prepared matched ZIP:
    original partition images on the PC. The profile binds the active slot's
    `boot`, `vendor_boot`, `dtbo`, `system_dlkm`, `vendor_dlkm`, `init_boot` and
    `vbmeta` bytes and sizes; a matching ROM version name alone is insufficient.
-2. Use the custom recovery and tools listed in the [installer guide](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md).
+2. Use the custom recovery and tools listed in the [installer guide](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md).
    This route requires an already unlocked Onyx, AVB flags 3, mounted `/metadata`,
    no active OTA snapshots, and unmounted linear DLKM devices. It does not prepare
    a locked, verified stock phone for installation.
@@ -186,15 +213,13 @@ To package another ROM baseline on a Linux PC, supply its full-size partition
 dumps, verified module-layout checkout, ROM file contexts and Android image tools
 to `port/recovery/profile.py` and `port/recovery/generate.py`. The generator writes
 images and a ZIP locally; it does not flash the phone. Follow the complete
-[per-ROM commands and supported layouts](https://github.com/Loukious/konoha-android17-6.18/blob/android17-6.18/port/recovery/README.md). The saved
-development baseline additionally needs the exact audited serial-loader/policy
-prerequisite documented there. Unsupported profiles are rejected, and the generator never writes phone
+[per-ROM commands and supported layouts](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md). Unsupported profiles are rejected, and the generator never writes phone
 partitions.
 
 ## Manual workflow
 
 Select **Build Android 17 6.18 GKI and Onyx modules** on the `ci` branch.
-`source_ref` defaults to `android17-6.18`; select an update branch, tag or
+`source_ref` defaults to `android17-6.18-lts`; select an update branch, tag or
 complete commit to build a candidate. The `diagnostic` option adds QDSS logging.
 Leave `source_revision` and `kernelsu_revision` blank for manual builds; the
 tracker supplies them to identify exact detected inputs and suppress duplicates.
@@ -205,8 +230,8 @@ Requirements: Linux x86-64, Git, Python 3.12+, Android `repo`, GNU patch, C
 build tools, kmod and enough free disk for the source and Kleaf outputs.
 
 ```sh
-git clone --depth 1 --single-branch --branch ci https://github.com/Loukious/konoha-android17-6.18 automation
-git clone --depth 1 --single-branch --branch android17-6.18 https://github.com/Loukious/konoha-android17-6.18 source
+git clone --depth 1 --single-branch --branch ci https://github.com/Loukious/onyx-android17-6.18 automation
+git clone --depth 1 --single-branch --branch android17-6.18-lts https://github.com/Loukious/onyx-android17-6.18 source
 export KONOHA_SOURCE_ROOT="$PWD/source"
 python3 source/port/prepare.py /path/to/fresh-workspace
 python3 source/port/stage.py /path/to/fresh-workspace

@@ -30,7 +30,7 @@ jobs:
       - name: Checkout accepted source
         uses: actions/checkout@v4
         with:
-          ref: android17-6.18
+          ref: android17-6.18-lts
           path: source
       - name: Detect upstream, source and KernelSU changes
         id: detect

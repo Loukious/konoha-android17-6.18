@@ -1,5 +1,5 @@
 name: Build Android 17 6.18 GKI and Onyx modules
-run-name: Build ${{ inputs.source_ref || 'android17-6.18' }}${{ inputs.source_revision && format(' @ {0}', inputs.source_revision) || '' }}${{ inputs.kernelsu_revision && format(' / KSU {0}', inputs.kernelsu_revision) || '' }}${{ inputs.diagnostic && ' (QDSS diagnostic)' || '' }}
+run-name: Build ${{ inputs.source_ref || 'android17-6.18-lts' }}${{ inputs.source_revision && format(' @ {0}', inputs.source_revision) || '' }}${{ inputs.kernelsu_revision && format(' / KSU {0}', inputs.kernelsu_revision) || '' }}${{ inputs.diagnostic && ' (QDSS diagnostic)' || '' }}
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       source_ref:
         description: Source branch, tag or commit to build
         type: string
-        default: android17-6.18
+        default: android17-6.18-lts
       diagnostic:
         description: Include the opt-in AMBA/QDSS diagnostic build
         type: boolean
@@ -28,7 +28,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: build-${{ inputs.source_ref || 'android17-6.18' }}-${{ inputs.diagnostic || false }}
+  group: build-${{ inputs.source_ref || 'android17-6.18-lts' }}-${{ inputs.diagnostic || false }}
   cancel-in-progress: false
 
 env:
@@ -51,7 +51,7 @@ jobs:
       - name: Checkout selected source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_revision || inputs.source_ref || 'android17-6.18' }}
+          ref: ${{ inputs.source_revision || inputs.source_ref || 'android17-6.18-lts' }}
           path: source
       - name: Resolve source commit
         id: source
@@ -91,6 +91,8 @@ jobs:
       - name: Verify and export modules, kernel and ABI
         id: export
         run: python3 ci/export_artifacts.py "$RUNNER_TEMP/konoha-workspace" artifacts
+      - name: Package verified AnyKernel and WLAN installers
+        run: python3 ci/installer_assets.py artifacts source
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -120,11 +122,11 @@ jobs:
 
   release:
     needs: build
-    if: github.ref == 'refs/heads/ci' && (inputs.source_ref == '' || inputs.source_ref == 'android17-6.18' || startsWith(inputs.source_ref, 'upstream/')) && inputs.diagnostic != true
+    if: github.ref == 'refs/heads/ci' && (inputs.source_ref == '' || inputs.source_ref == 'android17-6.18-lts' || startsWith(inputs.source_ref, 'upstream/')) && inputs.diagnostic != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
-      group: release-android17-6.18
+      group: release-android17-6.18-lts
       cancel-in-progress: false
     permissions:
       actions: read
