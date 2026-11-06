@@ -95,12 +95,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
+            ${{ runner.temp }}/kleaf-cache-links.json
             ${{ runner.temp }}/kleaf-cache
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/action_cache
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/execroot/_main/bazel-out
-          key: kleaf-v2-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: kleaf-v3-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            kleaf-v2-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-
+            kleaf-v3-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-
+      - name: Restore independent compiler cache files and timestamps
+        env:
+          CACHE_MATCHED_KEY: ${{ steps.kleaf-cache.outputs.cache-matched-key }}
+        run: python3 ci/build_cache.py restore
       - name: Build matching GKI and every ported module with latest KernelSU Next dev
         id: compile
         env:
@@ -141,6 +146,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
+            ${{ runner.temp }}/kleaf-cache-links.json
             ${{ runner.temp }}/kleaf-cache
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/action_cache
             ${{ runner.temp }}/konoha-workspace/out/bazel/output_user_root/*/execroot/_main/bazel-out

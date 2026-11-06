@@ -101,8 +101,12 @@ are needed. Repository Actions must be allowed to create pull requests.
 After the verified bundle uploads and Bazel stops, the hosted job removes its
 disposable synced Git metadata, uploaded artifact copies and leftover sandboxes
 to make room for cache compression. Kleaf objects and Bazel action/output caches
-are retained. A separate API check confirms that GitHub actually stored the
-cache; a cache action's warning alone cannot establish a successful save.
+are retained. Byte-identical files are temporarily hardlinked so the cache archive
+stores identical contents once. Before the next build, the restore step recreates independent
+files and restores their original timestamps; generated files from different
+targets never share writes during compilation. A separate API check confirms that
+GitHub actually stored the cache; a cache action's warning alone cannot establish
+a successful save.
 This cleanup is restricted to disposable hosted runners and is never used for
 local ROM builds.
 

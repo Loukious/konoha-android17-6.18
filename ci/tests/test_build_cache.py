@@ -34,7 +34,7 @@ class BuildCache(unittest.TestCase):
             self.assertTrue(all(not p.exists() for p in discarded))
 
     def test_local_runner_wrong_build_and_symlink_rejected_before_cleanup(self):
-        for mode in ('local', 'other_build', 'symlink'):
+        for mode in ('local', 'other_build', 'symlink', 'manifest_symlink'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 environment, kept, discarded = self.fixture(root)
@@ -42,10 +42,13 @@ class BuildCache(unittest.TestCase):
                     environment['GITHUB_ACTIONS'] = 'false'
                 elif mode == 'other_build':
                     environment['GITHUB_RUN_ID'] = '456'
-                else:
+                elif mode == 'symlink':
                     repo = discarded[2]
                     repo.rename(root / 'outside')
                     repo.symlink_to(root / 'outside')
+                else:
+                    (root / 'outside').write_text('unrelated')
+                    (Path(environment['RUNNER_TEMP']) / 'kleaf-cache-links.json').symlink_to(root / 'outside')
                 with self.assertRaises(ValueError):
                     build_cache.prepare(environment)
                 self.assertTrue(all((p / 'sentinel').is_file() for p in kept + discarded))
@@ -60,7 +63,7 @@ class BuildCache(unittest.TestCase):
             self.assertTrue(all((p / 'sentinel').is_file() for p in discarded))
 
     def test_exact_saved_cache_is_required_and_eventual_listing_is_retried(self):
-        key = 'kleaf-v2-Linux-fixture-false-123-1'
+        key = 'kleaf-v3-Linux-fixture-false-123-1'
         entry = {'id': 7, 'key': key, 'ref': 'refs/heads/ci', 'size_in_bytes': 4096, 'created_at': 'fixture'}
         responses = iter([{'actions_caches': []}, {'actions_caches': [entry]}])
         calls, waits = [], []
@@ -81,6 +84,16 @@ class BuildCache(unittest.TestCase):
         offsets = [workflow.index(label) for label in labels]
         self.assertEqual(offsets, sorted(offsets))
         self.assertIn('python3 ci/build_cache.py confirm "$CACHE_KEY"', workflow)
+        self.assertLess(workflow.index('python3 ci/build_cache.py restore'), workflow.index('name: Build matching GKI'))
+        self.assertEqual(workflow.count('${{ runner.temp }}/kleaf-cache-links.json'), 2)
+
+    def test_missing_manifest_is_only_allowed_for_a_cold_cache_miss(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment, _, _ = self.fixture(Path(temporary))
+            self.assertTrue(build_cache.restore(environment)['cold_build'])
+            environment['CACHE_MATCHED_KEY'] = 'kleaf-v3-restored'
+            with self.assertRaisesRegex(ValueError, 'missing'):
+                build_cache.restore(environment)
 
 
 if __name__ == '__main__':
