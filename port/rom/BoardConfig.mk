@@ -21,7 +21,7 @@ TARGET_OVERRIDE_KERNEL_BIN :=
 BOARD_USES_QCOM_MERGE_DTBS_SCRIPT := false
 BOARD_PREBUILT_DTBIMAGE_DIR :=
 BOARD_KERNEL_SEPARATED_DTBO := true
-BOARD_PREBUILT_DTBOIMAGE := $(TARGET_OUT_INTERMEDIATES)/DTBO_OBJ/dtbo.img
+BOARD_PREBUILT_DTBOIMAGE = $(TARGET_OUT_INTERMEDIATES)/DTBO_OBJ/dtbo.img
 BOARD_KERNEL_CMDLINE := $(filter-out android_arch_task_struct_size=% sched_proxy_exec=%,$(BOARD_KERNEL_CMDLINE)) $(strip $(shell cat $(KONOHA_KERNEL_SOURCE)/port/boot-parameters.txt))
 TARGET_KERNEL_MIXED_MODE := true
 # Lists and dependency closure are produced from the newly compiled modules.
