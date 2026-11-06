@@ -17,6 +17,12 @@ from verify_modules import verify
 HERE = Path(__file__).resolve().parent
 
 
+def output_category(path, execution_root):
+    """Classify the Bazel target path, ignoring the workspace's directory names."""
+    relative = path.relative_to(execution_root)
+    return "platform" if "onyx" in relative.parts else "gki"
+
+
 def verify_standalone_provider(verifier, harness, receipt, staged, artifacts):
     """Run a source-based harness without overwriting checked-in receipts."""
     with tempfile.TemporaryDirectory(prefix="onyx-provider-host-") as temporary:
@@ -179,7 +185,7 @@ def main():
     verification = verify(modules, symvers, release)
 
     for path in outputs:
-        category = "platform" if "onyx" in path.parts else "gki"
+        category = output_category(path, execution_root)
         target = artifacts / category / path.name
         if path.is_file():
             target.parent.mkdir(exist_ok=True)
