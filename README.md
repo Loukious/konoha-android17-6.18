@@ -37,6 +37,11 @@ requires device validation even when its automated build checks pass.
 - [`android17-6.18-lts`](https://github.com/Loukious/onyx-android17-6.18/tree/android17-6.18-lts)
   contains the complete GKI source in `common/`, modified modules in `modules/`,
   and the pinned recipe/patches in `port/`. It contains no workflows.
+- [`prebuilt-onyx`](https://github.com/Loukious/onyx-android17-6.18/tree/prebuilt-onyx)
+  contains the matched kernel binaries, partitioned modules, device trees and UAPI
+  headers consumed by the ROM at `device/xiaomi/onyx-kernel`. The ROM manifest
+  pins an exact commit here; this branch is updated separately from automatic
+  releases after exporting a verified module layout.
 - `upstream/` branches are proposed updates to the source branch. Builds run
   from `ci` and attach their status to the selected source commit and its PR.
 
