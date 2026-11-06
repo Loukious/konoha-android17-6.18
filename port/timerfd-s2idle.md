@@ -148,3 +148,29 @@ no trace overruns or drops. Median sleep duration was 1.640443 seconds; most
 remaining IRQ wakes were WLAN_CE_2. The original policy was then restored and
 fully verified, with SELinux enforcing throughout. These separate captures
 do not establish battery-life improvement or eliminate firmware-busy replies.
+
+## Remaining WLAN traffic and current-source integration
+
+A subsequent unplugged capture retained 50 complete sleep spans without trace
+drops and no firmware NACKs. Thirty first firmware wakes carried PC UDP traffic
+to Link to Windows; a passive native trace identified its two-second Nano
+transport keepalives. The phone's framework files matched the original ROM
+baseline, and the custom Link to PC framework payload was inactive.
+
+A controlled Windows lock/unlock comparison confirmed that this transport
+closes when Windows locks. Excluding transition boundaries, the 93.143-second
+locked interval had zero native keepalive/data callbacks. The connection was
+recreated and keepalives resumed after unlock. No trace events were lost.
+The PC owner was Microsoft's CrossDeviceService background process. Closing
+the Phone Link window alone did not stop that process's session. This test
+used USB and establishes connection lifecycle, not sleep residency. Keeping
+Windows locked is a diagnostic condition, not a proposed power-management fix.
+
+The source correction is also integrated on accepted source commit
+`8a10a2823370f0830364cf57238e20d009bd886b`, which pins common revision
+`ed4489e76f6fafbe67b99e8a9419215313df189e`. The timerfd/freezer implementation
+did not change in that intervening upstream update. The conflict resolution
+preserves the newer baseline hashes for GKI configuration and Kleaf module
+rules while adding the timerfd patch's unchanged hashes. The original VM,
+ARM64 and phone results above apply to their recorded inputs; a fresh complete
+build is required before publishing binaries from this newer source base.

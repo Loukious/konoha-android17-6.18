@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "base_source_commit": "8a10a2823370f0830364cf57238e20d009bd886b",
+  "upstream_common_revision": "ed4489e76f6fafbe67b99e8a9419215313df189e",
+  "required_patch_files_verified_and_restored": 21,
+  "committed_common_inventory_files_verified": 91835,
+  "timerfd_source_sha256": "628c6b705c64ac1269380e25e151ce78b2ba47f931d3c15ad4b94b213849b584",
+  "scope": "Current committed tree hash/mode inventory and exact common-patch application/restoration on independently reconstructed baseline files; fresh full CI build pending."
+}
