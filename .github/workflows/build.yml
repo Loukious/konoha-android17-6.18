@@ -80,12 +80,25 @@ jobs:
             python3 source/port/verify_mi_thermal.py \
               "$RUNNER_TEMP/konoha-workspace/onyx/drivers/thermal/xiaomi/mi_thermal_interface.c"
           fi
+      - name: Restore Kleaf incremental build cache
+        id: kleaf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/kleaf-cache
+          key: kleaf-v1-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kleaf-v1-${{ runner.os }}-${{ hashFiles('source/port/dependency-lock.xml', 'source/common/arch/arm64/configs/gki_defconfig', 'source/port/platform_defconfig') }}-${{ inputs.diagnostic || false }}-
       - name: Build matching GKI and every ported module with latest KernelSU Next dev
+        id: compile
         env:
           DIAGNOSTIC: ${{ inputs.diagnostic || false }}
         run: |
           flags=()
           if [[ "$DIAGNOSTIC" == true ]]; then flags+=(--qdss-diagnostic); fi
+          if python3 source/port/build.py --help | grep -q -- --cache-dir; then
+            flags+=(--cache-dir "$RUNNER_TEMP/kleaf-cache")
+            echo "cache_enabled=true" >> "$GITHUB_OUTPUT"
+          fi
           python3 source/port/build.py "$RUNNER_TEMP/konoha-workspace" \
             --jobs "$KONOHA_BUILD_JOBS" --memory-mb "$KONOHA_BUILD_MEMORY_MB" "${flags[@]}"
       - name: Verify and export modules, kernel and ABI
@@ -101,6 +114,12 @@ jobs:
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
+      - name: Save verified Kleaf incremental build cache
+        if: success() && steps.compile.outputs.cache_enabled == 'true' && steps.kleaf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kleaf-cache
+          key: ${{ steps.kleaf-cache.outputs.cache-primary-key }}
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@v4
