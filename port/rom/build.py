@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the synced Onyx port and export matching inputs for Android packaging."""
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import importlib.util
@@ -45,6 +46,21 @@ def outside_source(source, *outputs):
             raise ValueError('Build outputs must be outside the synced kernel source')
 
 
+@contextmanager
+def host_tools():
+    """Give imported module verifiers the same host tools as child commands."""
+    previous = os.environ.get('PATH')
+    os.environ['PATH'] = '/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + (previous or '')
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop('PATH', None)
+        else:
+            os.environ['PATH'] = previous
+
+
+@host_tools()
 def package(source, artifact, destination):
     source, artifact, destination = (p.resolve() for p in (source, artifact, destination))
     outside_source(source, destination)
