@@ -1,4 +1,7 @@
 # Build the synced Onyx 6.18 port through Lineage's Kleaf kernel path.
+# The adapter resolves KernelSU Next dev and fetches pinned Kleaf dependencies
+# before compilation; Android's Ninja sandbox otherwise has no network access.
+BUILD_BROKEN_USES_NETWORK := true
 KONOHA_KERNEL_SOURCE := kernel/platform/kernel-6.18
 ifeq ($(wildcard $(KONOHA_KERNEL_SOURCE)/port/build.py),)
 $(error Onyx kernel source missing; sync the source-build local manifest)
