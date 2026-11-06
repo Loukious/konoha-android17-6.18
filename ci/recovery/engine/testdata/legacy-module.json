@@ -1,0 +1,6 @@
+{
+  "sha256": "6008011b1b64c3b369d9457709fd27cc2b8d3e8e8de05ac5ff12bb56230aac0a",
+  "source": "legacy-module.c",
+  "compiler": "aarch64-linux-gnu-gcc (Debian 12.2.0-14) 12.2.0",
+  "command": "aarch64-linux-gnu-gcc -c -fno-ident -ffile-prefix-map=/source=. /source/ci/recovery/engine/testdata/legacy-module.c -o legacy-module.o"
+}

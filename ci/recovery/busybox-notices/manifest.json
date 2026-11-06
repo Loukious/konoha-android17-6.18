@@ -1,0 +1,14 @@
+{
+  "binary_sha256": "c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c",
+  "binary_origin": {
+    "repository": "https://github.com/Magisk-Modules-Repo/busybox-ndk",
+    "commit": "ad6700620120e3c475df05b0f8bfa7a40e741ee0",
+    "member": "busybox-arm64"
+  },
+  "files": {
+    "GPL-2.0.txt": "bbfc9843646d483c334664f651c208b9839626891d8f17604db2146962f43548",
+    "NOTICE.txt": "18070d5bbd3695cbdbe3c648210d1e3133b8894cd9df03954e7809b4c441205b",
+    "sources/android-busybox-ndk-3c96be2.tar.gz": "4d48a3f383cc863e60d469b8e154a8550f280f7454eac47bdca814ff47335d82",
+    "sources/busybox-1.36.1.tar.bz2": "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314"
+  }
+}

@@ -1,0 +1,19 @@
+BusyBox v1.36.1-osm0sis (2023-05-25), Copyright BusyBox contributors.
+License: GNU GPL version 2. Full license is GPL-2.0.txt.
+
+Binary source: https://github.com/Magisk-Modules-Repo/busybox-ndk
+Commit: ad6700620120e3c475df05b0f8bfa7a40e741ee0
+Member: busybox-arm64
+SHA-256: c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c
+The supplied binary matches this public member byte for byte.
+
+Corresponding upstream source: https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+Build configuration and Android NDK patches are published by osm0sis at
+https://github.com/osm0sis/android-busybox-ndk
+Commit: 3c96be250994e00fb3feb9b5a5b902e5e0222ca3
+Both complete source archives are included under sources/.
+The public binary distributor identifies this configuration/patch repository
+in its README. Compiler/NDK reproduction was not performed here.
+
+No BusyBox source or binary changes were made for this installer.
+The recovery guard is a separate freestanding Linux syscall executable.

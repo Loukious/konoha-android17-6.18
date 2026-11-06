@@ -1,5 +1,38 @@
 # Automation validation
 
+## Complete recovery installer — 2026-11-06
+
+The complete installer passes 125 Python automation/transaction tests and 11 Go
+test groups, including the external EROFS and independent Google AVB checks.
+The freestanding guard passes 44 native syscall scenarios and the synthetic
+device-mapper/UAPI cases. The shell tests verify all six partition writes,
+complete restoration after write/readback failure, and nine preflight failures
+with zero partition writes. Package tests reject altered ZIPs even after their
+outer checksums have been regenerated.
+
+Two saved Onyx layouts were repacked offline with ARM64 utilities under QEMU:
+an untouched 6.6 baseline with recovery modules in `vendor_boot`, and a 6.18
+baseline with a separate recovery module ramdisk. Both complete six-image sets
+fit the original partition capacities. Google's `avbtool` independently
+verified all twelve resulting images. The 6.6 migration retains the smaller
+system module selection and uses the reviewed Onyx load profile; unknown
+modules, mismatched ELF identities and non-6.6 retirements are rejected.
+
+The locally packaged payload uses source
+`6febe568dfead54e8e5f662c5b7549cfd1f8b049`, with 400 platform and 146 native GKI
+modules. The complete ZIP includes all 546 modules. Its final ARM64 extractor
+validated the actual archive inventory and checksums. The helper reproduces
+from pinned Go 1.25.4; every tool and source archive has recorded provenance.
+See [the machine-readable saved-image results](recovery-validation.json) and
+[installer requirements and tool sources](recovery/README.md).
+
+These checks establish offline packaging and transaction behavior. The complete
+ZIP has not been flashed on a device. The user's independent ROM rebuild was
+not changed or interrupted. Published kernel assets remain bound to their own
+successful Actions build, exact source/GKI/KernelSU inputs and release checksums.
+
+## Initial automation — 2026-11-02
+
 Before publication on 2026-11-02:
 
 - All 4,862 committed module/build files match the installed 6.18.33 recipe's

@@ -62,8 +62,14 @@ jobs:
         with:
           ref: ${{ steps.inputs.outputs.source_revision }}
           path: source
+      - name: Install module metadata reader
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends kmod
       - name: Package installers from the verified original build
         run: python3 ci/installer_assets.py artifacts source
+      - name: Package the complete recovery installer from the verified original build
+        run: python3 ci/recovery_assets.py artifacts source
       - name: Publish all verified release assets with current CI code
         id: release
         env:

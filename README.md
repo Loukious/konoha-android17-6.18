@@ -103,8 +103,8 @@ KernelSU dev's exact source archive, both device-tree variants, wireless firmwar
 with licenses/source, import CRC verification, input hashes and logs. Download
 the complete GKI/module archive and `SHA256SUMS` from the build artifacts or release.
 Actions stores separate ABI files under `kernel-abi/`; releases expose those files
-individually. Releases also include AnyKernel3 and internal WLAN installer ZIPs;
-see the installation scope below.
+individually. Releases also include the complete Onyx recovery ZIP, AnyKernel3
+and internal WLAN installer ZIPs; see the installation scope below.
 CI does not flash devices.
 
 Successful ordinary builds of accepted source automatically create a GitHub
@@ -177,72 +177,71 @@ inventory, validation results and output hashes for the ROM being packaged.
 
 [GitHub releases](https://github.com/Loukious/onyx-android17-6.18/releases) include:
 
-- **AnyKernel3 installer ZIP**: recovery installer for the kernel.
-- `nethunter-wlan-injection-<kernel-release>.zip`: optional KernelSU/Magisk module
-  containing the matching internal WCN7750 monitor-mode/frame-injection driver.
-- **GKI and modules archive** (`.tar.gz`): complete outputs for ROM integration;
-  this archive is not directly flashable.
-- `SHA256SUMS`, `release.json` and `installers.json`: checksums and exact build inputs.
+| Asset | Purpose |
+| --- | --- |
+| **`Onyx-Complete-<kernel-release>.zip`** | Recovery installer for the kernel, WLAN/all matching modules, device trees and recovery modules |
+| **AnyKernel3 ZIP** | Kernel-only update for an existing installation whose modules already match |
+| `nethunter-wlan-injection-<kernel-release>.zip` | Optional KernelSU/Magisk module for the matching internal WCN7750 driver |
+| `konoha-gki-and-modules.tar.gz` | Build outputs, inputs, ABI and logs for ROM integration; not directly flashable |
+| `SHA256SUMS`, `release.json`, `installers.json`, `full-recovery.json` | Checksums, exact build inputs and installer provenance |
 
-### Update an existing matched 6.18 installation
+### Install the complete kernel and drivers
 
-1. Download the two ZIPs and `SHA256SUMS` from the same release. Verify each ZIP,
-   for example `sha256sum *AnyKernel3*.zip`, against its checksum entry.
-2. On an unlocked Onyx already running Android 17 / 6.18 with the same KMI
-   generation, open custom recovery and mount the target ROM's system/vendor
-   DLKM partitions read-only. Flash the AnyKernel3 ZIP. It checks the active boot
-   kernel generation and every accessible target DLKM and early vendor-ramdisk
-   module's imported symbol CRCs before updating the active `boot` partition.
-   An incompatible or unavailable module set aborts installation before flashing.
-3. Boot Android. To install the optional WLAN package, select its ZIP inside
-   KernelSU or Magisk, then reboot. It requires the exact running kernel release,
-   checks the driver payload, waits for dependencies and preserves Wi-Fi's on/off
-   state. Failed replacement attempts reload the original driver where possible;
-   removing the module and rebooting restores the ROM's normal driver loading.
+Use **`Onyx-Complete-<kernel-release>.zip`** to update the full kernel/module set
+or migrate a compatible Onyx 6.6 ROM. It repacks the installed ROM's own images,
+so compatible Onyx ROMs can share the same release ZIP. The ROM's recovery
+application, files, labels, configuration and parallel module loading are
+preserved. Recovery's drivers are updated in its own ramdisk or in `vendor_boot`,
+according to the ROM's layout. WLAN does not require a separate fastboot flash.
 
-The WLAN ZIP contains the same injection-enabled driver as the complete build
-archive. A ROM already shipping that driver does not need a second copy.
-Installer checks and automated build verification do not establish that a new
-kernel release has passed device testing.
+1. Download the complete ZIP and `SHA256SUMS` from the same release and verify
+   the ZIP's SHA256.
+2. Finish any pending ROM OTA and boot Android once. Open custom recovery on an
+   unlocked Onyx whose ROM already has AVB verification and verity disabled.
+   Mount `/metadata` and writable backup storage, such as decrypted `/data`.
+3. Install the ZIP from storage or select **Install update / ADB sideload** and
+   run `adb sideload Onyx-Complete-<kernel-release>.zip` on the PC.
+4. Wait for successful installation, then reboot. The installer prints the
+   persistent backup path and verifies every written partition.
 
-### Migrate from 6.6 or a different KMI generation
+Before writing anything, the installer validates the device, module coverage,
+partition layout, inactive-slot separation, OTA state and space, then rebuilds
+all six images: `boot`, `vendor_boot`, `recovery`, `dtbo`, `system_dlkm` and
+`vendor_dlkm`. It saves verified original images and attempts complete rollback
+on a detected write/readback failure. It keeps `init_boot`, `vbmeta` and the
+other slot. It does not install into locked or AVB-enforced stock configurations.
 
-An AnyKernel kernel update cannot perform this migration. It needs a complete
-matched image set built around the ROM's ramdisks, module lists, labels, device
-trees and partition sizes. In particular, a KMI 5 installation cannot take a
-KMI 6 kernel while retaining its incompatible modules.
+Supported layouts use Android boot headers 3/4, EROFS DLKM images and flat module
+directories. The known Onyx 6.6 migration verifies old ELF module names and
+vermagic before retiring obsolete drivers. Unknown ROM-specific drivers,
+unsupported layouts, shared slot extents or insufficient space stop installation
+before partition writes. See the [complete installer guide](ci/recovery/README.md)
+for detailed requirements, backups, tool sources and validation scope.
 
-The [Onyx recovery package generator](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md)
-can create a matched recovery ZIP for an explicitly supported, exact ROM
-baseline. **That per-ROM migration ZIP is generated separately and is not the
-AnyKernel ZIP in regular releases.** Read its profile and verification report
-before using it; an experimental profile may cover an older source checkpoint.
+The complete ZIP already contains the injection-enabled WCN7750 driver and
+matching dependencies. A second WLAN manager module is unnecessary. These ZIPs
+have offline image and rollback validation; the complete installer has not yet
+been flashed on a device.
 
-For a prepared matched ZIP:
+### Optional kernel-only or WLAN updates
 
-1. Verify the ZIP's companion SHA256 file and read its profile/report. Keep full
-   original partition images on the PC. The profile binds the active slot's
-   `boot`, `vendor_boot`, `dtbo`, `system_dlkm`, `vendor_dlkm`, `init_boot` and
-   `vbmeta` bytes and sizes; a matching ROM version name alone is insufficient.
-2. Use the custom recovery and tools listed in the [installer guide](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md).
-   This route requires an already unlocked Onyx, AVB flags 3, mounted `/metadata`,
-   no active OTA snapshots, and unmounted linear DLKM devices. It does not prepare
-   a locked, verified stock phone for installation.
-3. Select the generated matched ZIP in recovery. After its preflight checks, the
-   installer backs up and verifies all five target partitions under `/metadata/ota`.
-   It writes `system_dlkm`, `vendor_dlkm`, `dtbo`, `vendor_boot`, then `boot`, and
-   reads back every image. The other slot, `init_boot` and `vbmeta` are retained.
-4. Reboot after a successful installation. A write/readback failure attempts a
-   complete verified rollback. If rollback fails, keep the recovery session open
-   and restore the matching originals through fastbootd using the reported backup
-   path before rebooting.
+For an Onyx installation already running a compatible Android 17 / 6.18 module
+set, the AnyKernel3 ZIP checks installed DLKM and early vendor-ramdisk module CRCs
+before updating `boot`. Make the ROM's DLKM partitions available read-only in
+recovery. Use the complete ZIP when the drivers or KMI generation also need to
+change; the AnyKernel3 ZIP updates only the kernel.
 
-To package another ROM baseline on a Linux PC, supply its full-size partition
-dumps, verified module-layout checkout, ROM file contexts and Android image tools
-to `port/recovery/profile.py` and `port/recovery/generate.py`. The generator writes
-images and a ZIP locally; it does not flash the phone. Follow the complete
-[per-ROM commands and supported layouts](https://github.com/Loukious/onyx-android17-6.18/blob/android17-6.18-lts/port/recovery/README.md). Unsupported profiles are rejected, and the generator never writes phone
-partitions.
+The optional WLAN ZIP is installed through KernelSU or Magisk after booting the
+exact matching release kernel. It checks the driver, waits for dependencies,
+preserves Wi-Fi's on/off state and attempts to reload the original driver if
+replacement fails. Remove the module and reboot to return to the ROM's normal
+WLAN loading. A ROM or complete ZIP already shipping that driver needs no
+additional module.
+
+Older releases may contain only the two smaller installers. Use a release that
+actually lists the complete ZIP for the full recovery installation above. The
+`.tar.gz` archive is for maintainers building or integrating matching images;
+flashing that archive directly is not an installation method.
 
 ## Manual workflow
 

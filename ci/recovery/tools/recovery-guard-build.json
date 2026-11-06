@@ -1,0 +1,29 @@
+{
+  "source_sha256": "3af4232e49632cd22567e63587004cd21cc1131fd8487c28dec873f558a36f76",
+  "binary_sha256": "e064fafe9053a25e1580f63a1ded0426a57f061f513364093c1f6127f2579425",
+  "compiler_sha256": "15261046b6ea9504da0ae57b9d65ebc869ab1942aecb1af2819762b9b5251957",
+  "compiler_version": "Android (14863223, +pgo, +bolt, +lto, +mlgo, based on r584948b) clang version 22.0.1 (https://android.googlesource.com/toolchain/llvm-project 2d65e4108033380e6fe8e08b1f1826cd2bfb0c99)",
+  "command": [
+    "clang",
+    "--target=aarch64-linux-gnu",
+    "-fuse-ld=lld",
+    "-nostdlib",
+    "-static",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fno-stack-protector",
+    "-fno-unwind-tables",
+    "-fno-asynchronous-unwind-tables",
+    "-fno-ident",
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wl,--build-id=none",
+    "-Wl,-z,noexecstack",
+    "recovery-guard.c",
+    "-o",
+    "tools/recovery-guard"
+  ],
+  "limits": "Offline cross-build; static ELF inspection and host-native tests do not establish recovery runtime behavior."
+}

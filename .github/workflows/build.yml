@@ -63,6 +63,15 @@ jobs:
         run: python3 ci/post_status.py "$REVISION" pending
       - name: Validate automation
         run: python3 -m unittest discover -s ci/tests -v
+      - name: Set up the pinned recovery helper compiler
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.4'
+          cache: false
+      - name: Verify recovery helper sources, binaries and regression cases
+        run: |
+          python3 ci/recovery/check_tools.py --rebuild-engine
+          go -C ci/recovery/engine test ./...
       - name: Prepare standard hosted runner
         run: bash ci/bootstrap_runner.sh
       - name: Sync locked kernel and vendor sources
@@ -109,6 +118,8 @@ jobs:
         run: python3 ci/export_artifacts.py "$RUNNER_TEMP/konoha-workspace" artifacts
       - name: Package verified AnyKernel and WLAN installers
         run: python3 ci/installer_assets.py artifacts source
+      - name: Package the complete Onyx recovery installer
+        run: python3 ci/recovery_assets.py artifacts source
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -179,6 +190,10 @@ jobs:
         with:
           ref: ${{ needs.build.outputs.source_revision }}
           path: source
+      - name: Install module metadata reader
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends kmod
       - name: Promote the verified update without recording unreleased inputs
         id: promote
         if: startsWith(inputs.source_ref, 'upstream/')

@@ -1,0 +1,28 @@
+{
+  "producer": "AOSP lpmake",
+  "source_revision": "0472f120038c831c27eed7fbd3745131ce18a74c",
+  "command": [
+    "lpmake",
+    "--device",
+    "super:67108864",
+    "--metadata-size",
+    "65536",
+    "--metadata-slots",
+    "2",
+    "--virtual-ab",
+    "--force-full-image",
+    "--partition",
+    "vendor_dlkm_a:readonly:2097152:default",
+    "--partition",
+    "system_dlkm_a:readonly:2097152:default",
+    "--partition",
+    "vendor_dlkm_b:readonly:2097152:default",
+    "--partition",
+    "system_dlkm_b:readonly:2097152:default",
+    "--output",
+    "super.img"
+  ],
+  "prefix_bytes": 274432,
+  "sha256": "a04e14f5b46c1f86606352fdac15ebdbf1fe11695181d6b52b497caec686a4e6",
+  "producer_sha256": "14719dd0633b93ab978064eb4e4c82c77448e30492911eea9f2f12154f058f8f"
+}

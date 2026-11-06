@@ -1,0 +1,22 @@
+{
+  "producer": "AOSP mkbootimg",
+  "command": [
+    "mkbootimg",
+    "--header_version",
+    "4",
+    "--kernel",
+    "kernel",
+    "--ramdisk",
+    "ramdisk",
+    "--cmdline",
+    "console=ttyMSM0 fixture=retained",
+    "--os_version",
+    "17.0.0",
+    "--os_patch_level",
+    "2026-11",
+    "--output",
+    "boot-v4.img"
+  ],
+  "sha256": "da6aca8f31ddc26390b0beb9b9d8b0cb682c746d988eb3cc49d91f7700e8971c",
+  "producer_sha256": "4e51a4dd7d4a1f5b9b03380ef1247a3fa4f15528afbde8d5c4899b4d1f75dfbd"
+}

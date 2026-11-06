@@ -1,0 +1,22 @@
+{
+  "producer": "AOSP mkbootimg",
+  "command": [
+    "mkbootimg",
+    "--header_version",
+    "4",
+    "--pagesize",
+    "4096",
+    "--vendor_ramdisk",
+    "ramdisk",
+    "--dtb",
+    "dtb",
+    "--vendor_bootconfig",
+    "bootconfig",
+    "--vendor_cmdline",
+    "console=ttyMSM0 fixture=retained",
+    "--vendor_boot",
+    "vendor-v4.img"
+  ],
+  "sha256": "21d8c8751ae47c8c553f53a20b394c7c1a3b93053e3c984de4ec2dda3abd70da",
+  "producer_sha256": "4e51a4dd7d4a1f5b9b03380ef1247a3fa4f15528afbde8d5c4899b4d1f75dfbd"
+}

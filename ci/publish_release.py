@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from verify_artifacts import digest, relative, verify
 import installer_assets
+import recovery_assets
 import google_changelog
 
 TRACK = json.loads((Path(__file__).resolve().parent / 'upstream.json').read_text())
@@ -27,7 +28,12 @@ def bundle_files(identity):
         raise ValueError('Invalid installer asset inventory')
     if len(extra) != len(set(extra)):
         raise ValueError('Duplicated installer assets')
-    return FILES | set(extra)
+    complete = identity.get('full_recovery', [])
+    if complete and set(complete) != set(recovery_assets.names(identity['kernel_release'])):
+        raise ValueError('Invalid complete recovery asset inventory')
+    if len(complete) != len(set(complete)):
+        raise ValueError('Duplicated complete recovery assets')
+    return FILES | set(extra) | set(complete)
 
 
 def api(path, optional=False, *, method='GET', data=None, input_file=None):
@@ -134,6 +140,8 @@ def validate_bundle(bundle, source_root, source, kernel, kernelsu, run_id, attem
                 raise ValueError('Exported ABI differs from the build archive')
         if identity.get('installers'):
             installer_assets.verify(artifact, bundle, identity)
+        if identity.get('full_recovery'):
+            recovery_assets.verify(artifact, bundle, identity)
     return identity
 
 
@@ -152,6 +160,22 @@ def release_notes(repository, identity):
         'Build and installer checks do not establish device boot or hardware validation. '
         f'[Installation and recovery ZIP instructions](https://github.com/{repository}/blob/ci/README.md#install-a-release).\n'
     )
+    if identity.get('full_recovery'):
+        complete, _ = recovery_assets.names(identity['kernel_release'])
+        notes += (
+            '\nComplete recovery installer:\n\n'
+            f'- **`{complete}`** updates the active slot\'s kernel, WLAN and matching modules, '
+            'device trees, and recovery modules. It repacks the installed ROM\'s own boot and recovery '
+            'ramdisks, retaining its files, labels, boot configuration and module options.\n'
+            '- Supports compatible Onyx ROM layouts, including the reviewed 6.6 migration. Requires '
+            'an unlocked bootloader, already-disabled AVB/verity, no pending OTA snapshots, '
+            'separate writable DLKM extents and sufficient recovery/backup space. Unsupported '
+            'layouts or unknown drivers abort before partition writes.\n'
+            '- All six images are prepared and verified before installation, with persistent original '
+            'backups and complete rollback on a detected write/readback failure. '
+            '`full-recovery.json` records the ZIP and tool provenance. This ZIP has offline image '
+            'and transaction validation; it has not been flashed on a device.\n'
+        )
     if identity.get('installers'):
         ak, wlan = installer_assets.names(identity['kernel_release'])
         notes += (
@@ -161,7 +185,8 @@ def release_notes(repository, identity):
             f'- `{wlan}` — KernelSU/Magisk internal WCN7750 monitor-mode and frame-injection module. '
             'Install after booting the matching kernel, then reboot.\n\n'
             'A kernel-only ZIP cannot migrate a 6.6 ROM or a different KMI generation to 6.18. '
-            'Use the matched ROM/module migration procedure for that transition. '
+            + ('Use the complete recovery ZIP for compatible layouts. ' if identity.get('full_recovery') else
+               'Use the matched ROM/module migration procedure for that transition. ') +
             '`installers.json` binds both ZIPs to the verified kernel and WLAN binaries.\n'
         )
     return notes
